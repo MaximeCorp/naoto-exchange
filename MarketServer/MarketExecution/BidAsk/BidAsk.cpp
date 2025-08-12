@@ -76,7 +76,9 @@ namespace MarketExecution
         std::mutex &toLock = IsMarketable(order) ? MarketOrdersMutex
             : order.getSide() == OrderSide::BUY  ? AskMutex
                                                  : BidMutex;
+        std::cout << "deadlock 2 (BidAsk::AddOrder)\n";
         std::lock_guard<std::mutex> lock(toLock);
+        std::cout << "clear\n";
 
         std::thread t(&BidAsk::AddOrderInsider, this, order, true);
         t.detach();
@@ -102,6 +104,7 @@ namespace MarketExecution
     {
         if (debug)
         {
+            std::cout << "AddOrderInsider called\n";
             std::cout << "New order:\n";
             order.log();
         }
@@ -238,17 +241,12 @@ namespace MarketExecution
 
         std::vector<Order> *bestOffers = GetBestOffers(order);
 
-        while (bestOffers && order.getAmount() > 0)
+        while (bestOffers && bestOffers->size() > 0 && order.getAmount() > 0)
         {
-            while (bestOffers && bestOffers->size() > 0
-                   && order.getAmount() > 0)
-            {
-                // Fill one offer
-                FillOffer(order, bestOffers);
-
-                // Update best offers according to new price
-                bestOffers = GetBestOffers(order);
-            }
+            // Fill one offer
+            FillOffer(order, bestOffers);
+            // Update best offers according to new price
+            bestOffers = GetBestOffers(order);
         }
 
         if (order.getAmount() > 0)

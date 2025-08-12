@@ -38,6 +38,7 @@ namespace MarketExecution
 
     void SocketServer::startClientLoop(tcp::socket clientSocket)
     {
+        std::cout << "new client\n";
         websocket::stream<tcp::socket> ws{ std::move(clientSocket) };
         ws.accept();
 
@@ -65,7 +66,10 @@ namespace MarketExecution
                     if (iss >> side >> type >> price >> amount >> assetId
                         >> clientId)
                     {
+                        std::cout << "deadlock 1\n";
                         std::lock_guard<std::mutex> lock(AssetMarketsMutex);
+
+                        std::cout << "clear\n";
 
                         if (AssetMarkets.size() == 0)
                         {
@@ -110,6 +114,7 @@ namespace MarketExecution
                             Order(newOrderType, newOrderSide, price, clientId,
                                   amount, assetId);
 
+                        std::cout << "adding order\n";
                         curMarket->AddOrder(newOrder);
 
                         std::string response =
@@ -135,6 +140,8 @@ namespace MarketExecution
                 std::cerr << "WebSocket error: " << se.code().message()
                           << std::endl;
         }
+
+        std::cout << "out of the loop\n";
 
         boost::system::error_code ec;
         ws.close(websocket::close_code::normal, ec);
