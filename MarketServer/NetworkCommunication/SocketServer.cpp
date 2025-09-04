@@ -21,8 +21,58 @@ namespace MarketExecution
 
     std::thread SocketServer::startServer()
     {
+        std::thread(&MarketExecution::SocketServer::updateLoop, this).detach();
         return std::thread(&MarketExecution::SocketServer::startListenLoop,
                            this);
+    }
+
+    void SocketServer::updateLoop()
+    {
+        std::vector<float> lastPrices = std::vector<float>();
+
+        {
+            std::lock_guard<std::mutex> lock(AssetMarketsMutex);
+            for (int i = 0; i < static_cast<int>(AssetMarkets.size()); ++i)
+            {
+                lastPrices.push_back(AssetMarkets.at(i)->getMarketPrice());
+            }
+        }
+
+        while (true)
+        {
+            {
+                std::lock_guard<std::mutex> lock(SubscribedSocketsMutex);
+                if (SubscribedSockets.empty())
+                {
+                    continue;
+                }
+            }
+            {
+                std::lock_guard<std::mutex> lock(AssetMarketsMutex);
+
+                for (int i = 0; i < static_cast<int>(AssetMarkets.size()); ++i)
+                {
+                    BidAsk *curMarket = AssetMarkets.at(i).get();
+
+                    if (curMarket->getMarketPrice() != lastPrices.at(i))
+                    {
+                        lastPrices.at(i) = curMarket->getMarketPrice();
+                        std::lock_guard<std::mutex> lock(
+                            SubscribedSocketsMutex);
+
+                        for (auto &&ws : SubscribedSockets)
+                        {
+                            std::stringstream ss;
+                            ss << "UPDATE " << curMarket->getMarketAssetId()
+                               << " " << curMarket->getMarketPrice();
+                            ws->write(net::buffer(ss.str()));
+                        }
+                    }
+                }
+            }
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
     }
 
     void SocketServer::startListenLoop()
@@ -36,11 +86,36 @@ namespace MarketExecution
         }
     }
 
+    int SocketServer::isSubscribed(
+        std::shared_ptr<websocket::stream<tcp::socket>> &ws)
+    {
+        std::lock_guard<std::mutex> lock(SubscribedSocketsMutex);
+
+        auto it =
+            std::find(SubscribedSockets.begin(), SubscribedSockets.end(), ws);
+
+        if (it != SubscribedSockets.end())
+        {
+            return std::distance(SubscribedSockets.begin(), it);
+        }
+
+        return -1;
+    }
+
     void SocketServer::startClientLoop(tcp::socket clientSocket)
     {
-        std::cout << "new client\n";
-        websocket::stream<tcp::socket> ws{ std::move(clientSocket) };
-        ws.accept();
+        auto ws = std::make_shared<websocket::stream<tcp::socket>>(
+            std::move(clientSocket));
+        try
+        {
+            ws->accept();
+            std::cout << "new client\n";
+        }
+        catch (...)
+        {
+            std::cout << "Failed connecting to a client\n";
+            return;
+        }
 
         beast::flat_buffer buffer;
 
@@ -49,7 +124,7 @@ namespace MarketExecution
             while (true)
             {
                 buffer.consume(buffer.size());
-                ws.read(buffer);
+                ws->read(buffer);
 
                 std::string msg = beast::buffers_to_string(buffer.data());
                 std::cout << "Received : " << msg << "\n\n";
@@ -75,7 +150,7 @@ namespace MarketExecution
                         {
                             std::string response = "\"" + msg
                                 + "\" is invalid: No asset to trade yet.\n";
-                            ws.write(net::buffer(response));
+                            ws->write(net::buffer(response));
                             continue;
                         }
 
@@ -97,7 +172,7 @@ namespace MarketExecution
                         {
                             std::string response = "\"" + msg
                                 + "\" is invalid: Invalid asset ID\n";
-                            ws.write(net::buffer(response));
+                            ws->write(net::buffer(response));
                             continue;
                         }
 
@@ -119,18 +194,42 @@ namespace MarketExecution
 
                         std::string response =
                             "\"" + msg + "\" was added to the market\n";
-                        ws.write(net::buffer(response));
+                        ws->write(net::buffer(response));
                     }
+
                     else
                     {
                         std::string response = "\"" + msg + "\" is invalid\n";
-                        ws.write(net::buffer(response));
+                        ws->write(net::buffer(response));
                     }
+                }
+                else if (command == "SUBSCRIBE")
+                {
+                    if (isSubscribed(ws) == -1)
+                    {
+                        std::lock_guard<std::mutex> lock(
+                            SubscribedSocketsMutex);
+                        SubscribedSockets.emplace_back(ws);
+                    }
+                    ws->write(net::buffer("SUBSCRIBED"));
+                }
+                else if (command == "UNSUBSCRIBE")
+                {
+                    int index = isSubscribed(ws);
+                    if (index >= 0)
+                    {
+                        std::lock_guard<std::mutex> lock(
+                            SubscribedSocketsMutex);
+                        SubscribedSockets.erase(SubscribedSockets.begin()
+                                                + index);
+                    }
+
+                    ws->write(net::buffer("SUBSCRIBED"));
                 }
                 else
                 {
                     std::string response = "\"" + msg + "\" is invalid\n";
-                    ws.write(net::buffer(response));
+                    ws->write(net::buffer(response));
                 }
             }
         }
@@ -144,7 +243,7 @@ namespace MarketExecution
         std::cout << "out of the loop\n";
 
         boost::system::error_code ec;
-        ws.close(websocket::close_code::normal, ec);
+        ws->close(websocket::close_code::normal, ec);
 
         if (ec)
             std::cerr << "Error closing websocket: " << ec.message()

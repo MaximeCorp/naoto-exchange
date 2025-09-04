@@ -29,6 +29,7 @@ namespace MarketExecution
         PreciseTimestamp Timestamp;
 
     public:
+        Order();
         Order(OrderType type, OrderSide side, float price, int client_id,
               int amount, int asset);
         Order(OrderType type, OrderSide side, int client_id, int amount,

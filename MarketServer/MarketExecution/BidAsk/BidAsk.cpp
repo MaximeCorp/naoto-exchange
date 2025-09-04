@@ -61,14 +61,19 @@ namespace MarketExecution
         return MarketOrders.size();
     }
 
-    Order &BidAsk::getFirstOrder()
+    bool BidAsk::getFirstOrder(Order *order)
     {
         std::lock_guard<std::mutex> lock(MarketOrdersMutex);
 
-        Order &firstOrder = MarketOrders.front();
+        if (MarketOrders.empty())
+        {
+            return false;
+        }
+
+        *order = MarketOrders.front();
         MarketOrders.erase(MarketOrders.begin());
 
-        return firstOrder;
+        return true;
     }
 
     void BidAsk::AddOrder(Order order)
@@ -76,9 +81,7 @@ namespace MarketExecution
         std::mutex &toLock = IsMarketable(order) ? MarketOrdersMutex
             : order.getSide() == OrderSide::BUY  ? AskMutex
                                                  : BidMutex;
-        std::cout << "deadlock 2 (BidAsk::AddOrder)\n";
         std::lock_guard<std::mutex> lock(toLock);
-        std::cout << "clear\n";
 
         std::thread t(&BidAsk::AddOrderInsider, this, order, true);
         t.detach();
@@ -102,13 +105,6 @@ namespace MarketExecution
     // No mutex lock: should only be used after locking
     void BidAsk::AddOrderInsider(Order order, bool debug)
     {
-        if (debug)
-        {
-            std::cout << "AddOrderInsider called\n";
-            std::cout << "New order:\n";
-            order.log();
-        }
-
         if (!IsMarketable(order))
         {
             if (order.getSide() == OrderSide::BUY)
@@ -129,15 +125,26 @@ namespace MarketExecution
 
             MarketOrders.emplace_back(order);
         }
+        if (debug)
+        {
+            std::cout << "New order:\n";
+            order.log();
+        }
     }
 
     // No mutex lock: should only be used after locking
-    std::vector<Order> *BidAsk::GetBestOffers(Order &order)
+    std::vector<Order> *BidAsk::GetBestOffers(Order order)
     {
         if (order.getSide() == OrderSide::BUY)
         {
             // Lowest price above market price
             auto it = Bid.lower_bound(MarketPrice);
+
+            while (it != Bid.end() && it->second.size() == 0)
+            {
+                Bid.erase(it);
+                it = Bid.lower_bound(MarketPrice);
+            }
 
             if (it != Bid.end())
             {
@@ -148,17 +155,23 @@ namespace MarketExecution
         {
             // Highest price bellow market price
             auto it = Ask.lower_bound(MarketPrice);
+
+            while (it != Ask.end() && it->second.size() == 0)
+            {
+                Bid.erase(it);
+                it = Ask.lower_bound(MarketPrice);
+            }
+
             if (it != Ask.end())
             {
                 return &(it->second);
             }
         }
 
-        // No valid limit orders
         return nullptr;
     }
 
-    bool BidAsk::IsMarketable(Order &order)
+    bool BidAsk::IsMarketable(Order order)
     {
         // Market orders are always marketable
         if (order.getType() == OrderType::MARKET)
@@ -186,7 +199,7 @@ namespace MarketExecution
     }
 
     // No mutex lock: should only be used after locking
-    void BidAsk::FillOffer(Order &order, std::vector<Order> *bestOffers)
+    void BidAsk::FillOffer(Order order, std::vector<Order> *bestOffers)
     {
         // Get first offer
         Order &curOrder = bestOffers->front();
@@ -232,13 +245,12 @@ namespace MarketExecution
         std::cout << "MARKET PRICE: " << MarketPrice << "\n";
     }
 
-    void BidAsk::ExecuteMarketableOrder(Order &order)
+    void BidAsk::ExecuteMarketableOrder(Order order)
     {
         // Lock the right side of the order book
         std::mutex &toLock =
             order.getSide() == OrderSide::BUY ? BidMutex : AskMutex;
         std::lock_guard<std::mutex> lock(toLock);
-
         std::vector<Order> *bestOffers = GetBestOffers(order);
 
         while (bestOffers && bestOffers->size() > 0 && order.getAmount() > 0)
@@ -280,8 +292,6 @@ namespace MarketExecution
                 Bid[order.getPrice()].emplace_back(order);
             }
 
-            std::cout << "bruh";
-
             return;
         }
 
@@ -293,14 +303,13 @@ namespace MarketExecution
     {
         while (true)
         {
+            Order firstOrder;
+
             // Do nothing if no market orders
-            if (getMarketOrdersSize() == 0)
+            if (!getFirstOrder(&firstOrder))
             {
                 continue;
             }
-
-            // Get the first Market order
-            Order &firstOrder = getFirstOrder();
 
             // Execute it
             std::thread t(&BidAsk::ExecuteOrder, this, firstOrder);

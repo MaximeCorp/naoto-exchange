@@ -9,13 +9,14 @@ export default function Home() {
   const [price, setPrice] = useState("");
   const [orderType, setOrderType] = useState("MARKET");
   const [orderSide, setOrderSide] = useState("BUY");
+  const [marketPrice, setMarketPrice] = useState("0");
 
   const ws = useRef<WebSocket | null>(null);
 
   useEffect(() => {
     // Check if the WebSocket instance has already been created
     if (!ws.current) {
-      ws.current = new WebSocket("ws://localhost:8080");
+      ws.current = new WebSocket("ws://172.19.25.245:8080");
     }
 
     // Set up event listeners inside useEffect
@@ -24,7 +25,12 @@ export default function Home() {
     };
 
     ws.current.onmessage = (event) => {
-      alert(event.data);
+      if (event.data.includes("UPDATE")) {
+        console.log("New price: " + event.data.split(" ")[2]);
+        setMarketPrice(event.data.split(" ")[2]);
+      } else {
+        alert(event.data);
+      }
     };
 
     ws.current.onclose = () => {
@@ -47,9 +53,18 @@ export default function Home() {
     );
   }
 
+  function subscribe() {
+    ws.current!.send("SUBSCRIBE");
+  }
+
+  function unsubscribe() {
+    ws.current!.send("UNSUBSCRIBE");
+  }
+
   return (
     <div className="m-4">
       <h1>Simple orders making page</h1>
+      <h1 className="">{marketPrice}</h1>
       <br />
       <h2>Client ID: {clientId}</h2>
       <input
@@ -132,6 +147,16 @@ export default function Home() {
       )}
       <button onClick={sendOrder} className={"border"}>
         Send order
+      </button>
+      <br />
+      <br />
+      <button onClick={subscribe} className="border">
+        Subscribe
+      </button>
+      <br />
+      <br />
+      <button onClick={unsubscribe} className="border">
+        Unsubscribe
       </button>
     </div>
   );

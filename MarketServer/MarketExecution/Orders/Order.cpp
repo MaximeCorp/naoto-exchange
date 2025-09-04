@@ -2,6 +2,8 @@
 
 namespace MarketExecution
 {
+    Order::Order()
+    {}
     Order::Order(OrderType type, OrderSide side, float price, int client_id,
                  int amount, int asset)
         : Type(type)

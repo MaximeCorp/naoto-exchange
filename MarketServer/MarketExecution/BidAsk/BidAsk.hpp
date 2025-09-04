@@ -25,15 +25,15 @@ namespace MarketExecution
         std::vector<Order> MarketOrders;
         std::mutex MarketOrdersMutex;
 
-        std::vector<Order> *GetBestOffers(Order &order);
+        std::vector<Order> *GetBestOffers(Order order);
 
-        bool IsMarketable(Order &order);
+        bool IsMarketable(Order order);
 
-        void FillOffer(Order &order, std::vector<Order> *bestOffers);
+        void FillOffer(Order order, std::vector<Order> *bestOffers);
 
         void ExecuteOrder(Order order);
 
-        void ExecuteMarketableOrder(Order &order);
+        void ExecuteMarketableOrder(Order order);
 
         void MarketExecutionLoop();
 
@@ -41,11 +41,9 @@ namespace MarketExecution
 
         Asset getMarketAsset();
 
-        float getMarketPrice();
-
         int getMarketOrdersSize();
 
-        Order &getFirstOrder();
+        bool getFirstOrder(Order *order);
 
         const std::map<float, std::vector<Order>> getBid();
 
@@ -68,6 +66,8 @@ namespace MarketExecution
         void AddLimitOrder(OrderSide side, float price, int clientId,
                            int amount);
         void AddMarketOrder(OrderSide side, int clientId, int amount);
+
+        float getMarketPrice();
 
         int getMarketAssetId();
     };
