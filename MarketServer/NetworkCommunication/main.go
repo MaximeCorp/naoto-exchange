@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"time"
+    "os"
 
 	"github.com/gorilla/websocket"
 	"github.com/segmentio/kafka-go"
@@ -20,7 +21,7 @@ const (
 var kafkaWriter *kafka.Writer
 
 var upgrader = websocket.Upgrader{
-	ReadBufferSize:  1024,
+	ReadBufferSize: 1024,
 	WriteBufferSize: 1024,
 	CheckOrigin: func(r *http.Request) bool {
 		return true
@@ -40,7 +41,7 @@ func initKafkaWriter() {
 func publishToKafka(msg string, conn *websocket.Conn) {
 	kafkaMsg := kafka.Message{
 		Value: []byte(msg),
-		Time:  time.Now(),
+		Time: time.Now(),
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

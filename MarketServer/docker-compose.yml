@@ -1,0 +1,32 @@
+version: "3"
+
+services:
+  # 1. Zookeeper Service (Kafka's dependency)
+  zookeeper:
+    image: wurstmeister/zookeeper
+    container_name: zookeeper
+    ports:
+      - "2181:2181"
+    restart: always
+
+  # 2. Kafka Service
+  kafka:
+    image: wurstmeister/kafka
+    container_name: kafka
+    ports:
+      - "9092:9092"
+    environment:
+      # KAFKA_ADVERTISED_LISTENERS: The host and port your *client* will use to connect.
+      # Change 'localhost' to your actual host IP if running remotely or inside a VM.
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://host.docker.internal:9092
+      # KAFKA_LISTENERS: The port Kafka listens on *inside* the container.
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+      KAFKA_CREATE_TOPICS: "test:1:1"
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      # KAFKA_ZOOKEEPER_CONNECT: Tells Kafka how to connect to Zookeeper.
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      # KAFKA_BROKER_ID: A unique ID for this Kafka broker.
+      KAFKA_BROKER_ID: 1
+    depends_on:
+      - zookeeper
+    restart: always
