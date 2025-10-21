@@ -13,7 +13,7 @@ namespace MarketExecution
     class BidAsk
     {
     private:
-        Asset &MarketAsset;
+        Asset MarketAsset;
         std::mutex MarketAssetMutex;
         float MarketPrice;
         std::mutex MarketPriceMutex;
@@ -52,7 +52,7 @@ namespace MarketExecution
         const std::vector<Order> getMarketOrders();
 
     public:
-        BidAsk(Asset &asset, float initialPrice);
+        BidAsk(Asset asset, float initialPrice);
         ~BidAsk() = default;
 
         // Allow move operations

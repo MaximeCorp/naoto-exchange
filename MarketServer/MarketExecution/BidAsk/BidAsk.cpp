@@ -4,7 +4,7 @@
 
 namespace MarketExecution
 {
-    BidAsk::BidAsk(Asset &asset, float initialPrice)
+    BidAsk::BidAsk(Asset asset, float initialPrice)
         : MarketAsset(asset)
         , MarketPrice(initialPrice)
     {
