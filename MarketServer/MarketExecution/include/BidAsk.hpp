@@ -1,12 +1,11 @@
 #pragma once
 
+#include <Asset.hpp>
+#include <Order.hpp>
 #include <map>
 #include <mutex>
 #include <thread>
 #include <vector>
-
-#include "../Assets/Asset.hpp"
-#include "../Orders/Order.hpp"
 
 namespace MarketExecution
 {

@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	kafkaBroker = "localhost:9092"
+	kafkaBroker = "kafka:9092"
 	kafkaTopic  = "test"
 	wsPort      = ":8080"
 )
@@ -34,6 +34,8 @@ func initKafkaWriter() {
 		Brokers:  []string{kafkaBroker},
 		Topic:    kafkaTopic,
 		Balancer: &kafka.LeastBytes{},
+		BatchSize:  10,
+		BatchTimeout: time.Millisecond * 10,
 	})
 	log.Println("Kafka Writer initialized successfully.")
 }
@@ -44,7 +46,7 @@ func publishToKafka(msg string, conn *websocket.Conn) {
 		Time: time.Now(),
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 
 	err := kafkaWriter.WriteMessages(ctx, kafkaMsg)

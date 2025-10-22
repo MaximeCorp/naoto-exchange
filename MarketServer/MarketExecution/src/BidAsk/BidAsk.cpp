@@ -1,5 +1,4 @@
-#include "BidAsk.hpp"
-
+#include <BidAsk.hpp>
 #include <iostream>
 
 namespace MarketExecution

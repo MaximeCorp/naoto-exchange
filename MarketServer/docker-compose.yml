@@ -1,7 +1,4 @@
-version: "3"
-
 services:
-  # 1. Zookeeper Service (Kafka's dependency)
   zookeeper:
     image: wurstmeister/zookeeper
     container_name: zookeeper
@@ -9,24 +6,41 @@ services:
       - "2181:2181"
     restart: always
 
-  # 2. Kafka Service
   kafka:
     image: wurstmeister/kafka
     container_name: kafka
-    ports:
-      - "9092:9092"
+    hostname: kafka
     environment:
-      # KAFKA_ADVERTISED_LISTENERS: The host and port your *client* will use to connect.
-      # Change 'localhost' to your actual host IP if running remotely or inside a VM.
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://host.docker.internal:9092
-      # KAFKA_LISTENERS: The port Kafka listens on *inside* the container.
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
       KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
       KAFKA_CREATE_TOPICS: "test:1:1"
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
-      # KAFKA_ZOOKEEPER_CONNECT: Tells Kafka how to connect to Zookeeper.
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      # KAFKA_BROKER_ID: A unique ID for this Kafka broker.
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_BROKER_ID: 1
     depends_on:
       - zookeeper
+    restart: always
+  market-server:
+    build:
+      context: MarketExecution
+    image: market-server:latest
+    container_name: market-server
+    environment:
+      KAFKA_BROKERS: "kafka:9092"
+    depends_on:
+      - kafka
+    restart: always
+  main-server:
+    build:
+      context: NetworkCommunication
+      dockerfile: Dockerfile
+    container_name: main-server
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_BROKERS: "kafka:9092"
+      SERVER_PORT: "8080"
+    depends_on:
+      - kafka
     restart: always
