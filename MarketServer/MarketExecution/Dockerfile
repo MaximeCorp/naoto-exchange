@@ -28,9 +28,6 @@ WORKDIR /usr/local/bin
 
 COPY --from=builder /app/marketExecution .
 
-COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/marketExecution"]
 
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
-
-CMD ["/usr/local/bin/marketExecution"]
+CMD [""]
