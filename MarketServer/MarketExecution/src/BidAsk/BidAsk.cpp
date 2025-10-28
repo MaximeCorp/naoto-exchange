@@ -7,8 +7,8 @@ namespace MarketExecution
         : MarketAsset(asset)
         , MarketPrice(initialPrice)
     {
-        Bid = std::map<float, std::vector<Order>>();
-        Ask = std::map<float, std::vector<Order>, std::greater<>>();
+        Bid = std::map<float, std::vector<Order>, std::greater<>>();
+        Ask = std::map<float, std::vector<Order>>();
     }
 
     Asset BidAsk::getMarketAsset()
@@ -26,12 +26,12 @@ namespace MarketExecution
         return MarketPrice;
     }
 
-    const std::map<float, std::vector<Order>> BidAsk::getBid()
+    const std::map<float, std::vector<Order>, std::greater<>> BidAsk::getBid()
     {
         return Bid;
     }
 
-    const std::map<float, std::vector<Order>, std::greater<>> BidAsk::getAsk()
+    const std::map<float, std::vector<Order>> BidAsk::getAsk()
     {
         return Ask;
     }
@@ -40,7 +40,7 @@ namespace MarketExecution
     {
         if (!IsMarketable(order))
         {
-            if (order.getSide() == OrderSide::BUY)
+            if (order.getSide() == OrderSide::SELL)
             {
                 Ask[order.getPrice()].emplace_back(order);
             }
@@ -74,32 +74,38 @@ namespace MarketExecution
     {
         if (order.getSide() == OrderSide::BUY)
         {
-            // Lowest price above market price
-            auto it = Bid.lower_bound(MarketPrice);
-
-            while (it != Bid.end() && it->second.size() == 0)
+            if (Ask.empty())
             {
-                Bid.erase(it);
-                it = Bid.lower_bound(MarketPrice);
+                return nullptr;
             }
 
-            if (it != Bid.end())
+            auto it = Ask.begin();
+
+            while (it != Ask.end() && it->second.empty())
+            {
+                it = Ask.erase(it);
+            }
+
+            if (it != Ask.end())
             {
                 return &(it->second);
             }
         }
         else
         {
-            // Highest price bellow market price
-            auto it = Ask.lower_bound(MarketPrice);
-
-            while (it != Ask.end() && it->second.size() == 0)
+            if (Bid.empty())
             {
-                Bid.erase(it);
-                it = Ask.lower_bound(MarketPrice);
+                return nullptr;
             }
 
-            if (it != Ask.end())
+            auto it = Bid.begin();
+
+            while (it != Bid.end() && it->second.empty())
+            {
+                it = Bid.erase(it);
+            }
+
+            if (it != Bid.end())
             {
                 return &(it->second);
             }
@@ -135,19 +141,15 @@ namespace MarketExecution
         return false;
     }
 
-    void BidAsk::FillOffer(Order order, std::vector<Order> *bestOffers)
+    void BidAsk::FillOffer(Order &order, std::vector<Order> *bestOffers)
     {
-        // Get first offer
-        Order &curOrder = bestOffers->front();
-        MarketPrice = curOrder.getPrice();
-
-        std::cout << "Consuming limit order:\n";
-        curOrder.log();
-
         // Execute it until order or offer is filled
-        while (IsMarketable(order) && curOrder.getAmount() > 0
+        while (IsMarketable(order) && !bestOffers->empty()
                && order.getAmount() > 0)
         {
+            Order &curOrder = bestOffers->front();
+            std::cout << "Consuming limit order:\n";
+            curOrder.log();
             float ratio =
                 (float)curOrder.getAmount() / (float)order.getAmount();
             if (ratio == 1)
@@ -155,7 +157,7 @@ namespace MarketExecution
                 // Orders fill each other
                 bestOffers->erase(bestOffers->begin());
                 order.setAmount(0);
-                std::cout << "Both filled";
+                std::cout << "Both filled\n\n";
             }
             else if (ratio > 1)
             {
@@ -177,6 +179,8 @@ namespace MarketExecution
                 std::cout << "Limit order filled, looking for next best offer\n"
                           << order.getAmount() << " left (order)\n\n";
             }
+
+            MarketPrice = curOrder.getPrice();
         }
 
         std::cout << "MARKET PRICE: " << MarketPrice << "\n";
@@ -195,9 +199,21 @@ namespace MarketExecution
             bestOffers = GetBestOffers(order);
         }
 
-        if (order.getAmount() > 0)
+        if (order.getAmount() > 0 && bestOffers && !bestOffers->empty())
         {
             AddOrder(order);
+        }
+        else if (order.getAmount() > 0 && order.getType() == OrderType::LIMIT
+                 && (!bestOffers || bestOffers->empty()))
+        {
+            if (order.getSide() == OrderSide::SELL)
+            {
+                Ask[order.getPrice()].emplace_back(order);
+            }
+            else
+            {
+                Bid[order.getPrice()].emplace_back(order);
+            }
         }
     }
 

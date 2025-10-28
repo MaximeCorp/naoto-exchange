@@ -14,14 +14,14 @@ namespace MarketExecution
         Asset MarketAsset;
         float MarketPrice;
 
-        std::map<float, std::vector<Order>> Bid;
-        std::map<float, std::vector<Order>, std::greater<>> Ask;
+        std::map<float, std::vector<Order>, std::greater<>> Bid;
+        std::map<float, std::vector<Order>> Ask;
 
         std::vector<Order> *GetBestOffers(Order order);
 
         bool IsMarketable(Order order);
 
-        void FillOffer(Order order, std::vector<Order> *bestOffers);
+        void FillOffer(Order &order, std::vector<Order> *bestOffers);
 
         void ExecuteOrder(Order order);
 
@@ -35,11 +35,9 @@ namespace MarketExecution
 
         bool getFirstOrder(Order *order);
 
-        const std::map<float, std::vector<Order>> getBid();
+        const std::map<float, std::vector<Order>, std::greater<>> getBid();
 
-        const std::map<float, std::vector<Order>, std::greater<>> getAsk();
-
-        const std::vector<Order> getMarketOrders();
+        const std::map<float, std::vector<Order>> getAsk();
 
     public:
         BidAsk(Asset asset, float initialPrice);
