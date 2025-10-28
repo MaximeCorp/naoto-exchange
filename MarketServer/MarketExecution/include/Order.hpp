@@ -24,15 +24,15 @@ namespace MarketExecution
         OrderSide Side;
         float Price;
         int ClientId;
-        int Amount;
+        float Amount;
         int Asset;
         PreciseTimestamp Timestamp;
 
     public:
         Order();
         Order(OrderType type, OrderSide side, float price, int client_id,
-              int amount, int asset);
-        Order(OrderType type, OrderSide side, int client_id, int amount,
+              float amount, int asset);
+        Order(OrderType type, OrderSide side, int client_id, float amount,
               int asset);
         ~Order() = default;
 
@@ -40,11 +40,11 @@ namespace MarketExecution
         const OrderSide &getSide();
         const float &getPrice();
         const int &getClientId();
-        const int &getAmount();
+        const float &getAmount();
         const int &getAsset();
         const PreciseTimestamp &getTimestamp();
 
-        void setAmount(int amout);
+        void setAmount(float amout);
 
         void log();
     };

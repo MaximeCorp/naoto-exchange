@@ -5,7 +5,7 @@ namespace MarketExecution
     Order::Order()
     {}
     Order::Order(OrderType type, OrderSide side, float price, int client_id,
-                 int amount, int asset)
+                 float amount, int asset)
         : Type(type)
         , Side(side)
         , Price(price)
@@ -15,7 +15,7 @@ namespace MarketExecution
         , Timestamp(std::chrono::time_point<std::chrono::steady_clock>())
     {}
 
-    Order::Order(OrderType type, OrderSide side, int client_id, int amount,
+    Order::Order(OrderType type, OrderSide side, int client_id, float amount,
                  int asset)
         : Type(type)
         , Side(side)
@@ -52,7 +52,7 @@ namespace MarketExecution
     {
         return ClientId;
     };
-    const int &Order::getAmount()
+    const float &Order::getAmount()
     {
         return Amount;
     };
@@ -64,7 +64,7 @@ namespace MarketExecution
     {
         return Timestamp;
     };
-    void Order::setAmount(int amout)
+    void Order::setAmount(float amout)
     {
         Amount = amout;
     }

@@ -3,7 +3,6 @@
 #include <Asset.hpp>
 #include <Order.hpp>
 #include <map>
-#include <mutex>
 #include <thread>
 #include <vector>
 
@@ -13,16 +12,10 @@ namespace MarketExecution
     {
     private:
         Asset MarketAsset;
-        std::mutex MarketAssetMutex;
         float MarketPrice;
-        std::mutex MarketPriceMutex;
 
         std::map<float, std::vector<Order>> Bid;
-        std::mutex BidMutex;
         std::map<float, std::vector<Order>, std::greater<>> Ask;
-        std::mutex AskMutex;
-        std::vector<Order> MarketOrders;
-        std::mutex MarketOrdersMutex;
 
         std::vector<Order> *GetBestOffers(Order order);
 
@@ -35,8 +28,6 @@ namespace MarketExecution
         void ExecuteMarketableOrder(Order order);
 
         void MarketExecutionLoop();
-
-        void AddOrderInsider(Order order, bool debug = true);
 
         Asset getMarketAsset();
 

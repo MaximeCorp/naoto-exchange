@@ -7,9 +7,12 @@ using namespace MarketExecution;
 
 int main(void)
 {
-    TopicListener test = TopicListener("test", 1000, 0, 10);
+    Asset asset = Asset(0, 10);
 
-    test.startReadLoop();
+    BidAsk test = BidAsk(asset, 15);
+
+    test.AddLimitOrder(OrderSide::SELL, 16, 0, 5);
+    test.AddMarketOrder(OrderSide::BUY, 0, 4);
 
     return 0;
 }

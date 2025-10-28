@@ -9,81 +9,50 @@ namespace MarketExecution
     {
         Bid = std::map<float, std::vector<Order>>();
         Ask = std::map<float, std::vector<Order>, std::greater<>>();
-        MarketOrders = std::vector<Order>();
     }
 
     Asset BidAsk::getMarketAsset()
     {
-        std::lock_guard<std::mutex> lock(MarketAssetMutex);
-
         return MarketAsset;
     }
 
     int BidAsk::getMarketAssetId()
     {
-        std::lock_guard<std::mutex> lock(MarketAssetMutex);
-
         return MarketAsset.getId();
     }
 
     float BidAsk::getMarketPrice()
     {
-        std::lock_guard<std::mutex> lock(MarketPriceMutex);
-
         return MarketPrice;
     }
 
     const std::map<float, std::vector<Order>> BidAsk::getBid()
     {
-        std::lock_guard<std::mutex> lock(BidMutex);
-
         return Bid;
     }
 
     const std::map<float, std::vector<Order>, std::greater<>> BidAsk::getAsk()
     {
-        std::lock_guard<std::mutex> lock(AskMutex);
-
         return Ask;
-    }
-
-    const std::vector<Order> BidAsk::getMarketOrders()
-    {
-        std::lock_guard<std::mutex> lock(MarketOrdersMutex);
-
-        return MarketOrders;
-    }
-
-    int BidAsk::getMarketOrdersSize()
-    {
-        std::lock_guard<std::mutex> lock(MarketOrdersMutex);
-        return MarketOrders.size();
-    }
-
-    bool BidAsk::getFirstOrder(Order *order)
-    {
-        std::lock_guard<std::mutex> lock(MarketOrdersMutex);
-
-        if (MarketOrders.empty())
-        {
-            return false;
-        }
-
-        *order = MarketOrders.front();
-        MarketOrders.erase(MarketOrders.begin());
-
-        return true;
     }
 
     void BidAsk::AddOrder(Order order)
     {
-        std::mutex &toLock = IsMarketable(order) ? MarketOrdersMutex
-            : order.getSide() == OrderSide::BUY  ? AskMutex
-                                                 : BidMutex;
-        std::lock_guard<std::mutex> lock(toLock);
-
-        std::thread t(&BidAsk::AddOrderInsider, this, order, true);
-        t.detach();
+        if (!IsMarketable(order))
+        {
+            if (order.getSide() == OrderSide::BUY)
+            {
+                Ask[order.getPrice()].emplace_back(order);
+            }
+            else
+            {
+                Bid[order.getPrice()].emplace_back(order);
+            }
+        }
+        else
+        {
+            ExecuteMarketableOrder(order);
+        }
     }
 
     void BidAsk::AddLimitOrder(OrderSide side, float price, int clientId,
@@ -101,37 +70,6 @@ namespace MarketExecution
         AddOrder(order);
     }
 
-    // No mutex lock: should only be used after locking
-    void BidAsk::AddOrderInsider(Order order, bool debug)
-    {
-        if (!IsMarketable(order))
-        {
-            if (order.getSide() == OrderSide::BUY)
-            {
-                Ask[order.getPrice()].emplace_back(order);
-            }
-            else
-            {
-                Bid[order.getPrice()].emplace_back(order);
-            }
-        }
-        else
-        {
-            if (debug)
-            {
-                std::cout << "(MARKETABLE)\n\n";
-            }
-
-            MarketOrders.emplace_back(order);
-        }
-        if (debug)
-        {
-            std::cout << "New order:\n";
-            order.log();
-        }
-    }
-
-    // No mutex lock: should only be used after locking
     std::vector<Order> *BidAsk::GetBestOffers(Order order)
     {
         if (order.getSide() == OrderSide::BUY)
@@ -181,14 +119,14 @@ namespace MarketExecution
         // Compare with market price
         if (order.getSide() == OrderSide::BUY)
         {
-            if (order.getPrice() > getMarketPrice())
+            if (order.getPrice() > MarketPrice)
             {
                 return true;
             }
         }
         else
         {
-            if (order.getPrice() < getMarketPrice())
+            if (order.getPrice() < MarketPrice)
             {
                 return true;
             }
@@ -197,7 +135,6 @@ namespace MarketExecution
         return false;
     }
 
-    // No mutex lock: should only be used after locking
     void BidAsk::FillOffer(Order order, std::vector<Order> *bestOffers)
     {
         // Get first offer
@@ -208,7 +145,8 @@ namespace MarketExecution
         curOrder.log();
 
         // Execute it until order or offer is filled
-        while (curOrder.getAmount() > 0 && order.getAmount() > 0)
+        while (IsMarketable(order) && curOrder.getAmount() > 0
+               && order.getAmount() > 0)
         {
             float ratio =
                 (float)curOrder.getAmount() / (float)order.getAmount();
@@ -246,13 +184,10 @@ namespace MarketExecution
 
     void BidAsk::ExecuteMarketableOrder(Order order)
     {
-        // Lock the right side of the order book
-        std::mutex &toLock =
-            order.getSide() == OrderSide::BUY ? BidMutex : AskMutex;
-        std::lock_guard<std::mutex> lock(toLock);
         std::vector<Order> *bestOffers = GetBestOffers(order);
 
-        while (bestOffers && bestOffers->size() > 0 && order.getAmount() > 0)
+        while (IsMarketable(order) && bestOffers && bestOffers->size() > 0
+               && order.getAmount() > 0)
         {
             // Fill one offer
             FillOffer(order, bestOffers);
@@ -262,15 +197,7 @@ namespace MarketExecution
 
         if (order.getAmount() > 0)
         {
-            if (IsMarketable(order))
-            {
-                std::lock_guard<std::mutex> lock(MarketOrdersMutex);
-                AddOrderInsider(order, false);
-            }
-            else
-            {
-                AddOrderInsider(order, false);
-            }
+            AddOrder(order);
         }
     }
 
@@ -282,12 +209,10 @@ namespace MarketExecution
             // Purposefully not using AddOrderInsider for less checks
             if (order.getSide() == OrderSide::BUY)
             {
-                std::lock_guard<std::mutex> lock(AskMutex);
                 Ask[order.getPrice()].emplace_back(order);
             }
             else
             {
-                std::lock_guard<std::mutex> lock(BidMutex);
                 Bid[order.getPrice()].emplace_back(order);
             }
 
@@ -296,30 +221,5 @@ namespace MarketExecution
 
         // Execute if marketable
         ExecuteMarketableOrder(order);
-    }
-
-    void BidAsk::MarketExecutionLoop()
-    {
-        while (true)
-        {
-            Order firstOrder;
-
-            // Do nothing if no market orders
-            if (!getFirstOrder(&firstOrder))
-            {
-                continue;
-            }
-
-            // Execute it
-            std::thread t(&BidAsk::ExecuteOrder, this, firstOrder);
-            t.detach();
-        }
-    }
-
-    std::thread BidAsk::StartMarketExecution()
-    {
-        std::thread t(&BidAsk::MarketExecutionLoop, this);
-
-        return t;
     }
 } // namespace MarketExecution
