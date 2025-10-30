@@ -51,9 +51,12 @@ namespace MarketExecution
 
         void AddOrder(Order order);
 
-        void AddLimitOrder(OrderSide side, float price, int clientId,
-                           int amount);
-        void AddMarketOrder(OrderSide side, int clientId, int amount);
+        void AddLimitOrder(std::string key, OrderSide side, float price,
+                           std::int32_t clientId, float amount,
+                           std::int64_t timestamp);
+        void AddMarketOrder(std::string key, OrderSide side,
+                            std::int32_t clientId, float amount,
+                            std::int64_t timestamp);
 
         float getMarketPrice();
 

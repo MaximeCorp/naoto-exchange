@@ -3,16 +3,49 @@ package main
 import (
 	"log"
 	"net/http"
+	"encoding/json"
+	"fmt"
+	"bytes"
 	
 	"github.com/gorilla/websocket"
 )
 
 const (
-	wsPort      = ":8080"
+	wsPort = ":8080"
 )
 
-func checkOrder(msg string) (string, error) {
-	return "caca", nil
+func writeError(code uint16, msg string, conn *websocket.Conn) {
+	errorResponse := ErrorRes{
+		ErrorCode: code,
+		ErrorMessage: msg,
+	}
+
+	jsonBytes, err := json.Marshal(errorResponse)
+
+	if err != nil {
+		conn.WriteMessage(websocket.TextMessage, []byte("Internal error occured"))
+	}
+	
+	conn.WriteMessage(websocket.TextMessage, jsonBytes)
+}
+
+func checkOrder(msg string) (OrderReq, error) {
+	var res OrderReq
+
+	dataBytes := bytes.NewBuffer([]byte(msg))
+
+	decoder := json.NewDecoder(dataBytes)
+
+	decoder.DisallowUnknownFields()
+
+	err := decoder.Decode(&res)
+
+	if err != nil {
+		log.Println("failed")
+		return res, fmt.Errorf("failed to unmarshall msg: %w", err)
+	}
+
+	return res, nil
 }
 
 func wsHandler(w http.ResponseWriter, r *http.Request) {
@@ -44,6 +77,15 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 		if msgType == websocket.TextMessage {
 			msg := string(p)
 			log.Printf("Received message: %s", msg)
+
+			order, err := checkOrder(msg)
+
+			if err != nil {
+				writeError(1, "Invalid order format", conn)
+				continue
+			}
+
+			log.Println(order)
 
 			publishToKafka(msg, conn)
 		} else {

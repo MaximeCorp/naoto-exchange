@@ -55,18 +55,21 @@ namespace MarketExecution
         }
     }
 
-    void BidAsk::AddLimitOrder(OrderSide side, float price, int clientId,
-                               int amount)
+    void BidAsk::AddLimitOrder(std::string key, OrderSide side, float price,
+                               std::int32_t clientId, float amount,
+                               std::int64_t timestamp)
     {
-        Order order = Order(OrderType::LIMIT, side, price, clientId, amount,
-                            MarketAsset.getId());
+        Order order = Order(key.c_str(), OrderType::LIMIT, side, price,
+                            clientId, amount, MarketAsset.getId(), timestamp);
         AddOrder(order);
     }
 
-    void BidAsk::AddMarketOrder(OrderSide side, int clientId, int amount)
+    void BidAsk::AddMarketOrder(std::string key, OrderSide side,
+                                std::int32_t clientId, float amount,
+                                std::int64_t timestamp)
     {
-        Order order = Order(OrderType::MARKET, side, clientId, amount,
-                            MarketAsset.getId());
+        Order order = Order(key.c_str(), OrderType::MARKET, side, clientId,
+                            amount, MarketAsset.getId(), timestamp);
         AddOrder(order);
     }
 

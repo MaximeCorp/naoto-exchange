@@ -21,7 +21,7 @@ namespace MarketExecution
 
         std::mutex AssetMarketMutex;
 
-        Order parseOrder(std::string command);
+        bool parseOrder(void *command, size_t n, Order *output);
 
     public:
         TopicListener(std::string topic, int totalSupply, int assetId,

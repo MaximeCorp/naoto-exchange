@@ -4,48 +4,56 @@
 #include <iostream>
 namespace MarketExecution
 {
-    using PreciseTimestamp = std::chrono::time_point<std::chrono::steady_clock>;
-
-    enum class OrderType
+#pragma pack(push, 1)
+    enum class OrderType : std::int32_t
     {
         LIMIT,
         MARKET
     };
-    enum class OrderSide
+    enum class OrderSide : std::int32_t
     {
         BUY,
         SELL
     };
 
-    class Order
+    const size_t MAX_KEY_LEN = 25;
+
+    struct Order
     {
     private:
+        char Key[MAX_KEY_LEN];
         OrderType Type;
         OrderSide Side;
         float Price;
-        int ClientId;
+        std::int32_t ClientId;
         float Amount;
-        int Asset;
-        PreciseTimestamp Timestamp;
+        std::int32_t Asset;
+        std::int64_t Timestamp;
 
     public:
         Order();
-        Order(OrderType type, OrderSide side, float price, int client_id,
-              float amount, int asset);
-        Order(OrderType type, OrderSide side, int client_id, float amount,
-              int asset);
+        Order(const char *key, OrderType type, OrderSide side, float price,
+              std::int32_t client_id, float amount, std::int32_t asset,
+              std::int64_t timestamp);
+        Order(const char *key, OrderType type, OrderSide side,
+              std::int32_t client_id, float amount, std::int32_t asset,
+              std::int64_t timestamp);
         ~Order() = default;
 
+        const char *getKey();
         const OrderType &getType();
         const OrderSide &getSide();
         const float &getPrice();
-        const int &getClientId();
+        const std::int32_t &getClientId();
         const float &getAmount();
         const int &getAsset();
-        const PreciseTimestamp &getTimestamp();
+        const std::int64_t &getTimestamp();
 
         void setAmount(float amout);
 
         void log();
     };
+#pragma pack(pop)
+
+    bool parseBinOrder(const char *binstr, size_t n, Order *output);
 } // namespace MarketExecution

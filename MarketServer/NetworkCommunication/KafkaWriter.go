@@ -38,7 +38,20 @@ func initKafkaWriter() {
 	log.Println("Kafka Writer initialized successfully.")
 }
 
-func publishToKafka(msg string, conn *websocket.Conn) {
+func publishToKafka(order OrderReq, conn *websocket.Conn) {
+	key := generateUniqueKey(string(order.AssetID))
+
+	orderResponse, err = OrderRes{
+		UserID: order.UserID,
+		OrderID: key,
+		Status: "Received",
+	}
+
+	if err != nil {
+		log.Printf("ERROR: %v", err)
+		writeError(1, fmt.Sprintf("ERROR: Failed to publish message: %v", err), conn)
+	}
+
 	kafkaMsg := kafka.Message{
 		Value: []byte(msg),
 		Time: time.Now(),
@@ -51,8 +64,14 @@ func publishToKafka(msg string, conn *websocket.Conn) {
 
 	if err != nil {
 		log.Printf("ERROR: Failed to write message to Kafka: %v", err)
-		conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("ERROR: Failed to publish message: %v", err)))
+		writeError(1, fmt.Sprintf("ERROR: Failed to publish message: %v", err), conn)
 	} else {
 		log.Println("SUCCESS: Message published to Kafka.")
+		resBytes, err := json.Marshal(orderResponse)
+		if err != nil {
+			conn.WriteMessage(websocket.TextMessage, []byte("Internal error occured"))
+		}
+
+		conn.WriteMessage(websocket.TextMessage, resBytes)
 	}
 }

@@ -10,7 +10,7 @@ COPY . .
 
 RUN go mod tidy
 
-RUN CGO_ENABLED=0 go build -o /app/main_server ./main.go
+RUN CGO_ENABLED=0 go build -o /app/main_server .
 
 FROM alpine:latest
 

@@ -17,31 +17,11 @@ namespace MarketExecution
         }
     }
 
-    Order TopicListener::parseOrder(std::string command)
+    bool TopicListener::parseOrder(void *command, size_t n, Order *output)
     {
-        std::stringstream iss(command);
+        const char *binary_data = static_cast<const char *>(command);
 
-        std::string type, side;
-        float price;
-        int amount, assetId, clientId;
-
-        Order newOrder;
-
-        if (iss >> side >> type >> price >> amount >> assetId >> clientId)
-        {
-            std::lock_guard<std::mutex> lock(AssetMarketMutex);
-
-            OrderType newOrderType =
-                type == "LIMIT" ? OrderType::LIMIT : OrderType::MARKET;
-
-            OrderSide newOrderSide =
-                side == "BUY" ? OrderSide::BUY : OrderSide::SELL;
-
-            newOrder = Order(newOrderType, newOrderSide, price, clientId,
-                             amount, assetId);
-        }
-
-        return newOrder;
+        return parseBinOrder(binary_data, n, output);
     }
 
     void TopicListener::startReadLoop()
@@ -100,7 +80,15 @@ namespace MarketExecution
                         static_cast<const char *>(msg->payload()), msg->len());
                     std::cout << "Payload: " << command << std::endl;
 
-                    Order newOrder = parseOrder(command);
+                    Order newOrder;
+
+                    bool success =
+                        parseOrder(msg->payload(), msg->len(), &newOrder);
+
+                    if (!success)
+                    {
+                        continue;
+                    }
 
                     AssetMarket.AddOrder(newOrder);
                 }
