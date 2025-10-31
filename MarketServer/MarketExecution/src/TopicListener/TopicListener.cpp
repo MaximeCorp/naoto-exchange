@@ -90,6 +90,8 @@ namespace MarketExecution
                         continue;
                     }
 
+                    newOrder.log();
+
                     AssetMarket.AddOrder(newOrder);
                 }
                 break;

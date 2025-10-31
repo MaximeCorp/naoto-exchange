@@ -45,6 +45,31 @@ func checkOrder(msg string) (OrderReq, error) {
 		return res, fmt.Errorf("failed to unmarshall msg: %w", err)
 	}
 
+	if res.Type != "LIMIT" && res.Type != "MARKET" {
+		log.Println("failed")
+		return res, fmt.Errorf("failed to unmarshall msg: %w", err)
+	}
+
+	if res.Side != "BUY" && res.Side != "SELL" {
+		log.Println("failed")
+		return res, fmt.Errorf("failed to unmarshall msg: %w", err)
+	}
+
+	if res.UserID < 0 {
+		log.Println("failed")
+		return res, fmt.Errorf("failed to unmarshall msg: %w", err)
+	}
+
+	if res.AssetID < 0 {
+		log.Println("failed")
+		return res, fmt.Errorf("failed to unmarshall msg: %w", err)
+	}
+
+	if res.Amount <= 0 {
+		log.Println("failed")
+		return res, fmt.Errorf("failed to unmarshall msg: %w", err)
+	}
+
 	return res, nil
 }
 
@@ -87,7 +112,7 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 
 			log.Println(order)
 
-			publishToKafka(msg, conn)
+			publishToKafka(order, conn)
 		} else {
 			log.Printf("Ignoring message of type %d from %s", msgType, conn.RemoteAddr())
 		}

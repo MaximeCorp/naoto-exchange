@@ -46,7 +46,8 @@ namespace MarketExecution
         std::string type = Type == OrderType::LIMIT ? "LIMIT" : "MARKET";
         std::cout << side << " " << type << " ORDER - Amount: " << Amount
                   << " - Price: " << Price << " - Client ID: " << ClientId
-                  << "\n\n";
+                  << "\n"
+                  << std::endl;
     }
 
     const char *Order::getKey()

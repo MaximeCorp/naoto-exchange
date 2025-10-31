@@ -1,7 +1,7 @@
 package main
 
 type OrderReq struct {
-	UserID string `json:"user_id"`
+	UserID int32 `json:"user_id"`
 	AssetID int32 `json:"asset_id""`
 	Side string `json:"side"`
 	Type string `json:"type"`
