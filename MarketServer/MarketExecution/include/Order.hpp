@@ -40,20 +40,27 @@ namespace MarketExecution
               std::int64_t timestamp);
         ~Order() = default;
 
-        const char *getKey();
-        const OrderType &getType();
-        const OrderSide &getSide();
-        const float &getPrice();
-        const std::int32_t &getClientId();
-        const float &getAmount();
-        const int &getAsset();
-        const std::int64_t &getTimestamp();
+        const char *getKey() const;
+        const OrderType &getType() const;
+        const OrderSide &getSide() const;
+        const float &getPrice() const;
+        const std::int32_t &getClientId() const;
+        const float &getAmount() const;
+        const int &getAsset() const;
+        const std::int64_t &getTimestamp() const;
 
         void setAmount(float amout);
+        void setType(OrderType type);
+        void setSide(OrderSide side);
+        void setPrice(float price);
+        void setClientId(std::int32_t clientId);
+        void setAsset(std::int32_t asset);
+        void setTimestamp(std::int64_t timestamp);
 
         void log();
     };
 #pragma pack(pop)
 
     bool parseBinOrder(const char *binstr, size_t n, Order *output);
+    std::string serializeOrder(const Order &order);
 } // namespace MarketExecution
