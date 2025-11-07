@@ -19,8 +19,6 @@ namespace MarketExecution
         std::string Topic;
         BidAsk AssetMarket;
 
-        std::mutex AssetMarketMutex;
-
         bool parseOrder(void *command, size_t n, Order *output);
 
     public:

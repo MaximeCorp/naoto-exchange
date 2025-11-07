@@ -46,7 +46,7 @@ namespace MarketExecution
         std::string type = Type == OrderType::LIMIT ? "LIMIT" : "MARKET";
         std::cout << side << " " << type << " ORDER - Amount: " << Amount
                   << " - Price: " << Price << " - Client ID: " << ClientId
-                  << "\n"
+                  << "key:" << Key << "\n"
                   << std::endl;
     }
 
@@ -61,7 +61,7 @@ namespace MarketExecution
     const OrderSide &Order::getSide()
     {
         return Side;
-    };
+    }
     const float &Order::getPrice()
     {
         return Price;
@@ -69,19 +69,19 @@ namespace MarketExecution
     const std::int32_t &Order::getClientId()
     {
         return ClientId;
-    };
+    }
     const float &Order::getAmount()
     {
         return Amount;
-    };
+    }
     const std::int32_t &Order::getAsset()
     {
         return Asset;
-    };
+    }
     const std::int64_t &Order::getTimestamp()
     {
         return Timestamp;
-    };
+    }
     void Order::setAmount(float amout)
     {
         Amount = amout;

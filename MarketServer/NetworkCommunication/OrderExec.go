@@ -21,7 +21,7 @@ type OrderExec struct {
 func serializeOrder(o *OrderExec) ([]byte, error) {
     var buf bytes.Buffer
 
-    err := binary.Write(&buf, binary.LittleEndian, o) 
+    err := binary.Write(&buf, binary.BigEndian, o) 
     if err != nil {
         return nil, err
     }

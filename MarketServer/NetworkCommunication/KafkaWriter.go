@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 	"encoding/json"
+	"strconv"
 
 	"github.com/gorilla/websocket"
 	"github.com/segmentio/kafka-go"
@@ -40,12 +41,14 @@ func initKafkaWriter() {
 }
 
 func publishToKafka(order OrderReq, conn *websocket.Conn) {
-	key, err := generateUniqueKey(string(order.AssetID))
+	key, err := generateUniqueKey(strconv.Itoa(int(order.AssetID)))
 
 	if err != nil {
 		log.Printf("ERROR: %v", err)
 		writeError(1, fmt.Sprintf("Failed transmitting order: %v", err), conn)
 	}
+
+	log.Println(key)
 
 	orderResponse := OrderRes{
 		UserID: order.UserID,

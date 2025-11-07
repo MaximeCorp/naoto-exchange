@@ -11,11 +11,7 @@ namespace MarketExecution
                                  int assetId, float initialPrice)
         : Topic(topic)
         , AssetMarket(BidAsk(Asset(assetId, totalSupply), initialPrice))
-    {
-        {
-            std::lock_guard<std::mutex> lock(AssetMarketMutex);
-        }
-    }
+    {}
 
     bool TopicListener::parseOrder(void *command, size_t n, Order *output)
     {
