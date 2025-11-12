@@ -21,3 +21,21 @@ Threadpool
 
 QuestDB
 - Make DB
+
+
+
+
+New workflow:
+Gateway (socket/websocket) -- checks  (Aeron) -- Security services (confirmed state/tentative state)---|
+     |                                                                                                 |
+    TCP                                                                                              kafka
+     |                                                                                                 |
+  Matching engine (epoll server -> queue -> matching logic -> threadpool -> kafka "order updates") ----|
+     |                                                                                                 |------- Pub/Sub (Price/orders status updates)
+   kafka
+     |
+  Persistence service (persist orders + price history + depth book history)
+     |
+    gRPC
+     |
+  QuestDB wrapper ----gRPC---- gRPC gateway (for clients to get candles and depth book)
