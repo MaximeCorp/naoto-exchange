@@ -23,6 +23,11 @@ QuestDB
 - Make DB
 
 
+#Features:
+- HFT: minimal latency order execution
+- candles + depth: fast historical data queries + realtime updates
+- Order status updates
+
 
 ```
 New workflow:
