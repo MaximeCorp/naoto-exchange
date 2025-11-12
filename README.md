@@ -31,6 +31,9 @@ QuestDB
 
 ```
 New workflow:
+Envoy
+   |
+   |
 Gateway (socket/websocket) -- checks  (Aeron) -- Security services (confirmed state/tentative state)---|
      |                                                                                                 |
     TCP                                                                                              kafka
