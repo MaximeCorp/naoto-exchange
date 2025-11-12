@@ -24,7 +24,7 @@ QuestDB
 
 
 
-
+```
 New workflow:
 Gateway (socket/websocket) -- checks  (Aeron) -- Security services (confirmed state/tentative state)---|
      |                                                                                                 |
@@ -39,3 +39,4 @@ Gateway (socket/websocket) -- checks  (Aeron) -- Security services (confirmed st
     gRPC
      |
   QuestDB wrapper ----gRPC---- gRPC gateway (for clients to get candles and depth book)
+```
