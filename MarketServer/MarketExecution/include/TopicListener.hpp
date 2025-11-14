@@ -1,3 +1,5 @@
+#pragma once
+
 #include <BidAsk.hpp>
 #include <algorithm>
 #include <chrono>
@@ -13,6 +15,19 @@
 
 namespace MarketExecution
 {
+    class ProducerEventCb : public RdKafka::EventCb
+    {
+    public:
+        void event_cb(RdKafka::Event &event) override
+        {
+            if (event.type() == RdKafka::Event::EVENT_ERROR)
+            {
+                std::cerr << "ERROR: " << RdKafka::err2str(event.err()) << ": "
+                          << event.str() << std::endl;
+            }
+        }
+    };
+
     class TopicListener
     {
     private:

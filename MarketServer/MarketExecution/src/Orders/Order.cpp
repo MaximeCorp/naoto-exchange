@@ -23,6 +23,14 @@ uint64_t ntohll(uint64_t netval)
 namespace MarketExecution
 {
     Order::Order()
+        : Key()
+        , Type(OrderType::LIMIT)
+        , Side(OrderSide::BUY)
+        , Price(0)
+        , ClientId(0)
+        , Amount(0)
+        , Asset(0)
+        , Timestamp(0)
     {}
     Order::Order(const char *key, OrderType type, OrderSide side, float price,
                  std::int32_t client_id, float amount, std::int32_t asset,
@@ -190,10 +198,9 @@ namespace MarketExecution
         return true;
     }
 
-    std::string serializeOrder(const Order &order)
+    void serializeOrder(const Order &order, char buffer[sizeof(Order)])
     {
-        std::string buffer(sizeof(Order), '\0');
-        char *ptr = const_cast<char *>(buffer.data());
+        char *ptr = buffer;
 
         std::memcpy(ptr, order.getKey(), MAX_KEY_LEN);
         ptr += MAX_KEY_LEN;
@@ -220,7 +227,5 @@ namespace MarketExecution
 
         uint64_t timestamp_net = htonll(order.getTimestamp());
         std::memcpy(ptr, &timestamp_net, sizeof(timestamp_net));
-
-        return buffer;
     }
 } // namespace MarketExecution

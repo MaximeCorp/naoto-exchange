@@ -1,4 +1,5 @@
 #include <BidAsk.hpp>
+#include <atomic>
 #include <iostream>
 
 namespace MarketExecution
@@ -36,7 +37,7 @@ namespace MarketExecution
         return Ask;
     }
 
-    void BidAsk::AddOrder(Order order)
+    void BidAsk::AddOrder(Order &order)
     {
         if (!IsMarketable(order))
         {
@@ -73,7 +74,7 @@ namespace MarketExecution
         AddOrder(order);
     }
 
-    std::vector<Order> *BidAsk::GetBestOffers(Order order)
+    std::vector<Order> *BidAsk::GetBestOffers(Order &order)
     {
         if (order.getSide() == OrderSide::BUY)
         {
@@ -117,7 +118,7 @@ namespace MarketExecution
         return nullptr;
     }
 
-    bool BidAsk::IsMarketable(Order order)
+    bool BidAsk::IsMarketable(Order &order)
     {
         // Market orders are always marketable
         if (order.getType() == OrderType::MARKET)
@@ -189,7 +190,7 @@ namespace MarketExecution
         std::cout << "MARKET PRICE: " << MarketPrice << "\n";
     }
 
-    void BidAsk::ExecuteMarketableOrder(Order order)
+    void BidAsk::ExecuteMarketableOrder(Order &order)
     {
         std::vector<Order> *bestOffers = GetBestOffers(order);
 
@@ -204,7 +205,7 @@ namespace MarketExecution
 
         if (order.getAmount() > 0 && bestOffers && !bestOffers->empty())
         {
-            AddOrder(order);
+            return;
         }
         else if (order.getAmount() > 0 && order.getType() == OrderType::LIMIT
                  && (!bestOffers || bestOffers->empty()))
@@ -220,7 +221,7 @@ namespace MarketExecution
         }
     }
 
-    void BidAsk::ExecuteOrder(Order order)
+    void BidAsk::ExecuteOrder(Order &order)
     {
         // Handle not marketable orders
         if (!IsMarketable(order))
@@ -241,4 +242,35 @@ namespace MarketExecution
         // Execute if marketable
         ExecuteMarketableOrder(order);
     }
+
+    void
+    BidAsk::consumeOrdersQueueLoop(boost::lockfree::queue<Order *> &OrdersQueue,
+                                   boost::lockfree::queue<Order *> &StatusQueue,
+                                   std::atomic<bool> &running)
+    {
+        Order *curOrder;
+
+        while (running || !OrdersQueue.empty())
+        {
+            if (OrdersQueue.pop(curOrder))
+            {
+                AddOrder(*curOrder);
+                StatusQueue.push(curOrder);
+            }
+            else
+            {
+                std::this_thread::yield();
+            }
+        }
+    }
+
+    void activateOrdersLoop(BidAsk &matchingEngine,
+                            boost::lockfree::queue<Order *> &OrdersQueue,
+                            boost::lockfree::queue<Order *> &StatusQueue,
+                            std::atomic<bool> &running)
+    {
+        matchingEngine.consumeOrdersQueueLoop(OrdersQueue, StatusQueue,
+                                              running);
+    }
+
 } // namespace MarketExecution

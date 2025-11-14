@@ -62,5 +62,5 @@ namespace MarketExecution
 #pragma pack(pop)
 
     bool parseBinOrder(const char *binstr, size_t n, Order *output);
-    std::string serializeOrder(const Order &order);
+    void serializeOrder(const Order &order, char buffer[sizeof(Order)]);
 } // namespace MarketExecution
