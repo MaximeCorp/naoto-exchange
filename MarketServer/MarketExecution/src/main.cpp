@@ -26,7 +26,7 @@ int main(void)
     BidAsk matchingEngine = BidAsk(marketAsset, 15.0);
 
     TopicProducer test =
-        TopicProducer("kafka:9092", "test", &orderPool, &binaryPool);
+        TopicProducer("kafka:9092", "ORDER_STATUS", &orderPool, &binaryPool);
 
     std::thread tcpServerThread(startSocketLoop, std::ref(server),
                                 std::ref(ordersQueue));

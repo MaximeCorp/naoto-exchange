@@ -28,8 +28,7 @@ namespace MarketExecution
             return;
         }
 
-        if (conf->set("batch.num.bytes", "524288", errstr)
-            != RdKafka::Conf::CONF_OK)
+        if (conf->set("batch.size", "524288", errstr) != RdKafka::Conf::CONF_OK)
         {
             std::cerr << "Error setting batch.num.bytes: " << errstr
                       << std::endl;
@@ -70,7 +69,17 @@ namespace MarketExecution
         std::cout << "Kafka Producer created successfully. Target Broker: "
                   << brokers << ", Topic: " << Topic << std::endl;
 
-        Topic = RdKafka::Topic::create(Producer, topic, conf, errstr);
+        RdKafka::Conf *topic_conf =
+            RdKafka::Conf::create(RdKafka::Conf::CONF_TOPIC);
+
+        if (topic_conf->set("acks", "1", errstr) != RdKafka::Conf::CONF_OK)
+        {
+            std::cerr << "Error setting acks: " << errstr << std::endl;
+            delete conf;
+            return;
+        }
+
+        Topic = RdKafka::Topic::create(Producer, topic, topic_conf, errstr);
 
         if (!Topic)
         {
@@ -84,6 +93,7 @@ namespace MarketExecution
         }
 
         delete conf;
+        delete topic_conf;
     }
     void TopicProducer::produceOrder(Order *order)
     {

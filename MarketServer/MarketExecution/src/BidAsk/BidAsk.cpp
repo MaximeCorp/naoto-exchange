@@ -254,6 +254,7 @@ namespace MarketExecution
         {
             if (OrdersQueue.pop(curOrder))
             {
+                curOrder->log();
                 AddOrder(*curOrder);
                 StatusQueue.push(curOrder);
             }

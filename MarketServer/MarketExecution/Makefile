@@ -1,11 +1,9 @@
 CC=g++
-:q
-
 
 KAFKA_CFLAGS=$(shell pkg-config --cflags rdkafka++)
 KAFKA_LDLIBS=$(shell pkg-config --libs rdkafka++)
 
-CFLAGS=-Wall -Werror -Wextra -I/usr/include/librdkafka/ -Iinclude $(KAFKA_CFLAGS)
+CFLAGS=-Wall -Werror -Wextra -I/usr/include/librdkafka/ -Iinclude $(KAFKA_CFLAGS) -fsanitize=address
 LDFLAGS=$(KAFKA_LDLIBS) #-lrocksdb -lstdc++ -lpthread -lsnappy -lz -lbz2
 
 SRC=$(shell find . -type f -name '*.cpp')

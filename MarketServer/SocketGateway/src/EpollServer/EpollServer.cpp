@@ -1,6 +1,6 @@
 #include <EpollServer.hpp>
 
-namespace MarketExecution
+namespace Gateways
 {
     EpollServer::EpollServer(int port, int maxEvents, int maxPending,
                              StoragePool<Order> *pool)
@@ -108,25 +108,7 @@ namespace MarketExecution
         std::cout << "Closed connection on FD: " << clientId << std::endl;
     }
 
-    void EpollServer::addOrder(std::string &buffer,
-                               boost::lockfree::queue<Order *> &OrdersQueue)
-    {
-        size_t start = 0;
-
-        while (start + sizeof(Order) <= buffer.size())
-        {
-            Order *toAdd = Pool->acquire();
-            parseBinOrder(buffer.c_str() + start, sizeof(Order), toAdd);
-
-            OrdersQueue.push(toAdd);
-
-            start += sizeof(Order);
-        }
-
-        buffer.erase(0, start);
-    }
-
-    void EpollServer::startServer(boost::lockfree::queue<Order *> &OrdersQueue)
+    void EpollServer::startServer()
     {
         std::vector<struct epoll_event> events(MaxEvents);
         while (true)
@@ -186,10 +168,12 @@ namespace MarketExecution
                             Buffers[curFd].append(buffer, nread);
                         }
 
+                        /* handle orders
                         if (Buffers[curFd].size())
                         {
                             addOrder(Buffers[curFd], OrdersQueue);
                         }
+                        */
 
                         if (nread == 0)
                         {
@@ -208,11 +192,4 @@ namespace MarketExecution
             }
         }
     }
-
-    void startSocketLoop(EpollServer &server,
-                         boost::lockfree::queue<Order *> &OrdersQueue)
-    {
-        server.startServer(OrdersQueue);
-    }
-
-} // namespace MarketExecution
+} // namespace Gateways
