@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"crypto/rand"
 	"encoding/base64"
-	// "os"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -19,6 +18,19 @@ type Claims struct {
     UserID string `json:"user_id"`
     Role     string `json:"role"`
     jwt.RegisteredClaims
+}
+
+type SignUpRequest struct {
+	Email string `json:"email"`
+	UserName string `json:"user_name"`
+	Password string `json:"password"`
+}
+
+type SignUpResponse struct {
+	UserID string `json:"user_id"`
+	AccessToken string `json:"access_token"`
+	TokenType string `json:"token_type"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type LoginRequest struct {
@@ -42,15 +54,17 @@ type newApiKeyResponse struct {
 
 type ApiKeyResponse struct {
 	UserID string `json:"user_id"`
-	ApiKeys []string `json:"api_keys"`
+	ApiKeys []Key `json:"api_keys"`
 }
 
 type User struct {
 	UserID        string `json:"user_id"`
+	UserName 	  string `json:"user_name"`
 	Role 		  string `json:"role"`
 	Email         string `json:"email"`
 	HashedPassword []byte `json:"-"`
 	PasswordSalt  []byte `json:"-"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type Key struct {
@@ -58,6 +72,7 @@ type Key struct {
 	KeyName 	string `json:""key_name`
 	HashedKey []byte `json:"-"`
 	KeySalt  []byte `json:"-"`
+	Prefix string `json:"key_prefix"`
 }
 
 var jwtKey = []byte("your-highly-secure-secret-key-from-k8s-secret")
@@ -83,17 +98,76 @@ func GenerateJWT(userId string, role string) (string, error) {
     return tokenString, err
 }
 
+func signUpHandler(c *gin.Context) {
+	var request SignUpRequest
+
+	if err := c.ShouldBindJSON(&request); err != nil {
+		log.Printf("Invalid body %v\n", err)
+        c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid body format"})
+        return
+    }
+
+	HashedPassword, err := bcrypt.GenerateFromPassword([]byte(request.Password), bcrypt.DefaultCost)
+
+	if err != nil {
+		log.Printf("Error hashing password %v\n", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Internal error",
+		})
+		return
+	}
+
+	newUser := &User{}
+
+	err = db.QueryRow(
+		"INSERT INTO users (user_name, role, email, password_hash) VALUES ($1, 'user', $2, $3) RETURNING user_id, role, created_at",
+		request.UserName,
+		request.Email,
+		HashedPassword,
+	).Scan(&newUser.UserID, &newUser.Role, &newUser.CreatedAt)
+
+	if err != nil {
+		log.Printf("Error inserting user %v\n", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Internal error",
+		})
+		return
+	}
+
+	token, err := GenerateJWT(newUser.UserID, newUser.Role)
+
+	if err != nil {
+		log.Printf("Error creating JWT %v\n", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Internal error",
+			"status": "Account was created",
+			"user_id": newUser.UserID,
+		})
+	}
+
+	response := &SignUpResponse{
+		UserID: newUser.UserID,
+		AccessToken: token,
+		TokenType: "Bearer",
+		CreatedAt: newUser.CreatedAt,
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
+
 func loginHandler(c *gin.Context) {
 	var request LoginRequest
     if err := c.ShouldBindJSON(&request); err != nil {
+		log.Printf("Invalid body %v\n", err)
         c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid body format"})
         return
     }
 
 	user := User{}
-	row := db.QueryRow("SELECT userid, role, password_hash, password_salt, mail_address FROM users WHERE mail_address = $1", request.Email)
+	row := db.QueryRow("SELECT user_id, role, password_hash, email FROM users WHERE email = $1", request.Email)
 
-	err := row.Scan(&user.UserID, &user.Role, &user.HashedPassword, &user.PasswordSalt, &user.Email)
+	err := row.Scan(&user.UserID, &user.Role, &user.HashedPassword, &user.Email)
 	
 	if err == sql.ErrNoRows {
 		log.Printf("User not found\n")
@@ -103,7 +177,7 @@ func loginHandler(c *gin.Context) {
 		})
 		return
 	} else if err != nil {
-		log.Printf("Error during select DB request %v", err)
+		log.Printf("Error during select DB request %v\n", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Internal error",
 		})
@@ -135,7 +209,7 @@ func loginHandler(c *gin.Context) {
 	tokenString, err := GenerateJWT(user.UserID, user.Role)
 
 	if err != nil {
-		log.Printf("Failed JWT generation: %v", err)
+		log.Printf("Failed JWT generation: %v\n", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Internal error",
 		})
@@ -178,7 +252,7 @@ func insertAPIKEY(userId string, keyName string, keyHash string, keyPref string)
 	)
 
 	if err != nil {
-        log.Printf("Error inserting user: %v", err)
+        log.Printf("Error inserting user: %v\n", err)
         return err
     }
 
@@ -192,6 +266,7 @@ func makeAPIKEY(c *gin.Context) {
 	var request newApiKeyRequest
 
     if err := c.ShouldBindJSON(&request); err != nil {
+		log.Printf("Invalid body %v\n", err)
         c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid body format"})
         return
     }
@@ -201,7 +276,7 @@ func makeAPIKEY(c *gin.Context) {
 	err = insertAPIKEY(userId, request.KeyName, hashedKey, secret_key[:8])
 
 	if err != nil {
-		log.Printf("Error during insert DB request %v", err)
+		log.Printf("Error during insert DB request %v\n", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Internal error",
 		})
@@ -215,7 +290,7 @@ func makeAPIKEY(c *gin.Context) {
 }
 
 func dbAPIKEY(userId string) (*ApiKeyResponse, error) {
-	rows, err := db.Query("SELECT user_id, name, key_prefix FROM api_keys WHERE user_id = $1", userId)
+	rows, err := db.Query("SELECT user_id, key_name, key_prefix FROM api_keys WHERE user_id = $1", userId)
 
 	if err != nil {
         return nil, err
@@ -225,20 +300,20 @@ func dbAPIKEY(userId string) (*ApiKeyResponse, error) {
 
     keys := &ApiKeyResponse{
 		UserID: userId,
-		ApiKeys: []string{},
+		ApiKeys: []Key{},
 	}
 
 	for rows.Next() {
 		var curKey Key
 
 		err = rows.Scan(
-                &curKey.UserID, &curKey.KeyName)
+                &curKey.UserID, &curKey.KeyName, &curKey.Prefix)
 
 		if err != nil {
             return nil, err
         }
 
-		keys.ApiKeys = append(keys.ApiKeys, curKey.KeyName)
+		keys.ApiKeys = append(keys.ApiKeys, curKey)
 	}
 
     return keys, nil
@@ -254,7 +329,7 @@ func getAPIKEY(c *gin.Context) {
 	keys, err := dbAPIKEY(userId)
 
 	if err != nil {
-		log.Printf("Error during select DB request %v", err)
+		log.Printf("Error during select DB request %v\n", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Internal error",
 		})
@@ -288,12 +363,13 @@ func main() {
 
 	router := gin.Default()
 
-	router.POST("/login", loginHandler)
+	router.POST("/auth/login", loginHandler)
+	router.POST("/auth/sign-up", signUpHandler)
 
 	protected := router.Group("/api")
     {
         protected.GET("/keys", getAPIKEY)
-		protected.POST("/keys", )
+		protected.POST("/keys", makeAPIKEY)
     }
 
 	router.Run(":8080")

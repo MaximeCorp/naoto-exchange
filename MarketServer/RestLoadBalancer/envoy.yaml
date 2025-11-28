@@ -1,0 +1,148 @@
+static_resources:
+  ## ----------------------------------------------------------------------
+  ## 1. LISTENERS: How Envoy accepts external connections
+  ## ----------------------------------------------------------------------
+  listeners:
+    # -------------------------------------------------------
+    # A. HTTP Listener (Port 80) for REDIRECT
+    # -------------------------------------------------------
+    - name: listener_http_redirect
+      address:
+        socket_address:
+          protocol: TCP
+          address: 0.0.0.0
+          port_value: 80 # Listens for insecure HTTP traffic
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: ingress_http_redirect
+                codec_type: AUTO
+                # Route that issues a permanent redirect (301) to HTTPS
+                route_config:
+                  name: local_redirect_route
+                  virtual_hosts:
+                    - name: redirect_host
+                      domains: ["*"]
+                      routes:
+                        - match:
+                            prefix: "/"
+                          redirect:
+                            scheme_redirect: "https"
+                            path_redirect: "/"
+                            response_code: MOVED_PERMANENTLY # 301
+                http_filters:
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+    # -------------------------------------------------------
+    # B. HTTPS Listener (Port 443) for TLS TERMINATION and AUTHZ
+    # -------------------------------------------------------
+    - name: listener_https
+      address:
+        socket_address:
+          protocol: TCP
+          address: 0.0.0.0
+          port_value: 443 # Listens for secure HTTPS traffic
+      filter_chains:
+        - transport_socket:
+            name: envoy.transport_sockets.tls
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
+              common_tls_context:
+                tls_certificates:
+                  - certificate_chain: { filename: "/etc/ssl/certs/server.crt" }
+                    private_key: { filename: "/etc/ssl/certs/server.key" }
+                alpn_protocols: ["h2", "http/1.1"]
+          # 2. HTTP Connection Manager and Filters
+          filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: ingress_https
+                codec_type: AUTO
+                access_log:
+                  - name: envoy.access_loggers.stdout
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
+
+                # HTTP Filters (Applied in order)
+                http_filters:
+                  # CRITICAL: 1. External Authorization Filter (JWT CHECKER)
+                  - name: envoy.filters.http.ext_authz
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthz
+                      transport_api_version: V3
+                      grpc_service:
+                        envoy_grpc:
+                          cluster_name: authz_cluster # Reference the cluster defined below
+                        timeout: 0.5s
+                      failure_mode_allow: false # Deny if AuthZ service is unavailable
+
+                  # 2. Router Filter (Must be last)
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+                # ROUTING RULES (Run AFTER the JWT check)
+                route_config:
+                  name: local_route
+                  virtual_hosts:
+                    - name: backend
+                      domains: ["*"]
+                      routes:
+                        ## --- UNPROTECTED ROUTES (BYPASS AuthZ) ---
+                        - match:
+                            prefix: "/auth"
+                          route:
+                            cluster: rest_server_cluster
+                          typed_per_filter_config:
+                            envoy.filters.http.ext_authz:
+                              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthzPerRoute
+                              disabled: true # Explicitly DISABLES the JWT CHECK for this path
+
+                        ## --- PROTECTED API ROUTES ---
+                        - match:
+                            prefix: "/" # Matches all other paths
+                          route:
+                            cluster: rest_server_cluster
+                          # AuthZ is active here (as configured globally)
+
+  ## ----------------------------------------------------------------------
+  ## 2. CLUSTERS: Upstream Services (Backends)
+  ## ----------------------------------------------------------------------
+  clusters:
+    # A. JWT Check Service Cluster (gRPC)
+    - name: authz_cluster
+      type: LOGICAL_DNS
+      lb_policy: ROUND_ROBIN
+      typed_extension_protocol_options:
+        envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+          "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+          explicit_http_config:
+            http2_protocol_options: {} # Required for gRPC communication
+      load_assignment:
+        cluster_name: authz_cluster
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: jwt-check # Docker Compose service name
+                      port_value: 50051
+
+    # B. REST API Server Cluster (HTTP)
+    - name: rest_server_cluster
+      type: LOGICAL_DNS
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: rest_server_cluster
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: rest-server # Docker Compose service name
+                      port_value: 8080

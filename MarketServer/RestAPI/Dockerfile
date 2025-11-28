@@ -1,4 +1,4 @@
-FROM golang:1.24 AS builder
+FROM golang:1.24-bookworm AS builder
 
 WORKDIR /app
 
@@ -9,6 +9,8 @@ RUN go mod download
 COPY . .
 
 RUN go mod tidy
+
+ENV GOCACHE=/tmp/.cache/go-build
 
 RUN CGO_ENABLED=0 go build -o /app/rest_server .
 

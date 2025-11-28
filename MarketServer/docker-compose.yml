@@ -1,11 +1,30 @@
 services:
+  envoy:
+    image: envoyproxy/envoy:v1.27.0
+    container_name: rest_envoy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./RestLoadBalancer/envoy.yaml:/etc/envoy/envoy.yaml:ro
+      - ./Certifications:/etc/ssl/certs/:ro
+    command:
+      [
+        "envoy",
+        "-c",
+        "/etc/envoy/envoy.yaml",
+        "--log-level",
+        "debug",
+        "--component-log-level",
+        "config:trace,upstream:trace",
+      ]
+    restart: always
   zookeeper:
     image: wurstmeister/zookeeper
     container_name: zookeeper
-    ports:
-      - "2181:2181"
+    expose:
+      - 2181
     restart: always
-
   kafka:
     image: wurstmeister/kafka
     container_name: kafka
@@ -24,8 +43,8 @@ services:
   redis:
     image: redis:7-alpine
     container_name: redis
-    ports:
-      - "6379:6379"
+    expose:
+      - 6379
     command: redis-server --appendonly yes
     restart: always
   market-server:
@@ -41,10 +60,9 @@ services:
   rest-server:
     build:
       context: RestAPI
-      dockerfile: Dockerfile
     container_name: RestAPI
-    ports:
-      - "8081:8080"
+    expose:
+      - 8080
     restart: always
   postgres_db:
     image: postgres:15-alpine
@@ -55,6 +73,12 @@ services:
       POSTGRES_DB: testdb
     volumes:
       - postgres_data:/var/lib/postgresql/data
-
+  jwt-check:
+    build:
+      context: JwtCheck
+    container_name: jwt-check
+    expose:
+      - 50051
+    restart: always
 volumes:
   postgres_data:
