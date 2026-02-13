@@ -1,17 +1,18 @@
 CC=g++
 
-CFLAGS=-Wall -Werror -Wextra -Iinclude -fsanitize=address
+CXXFLAGS=-std=c++20 -Wall -Werror -Wextra -Iinclude
+LDFLAGS=-fsanitize=address
 
-SRC=$(shell find . -type f -name '*.cpp')
+SRC=$(shell find src -type f -name '*.cpp')
 OBJ=$(patsubst %.cpp,%.o,$(SRC))
+BIN=SocketGateway
 
-all: $(OBJ)
-	$(CC) $(CFLAGS) -o socketGateway $^
+all: $(BIN)
 
-%.o: %.cpp
-	$(CC) $(CFLAGS) -c -o $@ $<
+$(BIN): $(OBJ)
+	$(CC) $(CXXFLAGS) $(OBJ) -o $(BIN) $(LDFLAGS)
 
 clean:
-	rm -f $(OBJ) socketGateway
+	rm -f $(OBJ) $(BIN)
 
 .PHONY: all clean

@@ -1,26 +1,29 @@
 #pragma once
 
 #include <Order.hpp>
-#include <boost/lockfree/queue.hpp>
+#include <ReaderWriterCircularBuffer.hpp>
 #include <iostream>
 #include <stdexcept>
 #include <vector>
 
 namespace Gateways
 {
-    template <class T>
+
+    template <typename T>
     class StoragePool
     {
+        using FreeQueue = moodycamel::BlockingReaderWriterCircularBuffer<T *>;
+
     private:
         std::vector<T> OrderStorage;
 
         const size_t Capacity;
-        boost::lockfree::queue<T *> FreeOrders;
+        FreeQueue Free;
 
     public:
         StoragePool(size_t poolSize)
             : Capacity(poolSize)
-            , FreeOrders(poolSize)
+            , Free(poolSize)
         {
             if (poolSize == 0)
             {
@@ -31,13 +34,13 @@ namespace Gateways
             std::cout << "Initializing Order Pool with capacity: " << Capacity
                       << " orders.\n";
 
-            OrderStorage.resize(Capacity);
+            OrderStorage.reserve(Capacity);
 
             for (size_t i = 0; i < Capacity; ++i)
             {
                 T *ptr = &OrderStorage[i];
 
-                if (!FreeOrders.push(ptr))
+                if (!Free.try_enqueue(ptr))
                 {
                     throw std::runtime_error(
                         "Failed to populate initial free list.");
@@ -47,37 +50,26 @@ namespace Gateways
                       << " objects are available.\n";
         }
 
-        T *acquire()
+        [[nodiscard]] inline T *acquire() noexcept
         {
             T *res = nullptr;
 
-            if (FreeOrders.pop(res))
-            {
-                return res;
-            }
-
-            return nullptr;
+            Free.try_dequeue(res);
+            return res;
         }
 
-        void release(T *element)
+        [[nodiscard]] inline bool release(T *element) noexcept
         {
-            if (!element)
-                return;
-
-            if (!FreeOrders.push(element))
-            {
-                std::cerr << "CRITICAL ERROR: Free list push failed during "
-                             "release.\n";
-            }
+            return element && Free.try_enqueue(element);
         }
 
-        size_t getCapacity() const
+        [[nodiscard]] inline size_t getCapacity() const noexcept
         {
             return Capacity;
         }
-        bool getAvailable() const
+        [[nodiscard]] inline bool getAvailable() const noexcept
         {
-            return !FreeOrders.empty();
+            return Free.peek() != nullptr;
         }
     };
 } // namespace Gateways

@@ -1,3 +1,4 @@
+#pragma once
 
 #include <Order.hpp>
 #include <StoragePool.hpp>
@@ -7,7 +8,7 @@
 
 namespace Gateways
 {
-    constexpr int ASSET_ID_BITS = 16;
+    constexpr int ASSET_ID_BYTES = 2;
     constexpr int TIMESTAMP_BITS = 42;
     constexpr int MACHINE_ID_BITS = 10;
     constexpr int SEQUENCE_BITS = 12;

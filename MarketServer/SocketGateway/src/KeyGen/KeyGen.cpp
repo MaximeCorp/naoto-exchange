@@ -74,7 +74,7 @@ namespace Gateways
         std::array<char, MAX_KEY_LEN> *result = Pool->acquire();
 
         uint16_t BigEndianAssetID = htons(order.getAsset());
-        std::memcpy(result->data(), &BigEndianAssetID, ASSET_ID_BITS);
+        std::memcpy(result->data(), &BigEndianAssetID, ASSET_ID_BYTES);
 
         uint64_t snowkey = htonll((timestamp << TIMESTAMP_SHIFT)
                                   | (MachineID << MACHINE_ID_SHIFT) | Sequence);
