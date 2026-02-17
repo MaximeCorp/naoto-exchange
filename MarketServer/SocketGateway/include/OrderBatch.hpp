@@ -2,15 +2,19 @@
 
 #include <Order.hpp>
 #include <array>
+#include <cstdint>
 
 namespace Gateways
 {
     template <size_t BatchSize>
     class OrderBatch
     {
+    public:
+        alignas(64) std::array<Order, BatchSize> Data;
+
     private:
-        std::array<Order, BatchSize> Data;
         alignas(64) size_t Size = 0;
+        alignas(64) std::uint32_t Fd = 0;
 
     public:
         OrderBatch(void) = default;
@@ -23,9 +27,19 @@ namespace Gateways
             Size = size;
         }
 
+        inline void setFd(std::uint32_t fd) noexcept
+        {
+            Fd = fd;
+        }
+
         [[nodiscard]] inline size_t getSize(void) noexcept
         {
             return Size;
+        }
+
+        [[nodiscard]] inline std::uint32_t getFd(void) noexcept
+        {
+            return Fd;
         }
 
         [[nodiscard]] inline Order &operator[](size_t idx) noexcept

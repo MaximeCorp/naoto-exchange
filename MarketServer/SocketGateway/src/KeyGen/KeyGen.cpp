@@ -1,6 +1,6 @@
 #include <KeyGen.hpp>
 
-uint64_t htonll(uint64_t hostval)
+[[nodiscard]] static inline uint64_t htonll(uint64_t hostval) noexcept
 {
 #if __BYTE_ORDER == __LITTLE_ENDIAN
     return __builtin_bswap64(hostval);
@@ -9,7 +9,8 @@ uint64_t htonll(uint64_t hostval)
 #endif
 };
 
-uint64_t ntohll(uint64_t netval)
+/*
+[[nodiscard]] static inline uint64_t ntohll(uint64_t netval) noexcept
 {
 #if __BYTE_ORDER == __LITTLE_ENDIAN
     return __builtin_bswap64(netval);
@@ -17,6 +18,7 @@ uint64_t ntohll(uint64_t netval)
     return netval;
 #endif
 }
+*/
 
 namespace Gateways
 {

@@ -1,6 +1,9 @@
 #pragma once
 
+#include <ClientStates.hpp>
+#include <ClientStatesInjector.hpp>
 #include <EpollServer.hpp>
+#include <FileDescriptorsOps.hpp>
 #include <Order.hpp>
 #include <OrderBatch.hpp>
 #include <ReaderWriterCircularBuffer.hpp>
@@ -18,7 +21,9 @@ namespace Gateways
 
     private:
         EpollServer<BatchSize> Server;
+        ClientStates ClientsInfo;
         RiskService<BatchSize> Risk;
+        ClientStatesInjector ClientsInfoInjector;
 
         StoragePool<OrderBatch<BatchSize>> OrdersPool;
         OrdersQueue IncomingOrders;
@@ -48,7 +53,18 @@ namespace Gateways
                       int maxEvents, int maxPending, size_t nb_fds)
             : Server(port, maxEvents, maxPending, OrdersPool, IncomingOrders,
                      nb_fds)
-            , Risk(OrdersPool, IncomingOrders, nb_fds)
+            , ClientsInfo(nb_fds)
+            , Risk(OrdersPool, IncomingOrders, ClientsInfo)
+            , ClientsInfoInjector(ClientsInfo)
+            , OrdersPool(max_clients)
+            , IncomingOrders(queue_size)
+        {}
+
+        SocketGateway(size_t max_clients, size_t queue_size, int port,
+                      int maxEvents, int maxPending)
+            : Server(port, maxEvents, maxPending, OrdersPool, IncomingOrders)
+            , ClientsInfo(FileDescriptorsOps::getMaxFd())
+            , Risk(OrdersPool, IncomingOrders, ClientsInfo)
             , OrdersPool(max_clients)
             , IncomingOrders(queue_size)
         {}

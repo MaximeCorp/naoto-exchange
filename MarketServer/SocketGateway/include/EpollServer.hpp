@@ -1,12 +1,12 @@
 #pragma once
 
+#include <FileDescriptorsOps.hpp>
 #include <Order.hpp>
 #include <OrderBatch.hpp>
 #include <OrderBuffer.hpp>
 #include <ReaderWriterCircularBuffer.hpp>
 #include <StoragePool.hpp>
 #include <atomic>
-#include <boost/lockfree/queue.hpp>
 #include <fcntl.h>
 #include <iostream>
 #include <netinet/in.h>
@@ -85,13 +85,17 @@ namespace Gateways
                 }
 
                 OrderBatch<BatchSize> *buffer = Pool.acquire();
+                buffer->setFd(curFd);
                 ssize_t nread;
 
-                while ((nread = read(curFd, buffer, sizeof(buffer))) > 0)
+                while ((nread = read(curFd, buffer->Data.data(),
+                                     sizeof(Order) * BatchSize))
+                       > 0)
                 {
                     // buffer[nread] = 0;
                     // std::cout << "received:" << buffer <<
                     // std::endl;
+                    buffer->setSize(nread / sizeof(Order));
                     Orders.try_enqueue(buffer);
                 }
 
@@ -149,6 +153,19 @@ namespace Gateways
             initSocket();
         }
 
+        EpollServer(int port, int maxEvents, int maxPending,
+                    StoragePool<OrderBatch<BatchSize>> &pool,
+                    OrderQueue &orders)
+            : Port(port)
+            , MaxEvents(maxEvents)
+            , MaxPending(maxPending)
+            , Pool(pool)
+            , Orders(orders)
+        {
+            Buffers.resize(FileDescriptorsOps::findMaxFd());
+            initSocket();
+        }
+
         void startServer(void) noexcept
         {
             std::vector<struct epoll_event> events(MaxEvents);
@@ -189,3 +206,5 @@ namespace Gateways
     };
 
 } // namespace Gateways
+
+#include "EpollServer.ipp"

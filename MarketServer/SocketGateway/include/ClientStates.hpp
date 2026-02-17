@@ -1,7 +1,9 @@
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <iostream>
 #include <vector>
 
 namespace Gateways
@@ -15,13 +17,20 @@ namespace Gateways
         alignas(64) std::vector<std::int64_t> Confirmed;
         // Amount of money taking pending transactions into account
         alignas(64) std::vector<std::int64_t> Attempt;
+        // Fd is connected
+        alignas(64) std::vector<std::atomic<bool>> Connected;
+        // Which buffer (granular double buffer)
+        alignas(64) std::vector<std::atomic<bool>> Complete;
 
     public:
-        inline ClientStates(size_t size)
+        ClientStates(size_t size)
         {
             Id.resize(size, 0);
             Confirmed.resize(size, 0);
             Attempt.resize(size, 0);
+
+            std::cout << "Creating a Client States array of size " << size
+                      << "\n";
         }
 
         [[nodiscard]] inline std::uint32_t
@@ -64,6 +73,7 @@ namespace Gateways
         [[nodiscard]] inline bool can_spend(std::uint32_t fd,
                                             std::int64_t amount)
         {
+            std::cout << "checking client at fd " << fd << "\n";
             if (amount >= 0 && amount <= Attempt[fd]) [[likely]]
             {
                 return true;

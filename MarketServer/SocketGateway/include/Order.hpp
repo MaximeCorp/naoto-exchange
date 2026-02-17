@@ -58,7 +58,7 @@ namespace Gateways
         void setAsset(std::uint16_t asset);
         void setTimestamp(std::int64_t timestamp);
 
-        void log();
+        void log() const;
     };
 #pragma pack(pop)
 

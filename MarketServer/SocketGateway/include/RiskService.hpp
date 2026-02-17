@@ -17,7 +17,7 @@ namespace Gateways
 
     private:
         ClientStates
-            clientStates; // Only for read (another object will write in it)
+            &clientStates; // Only for read (another object will write in it)
         std::vector<std::uint32_t>
             MatchingEngines; // Mapping from asset ID to matching engine fd
 
@@ -30,15 +30,26 @@ namespace Gateways
 
             if (Orders.try_dequeue(to_check)) [[likely]]
             {
+                std::cout << "Received order batch of size "
+                          << to_check->getSize() << " at risk service\n";
+
                 for (size_t i = 0; i < to_check->getSize(); ++i)
                 {
                     const Order &cur_order = (*to_check)[i];
-                    if (clientStates.can_spend(cur_order.getClientId(),
+
+                    cur_order.log();
+
+                    if (clientStates.can_spend(to_check->getFd(),
                                                cur_order.getAmount()))
                         [[likely]]
                     {
                         // send order to MatchingEngines[to_check->asset_ID]
                     }
+                }
+
+                if (!OrdersPool.release(to_check))
+                {
+                    perror("Failed mempool release.\n");
                 }
             }
             else
@@ -54,15 +65,8 @@ namespace Gateways
 
     public:
         RiskService(StoragePool<OrderBatch<BatchSize>> &ordersPool,
-                    OrderQueue &orders, size_t nb_fds)
-            : clientStates(ClientStates(nb_fds))
-            , OrdersPool(ordersPool)
-            , Orders(orders)
-        {
-            connectMatchingEngines();
-        }
-        RiskService(StoragePool<Order> &ordersPool, OrderQueue &orders)
-            : clientStates(make_fd_array())
+                    OrderQueue &orders, ClientStates &clientStates)
+            : clientStates(clientStates)
             , OrdersPool(ordersPool)
             , Orders(orders)
         {

@@ -2,7 +2,7 @@
 #include <arpa/inet.h>
 #include <cstring>
 
-uint64_t htonll(uint64_t hostval)
+[[nodiscard]] static inline uint64_t htonll(uint64_t hostval) noexcept
 {
 #if __BYTE_ORDER == __LITTLE_ENDIAN
     return __builtin_bswap64(hostval);
@@ -11,7 +11,7 @@ uint64_t htonll(uint64_t hostval)
 #endif
 };
 
-uint64_t ntohll(uint64_t netval)
+[[nodiscard]] static inline uint64_t ntohll(uint64_t netval) noexcept
 {
 #if __BYTE_ORDER == __LITTLE_ENDIAN
     return __builtin_bswap64(netval);
@@ -67,14 +67,15 @@ namespace Gateways
         std::fill(Key + key_len + 1, Key + MAX_KEY_LEN, 0);
     }
 
-    void Order::log()
+    void Order::log() const
     {
         std::string side = Side == OrderSide::BUY ? "BUY" : "SELL";
         std::string type = Type == OrderType::LIMIT ? "LIMIT" : "MARKET";
         std::cout << side << " " << type << " ORDER - Amount: " << Amount
                   << " - Price: " << Price << " - Client ID: " << ClientId
-                  << "key:" << Key << "\n"
-                  << std::endl;
+                  << "key:";
+        std::cout.write(Key, MAX_KEY_LEN);
+        std::cout << "\n" << std::endl;
     }
 
     const char *Order::getKey() const
