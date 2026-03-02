@@ -50,23 +50,23 @@ Gateway (socket/websocket) -- checks  (Aeron) -- Security services (confirmed st
 ```
 Everything above this line might be outdated.
 
-# Terminology
-## Services
+# 1. Terminology
+## 1.1 Services
 - Matching Engine: The service that will match orders together and send order status to the rest of the system.
 - Socket Gateway: A gateway is the middle man between a service and the client, for security and to help filter messages.
 - User Details Provider: The middle man between DB and services that need user details.
-## Threads
+## 1.2 Threads
 - Socket Gateways Receivers: The threads in the socket gateway that will listen to updates from market engine and user details provider.
 - Socket Gateways Writter: The thread that receives from receivers with SPSC lock-free queues (see bellow), it is the only producer of the client states array.
-## Data Structures
+## 1.3 Data Structures
 - Client States Array (Socket Gateway): It is a fixed size SoA (see bellow), if a client connection has a socket with fd = 5, then we can access user details at index 5. This allows to make the hot path much faster.
 - Client ID to fd Map (Socket Gateway): A map used by receiver threads and modified by writter thread. The implementation of map can be changed but the principle remains the same. 
-## Concepts
+## 1.4 Concepts
 - SPSC/MPMC: Single producer, single consumer/Multiple producers, multiple consumers. The best is to keep things SPSC if possible.
 - Sequence ID: The ID used in UDP connections when data loss is a problem.
 - SoA: Structure of array and not array of structures, allows to access a particular field sequentially without having to request the other fieds in memory. 
 
-# Socket Gateway
+# 2. Socket Gateway
 The socket gateways expect clients messages to have little endian memory order.
 They are designed to be scaled out, they contain 5 threads each with one specific role.
 A dynamic list of IP addresses will likely be accessible from Rest API in order to avoid overhead of a load balancer.
@@ -78,7 +78,7 @@ The workflow:
 - Read packets into the orders batch (no waiting time).
 - Push the batch's address into a SPSC lock-free queue (the pointer will be released by the consumer of the queue).
 
-# Assumptions
+# 3. Assumptions
 ## Socket Gateway
 - A client won't be in the client ID to fd map until he's connected (unless it's an old connection).
 - When a new client is connected (user details provider replied to a request), the information at corresponding fd (client states array) will be overwritten.
@@ -87,7 +87,7 @@ The workflow:
 - If an update leads the program to find that the client ID in the client states array was overwritten, the client ID from the update (no longer relevant) will be removed from the map (client ID to fd).
 - Upon client connection (from writter thread), the old client ID at the fd corresponding to the new client ID will be removed from the map.
 
-# Important Details
+# 4. Important Details
 ## Socket Gateway
 - The result given by the user details provider might not be up to date, it is necessary to add a behavior to ensure that missed updates will be seen by gateway.
 - 
