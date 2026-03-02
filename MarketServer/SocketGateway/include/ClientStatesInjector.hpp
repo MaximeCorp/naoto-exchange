@@ -1,8 +1,10 @@
 #pragma once
 
 #include <ClientStates.hpp>
+#include <ClientStatesUpdate.hpp>
 #include <ClientStatesUpdates.hpp>
 #include <FlatHashMap.hpp>
+#include <ReaderWriterCircularBuffer.hpp>
 #include <arpa/inet.h>
 #include <cstdint>
 #include <cstring>
@@ -13,14 +15,19 @@
 
 namespace Gateways
 {
+    using UpdateQueue =
+        moodycamel::BlockingReaderWriterCircularBuffer<ClientStatesUpdate *>;
     class ClientStatesInjector
     {
     private:
         ClientStates &ClientInfos;
         ska::flat_hash_map<std::int32_t, std::uint32_t> clientIdToFd;
 
-        int ClientStatesFd;
-        int MarketUpdatesFd;
+        UpdateQueue &MarketUpdatesQueue;
+        UpdateQueue &ClientInfoUpdates;
+
+        int ClientStatesFd; // Move to ClientsUpdateInjector
+        int MarketUpdatesFd; // Move to MarketUpdatesInjector
 
         void startUdpFd(const std::string &marketUpdatesIp,
                         const int marketUpdatesPort)

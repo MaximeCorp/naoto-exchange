@@ -9,7 +9,7 @@ namespace Gateways
         int TotalSupply;
 
     public:
-        Asset(int id, int supply);
+        Asset(const int id, const int supply);
         ~Asset() = default;
 
         int getId();

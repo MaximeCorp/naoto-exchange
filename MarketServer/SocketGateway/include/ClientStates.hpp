@@ -20,9 +20,10 @@ namespace Gateways
         alignas(64) std::vector<std::int64_t> Attempt1;
         alignas(64) std::vector<std::int64_t> Attempt2;
         // Fd is connected
-        alignas(64) std::vector<char> Connected;
+        alignas(
+            64) std::vector<char> Connected; // Always access with atomic_ref
         // Which buffer (granular double buffer)
-        alignas(64) std::vector<char> Complete;
+        alignas(64) std::vector<char> Complete; // Always access with atomic_ref
 
     public:
         ClientStates(const size_t size)
