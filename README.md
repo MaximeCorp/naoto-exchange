@@ -55,6 +55,9 @@ The socket gateways expect clients messages to have little endian memory order.
 They are designed to be scaled out, they contain 5 threads each with one specific role.
 A dynamic list of IP addresses will likely be accessible from Rest API in order to avoid overhead of a load balancer.
 ## Components (threads)
-Epoll server
-There will be one dedicated thread to reading packets from clients 
-- 
+### Epoll Server
+This thread will be dedicated to receiving clients packets with epoll on tcp connections, the optimal performances can be achieved with solarflare NIC card (kernel bypass).
+The workflow:
+- Acquire orders batch from the memory pool.
+- Read packets into the orders batch (no waiting time).
+- Push the batch's address into a SPSC lock-free queue (the pointer will be released by the consumer of the queue).
