@@ -48,3 +48,13 @@ Gateway (socket/websocket) -- checks  (Aeron) -- Security services (confirmed st
      |
   QuestDB wrapper ----gRPC---- gRPC gateway (for clients to get candles and depth book)
 ```
+Everything above this line might be outdated.
+
+# SocketGateway
+The socket gateways expect clients messages to have little endian memory order.
+They are designed to be scaled out, they contain 5 threads each with one specific role.
+A dynamic list of IP addresses will likely be accessible from Rest API in order to avoid overhead of a load balancer.
+## Components (threads)
+Epoll server
+There will be one dedicated thread to reading packets from clients 
+- 
