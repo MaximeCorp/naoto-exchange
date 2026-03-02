@@ -14,67 +14,119 @@ namespace Gateways
         // Id = 0 means slot not used
         alignas(64) std::vector<std::uint32_t> Id;
         // Confirmed amount of money
-        alignas(64) std::vector<std::int64_t> Confirmed;
+        alignas(64) std::vector<std::int64_t> Confirmed1;
+        alignas(64) std::vector<std::int64_t> Confirmed2;
         // Amount of money taking pending transactions into account
-        alignas(64) std::vector<std::int64_t> Attempt;
+        alignas(64) std::vector<std::int64_t> Attempt1;
+        alignas(64) std::vector<std::int64_t> Attempt2;
         // Fd is connected
-        alignas(64) std::vector<std::atomic<bool>> Connected;
+        alignas(64) std::vector<char> Connected;
         // Which buffer (granular double buffer)
-        alignas(64) std::vector<std::atomic<bool>> Complete;
+        alignas(64) std::vector<char> Complete;
 
     public:
-        ClientStates(size_t size)
+        ClientStates(const size_t size)
         {
             Id.resize(size, 0);
-            Confirmed.resize(size, 0);
-            Attempt.resize(size, 0);
+            Confirmed1.resize(size, 0);
+            Attempt1.resize(size, 0);
+            Confirmed2.resize(size, 0);
+            Attempt2.resize(size, 0);
+            Connected.resize(size, 0);
+            Complete.resize(size, 0);
 
             std::cout << "Creating a Client States array of size " << size
                       << "\n";
         }
 
         [[nodiscard]] inline std::uint32_t
-        get_client_id(std::uint32_t fd) noexcept
+        get_client_id(const std::uint32_t fd) noexcept
         {
             return Id[fd];
         }
         [[nodiscard]] inline std::int64_t
-        get_confirmed(std::uint32_t fd) noexcept
+        get_confirmed(const std::uint32_t fd) noexcept
         {
-            return Confirmed[fd];
+            return std::atomic_ref<char>(Complete[fd])
+                       .load(std::memory_order_acquire)
+                ? Confirmed1[fd]
+                : Confirmed2[fd];
         }
-        [[nodiscard]] inline std::int64_t get_attempt(std::uint32_t fd) noexcept
+        [[nodiscard]] inline std::int64_t
+        get_attempt(const std::uint32_t fd) noexcept
         {
-            return Attempt[fd];
+            return std::atomic_ref<char>(Complete[fd])
+                       .load(std::memory_order_acquire)
+                ? Attempt1[fd]
+                : Attempt2[fd];
         }
 
-        inline void add_client(std::uint32_t fd, std::uint32_t id,
-                               std::int64_t confirmed) noexcept
+        inline void add_client(const std::uint32_t fd, const std::uint32_t id,
+                               const std::int64_t confirmed) noexcept
         {
             Id[fd] = id;
-            Confirmed[fd] = confirmed;
-            Attempt[fd] = confirmed;
+            std::vector<std::int64_t> &confirmed_buffer =
+                std::atomic_ref<char>(Complete[fd])
+                    .load(std::memory_order_acquire)
+                ? Confirmed1
+                : Confirmed2;
+            std::vector<std::int64_t> &attempt_buffer =
+                std::atomic_ref<char>(Complete[fd])
+                    .load(std::memory_order_acquire)
+                ? Attempt1
+                : Attempt2;
+            confirmed_buffer[fd] = confirmed;
+            attempt_buffer[fd] = 0;
+
+            std::atomic_ref<char>(Connected[fd])
+                .store(true, std::memory_order_release);
         }
 
-        inline void add_client(std::uint32_t fd, std::uint32_t id,
-                               std::int64_t confirmed,
-                               std::int64_t attempt) noexcept
+        inline void add_client(const std::uint32_t fd, const std::uint32_t id,
+                               const std::int64_t confirmed,
+                               const std::int64_t attempt) noexcept
         {
             Id[fd] = id;
-            Confirmed[fd] = confirmed;
-            Attempt[fd] = attempt;
+            std::vector<std::int64_t> &confirmed_buffer =
+                std::atomic_ref<char>(Complete[fd])
+                    .load(std::memory_order_acquire)
+                ? Confirmed1
+                : Confirmed2;
+            std::vector<std::int64_t> &attempt_buffer =
+                std::atomic_ref<char>(Complete[fd])
+                    .load(std::memory_order_acquire)
+                ? Attempt1
+                : Attempt2;
+            confirmed_buffer[fd] = confirmed;
+            attempt_buffer[fd] = attempt;
+
+            std::atomic_ref<char>(Connected[fd])
+                .store(1, std::memory_order_release);
         }
 
-        inline void remove_client(std::uint32_t fd) noexcept
+        inline void remove_client(const std::uint32_t fd) noexcept
         {
-            Id[fd] = 0;
+            std::atomic_ref<char>(Connected[fd])
+                .store(0, std::memory_order_release);
         }
 
-        [[nodiscard]] inline bool can_spend(std::uint32_t fd,
-                                            std::int64_t amount)
+        [[nodiscard]] inline bool can_spend(const std::uint32_t fd,
+                                            const std::int64_t amount)
         {
+            std::vector<std::int64_t> &confirmed_buffer =
+                std::atomic_ref<char>(Complete[fd])
+                    .load(std::memory_order_acquire)
+                ? Confirmed1
+                : Confirmed2;
+            std::vector<std::int64_t> &attempt_buffer =
+                std::atomic_ref<char>(Complete[fd])
+                    .load(std::memory_order_acquire)
+                ? Attempt1
+                : Attempt2;
             std::cout << "checking client at fd " << fd << "\n";
-            if (amount >= 0 && amount <= Attempt[fd]) [[likely]]
+            if (amount >= 0
+                && amount <= confirmed_buffer[fd] - attempt_buffer[fd])
+                [[likely]]
             {
                 return true;
             }

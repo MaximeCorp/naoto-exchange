@@ -21,7 +21,7 @@ namespace Gateways
     public:
         ClientStatesUpdates(void) = default;
 
-        inline void setSize(size_t size) noexcept
+        inline void setSize(const size_t size) noexcept
         {
             Size = size;
         }

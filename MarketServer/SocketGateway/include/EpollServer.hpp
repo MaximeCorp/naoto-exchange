@@ -27,15 +27,16 @@ namespace Gateways
     private:
         int ListenFd;
         int EpollFd;
-        int Port;
-        int MaxEvents;
-        int MaxPending;
+        int ClientStatesUpdateFd;
+        const int Port;
+        const int MaxEvents;
+        const int MaxPending;
 
         std::vector<OrderBuffer> Buffers;
         StoragePool<OrderBatch<BatchSize>> &Pool;
         alignas(64) OrderQueue &Orders;
 
-        inline void setNonBlocking(int fd) noexcept
+        inline void setNonBlocking(const int fd) noexcept
         {
             int flags = fcntl(fd, F_GETFL, 0);
             if (flags == -1)
@@ -50,7 +51,7 @@ namespace Gateways
             }
         }
 
-        inline void addClient(int clientFd) noexcept
+        inline void addClient(const int clientFd) noexcept
         {
             setNonBlocking(clientFd);
 
@@ -66,7 +67,7 @@ namespace Gateways
             Buffers[clientFd] = {};
         }
 
-        inline void removeClient(int clientFd) noexcept
+        inline void removeClient(const int clientFd) noexcept
         {
             epoll_ctl(EpollFd, EPOLL_CTL_DEL, clientFd, nullptr);
 
@@ -75,7 +76,7 @@ namespace Gateways
             std::cout << "Closed connection on FD: " << clientFd << std::endl;
         }
 
-        void readMessage(struct epoll_event &event, int curFd) noexcept
+        void readMessage(struct epoll_event &event, const int curFd) noexcept
         {
             if (event.events & (EPOLLIN | EPOLLHUP | EPOLLERR | EPOLLRDHUP))
             {
@@ -114,7 +115,7 @@ namespace Gateways
             }
         }
 
-        void clientAcceptLoop(int curFd) noexcept
+        void clientAcceptLoop(const int curFd) noexcept
         {
             if (curFd == ListenFd)
             {
@@ -140,10 +141,12 @@ namespace Gateways
         void initSocket(void); // Not in hot path
 
     public:
-        EpollServer(int port, int maxEvents, int maxPending,
+        EpollServer(const int port, const int maxEvents, const int maxPending,
                     StoragePool<OrderBatch<BatchSize>> &pool,
-                    OrderQueue &orders, size_t nb_fds)
-            : Port(port)
+                    OrderQueue &orders, const int clientStatesUpdateFd,
+                    const size_t nb_fds)
+            : ClientStatesUpdateFd(clientStatesUpdateFd)
+            , Port(port)
             , MaxEvents(maxEvents)
             , MaxPending(maxPending)
             , Pool(pool)
@@ -153,10 +156,11 @@ namespace Gateways
             initSocket();
         }
 
-        EpollServer(int port, int maxEvents, int maxPending,
+        EpollServer(const int port, const int maxEvents, const int maxPending,
                     StoragePool<OrderBatch<BatchSize>> &pool,
-                    OrderQueue &orders)
-            : Port(port)
+                    const int clientStatesUpdateFd, OrderQueue &orders)
+            : ClientStatesUpdateFd(clientStatesUpdateFd)
+            , Port(port)
             , MaxEvents(maxEvents)
             , MaxPending(maxPending)
             , Pool(pool)

@@ -19,11 +19,11 @@ namespace Gateways
         ClientStates &ClientInfos;
         ska::flat_hash_map<std::int32_t, std::uint32_t> clientIdToFd;
 
-        int &ClientStatesFd;
+        int ClientStatesFd;
         int MarketUpdatesFd;
 
-        int startUdpFd(const std::string &marketUpdatesIp,
-                       const int marketUpdatesPort)
+        void startUdpFd(const std::string &marketUpdatesIp,
+                        const int marketUpdatesPort)
         {
             MarketUpdatesFd = socket(AF_INET, SOCK_DGRAM, 0);
 
@@ -35,25 +35,31 @@ namespace Gateways
             memset(&local_addr, 0, sizeof(local_addr));
             local_addr.sin_family = AF_INET;
             local_addr.sin_addr.s_addr = INADDR_ANY;
-            local_addr.sin_port = htons(12345);
+            local_addr.sin_port = htons(marketUpdatesPort);
             bind(MarketUpdatesFd, (struct sockaddr *)&local_addr,
                  sizeof(local_addr));
 
-            struct sockaddr_in local_addr;
-            memset(&local_addr, 0, sizeof(local_addr));
-            local_addr.sin_family = AF_INET;
-            local_addr.sin_addr.s_addr = INADDR_ANY;
-            local_addr.sin_port = htons(12345);
-            bind(MarketUpdatesFd, (struct sockaddr *)&local_addr,
-                 sizeof(local_addr));
+            struct ip_mreq mreq;
+            mreq.imr_multiaddr.s_addr = inet_addr(marketUpdatesIp.c_str());
+            mreq.imr_interface.s_addr = INADDR_ANY;
+
+            if (setsockopt(MarketUpdatesFd, IPPROTO_IP, IP_ADD_MEMBERSHIP,
+                           &mreq, sizeof(mreq))
+                < 0)
+            {
+                perror("setsockopt IP_ADD_MEMBERSHIP");
+            }
         }
 
     public:
-        ClientStatesInjector(ClientStates &clientInfos, int &clientStatesFd)
+        ClientStatesInjector(ClientStates &clientInfos,
+                             const int clientStatesFd,
+                             const std::string &MarketUpdatesIp,
+                             const int MarketUpdatesPort)
             : ClientInfos(clientInfos)
             , ClientStatesFd(clientStatesFd)
         {
-            startUdpFd("matching engine multicast ip", 8080);
+            startUdpFd(MarketUpdatesIp, MarketUpdatesPort);
         }
 
         void startPollingLoop(void) noexcept

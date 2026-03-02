@@ -8,6 +8,7 @@
 #include <OrderBatch.hpp>
 #include <ReaderWriterCircularBuffer.hpp>
 #include <RiskService.hpp>
+#include <netinet/tcp.h>
 #include <pthread.h>
 #include <thread>
 
@@ -20,6 +21,7 @@ namespace Gateways
             OrderBatch<BatchSize> *>;
 
     private:
+        int ClientStatesUpdatesFd;
         EpollServer<BatchSize> Server;
         ClientStates ClientsInfo;
         RiskService<BatchSize> Risk;
@@ -28,7 +30,7 @@ namespace Gateways
         StoragePool<OrderBatch<BatchSize>> OrdersPool;
         OrdersQueue IncomingOrders;
 
-        void setAffinity(std::thread &t, int core_id)
+        void setAffinity(std::thread &t, const int core_id)
         {
             cpu_set_t cpuset;
             CPU_ZERO(&cpuset);
@@ -48,26 +50,69 @@ namespace Gateways
             }
         }
 
+        [[nodiscard]] int
+        connectClientStatesUpdateService(const std::string &ip, const int port)
+        {
+            int res = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
+
+            int one = 1;
+            setsockopt(ClientStatesUpdatesFd, IPPROTO_TCP, TCP_NODELAY, &one,
+                       sizeof(one));
+
+            struct sockaddr_in addr;
+            std::memset(&addr, 0, sizeof(addr));
+            addr.sin_family = AF_INET;
+            addr.sin_port = htons(port);
+            addr.sin_addr.s_addr = inet_addr(ip.c_str());
+
+            if (connect(ClientStatesUpdatesFd, (struct sockaddr *)&addr,
+                        sizeof(addr))
+                < 0)
+            {
+                if (errno != EINPROGRESS)
+                    std::cerr << "Bro you didn't connect to risk service.\n";
+            }
+
+            return res;
+        }
+
     public:
-        SocketGateway(size_t max_clients, size_t queue_size, int port,
-                      int maxEvents, int maxPending, size_t nb_fds)
-            : Server(port, maxEvents, maxPending, OrdersPool, IncomingOrders,
-                     nb_fds)
+        SocketGateway(const size_t max_clients, const size_t queue_size,
+                      const int port, const int maxEvents, const int maxPending,
+                      const std::string &clientStatesUpdatesIp,
+                      const int clientStatesUpdatesPort,
+                      const std::string &marketUpdatesIp,
+                      const int marketUpdatesPort, const size_t nb_fds)
+            : ClientStatesUpdatesFd(connectClientStatesUpdateService(
+                clientStatesUpdatesIp, clientStatesUpdatesPort))
+            , Server(port, maxEvents, maxPending, OrdersPool, IncomingOrders,
+                     ClientStatesUpdatesFd, nb_fds)
             , ClientsInfo(nb_fds)
             , Risk(OrdersPool, IncomingOrders, ClientsInfo)
-            , ClientsInfoInjector(ClientsInfo)
+            , ClientsInfoInjector(ClientsInfo, ClientStatesUpdatesFd,
+                                  marketUpdatesIp, marketUpdatesPort)
             , OrdersPool(max_clients)
             , IncomingOrders(queue_size)
         {}
 
-        SocketGateway(size_t max_clients, size_t queue_size, int port,
-                      int maxEvents, int maxPending)
+        SocketGateway(const size_t max_clients, const size_t queue_size,
+                      const int port, const int maxEvents, const int maxPending,
+                      const std::string &clientStatesUpdatesIp,
+                      const int clientStatesUpdatesPort)
             : Server(port, maxEvents, maxPending, OrdersPool, IncomingOrders)
             , ClientsInfo(FileDescriptorsOps::getMaxFd())
             , Risk(OrdersPool, IncomingOrders, ClientsInfo)
             , OrdersPool(max_clients)
             , IncomingOrders(queue_size)
-        {}
+        {
+            connectClientStatesUpdateService(clientStatesUpdatesIp,
+                                             clientStatesUpdatesPort);
+        }
+
+        ~SocketGateway(void)
+        {
+            close(ClientStatesUpdatesFd);
+        }
 
         void StartGateway(void)
         {
