@@ -78,13 +78,14 @@ namespace Gateways
 
         void readMessage(struct epoll_event &event, const int curFd) noexcept
         {
-            if (event.events & (EPOLLIN | EPOLLHUP | EPOLLERR | EPOLLRDHUP))
+            if (event.events & (EPOLLHUP | EPOLLERR | EPOLLRDHUP))
             {
-                if (event.events & (EPOLLHUP | EPOLLERR | EPOLLRDHUP))
-                {
-                    removeClient(curFd);
-                }
+                removeClient(curFd);
+                return;
+            }
 
+            if (event.events & EPOLLIN)
+            {
                 OrderBatch<BatchSize> *buffer = Pool.acquire();
                 buffer->setFd(curFd);
                 ssize_t nread;

@@ -41,7 +41,7 @@ namespace Gateways
         }
 
     public:
-        static inline void setMaxFd(size_t nb_fds)
+        static inline void setMaxFd(const size_t nb_fds)
         {
             struct rlimit rl;
 
