@@ -77,12 +77,19 @@ A dynamic list of IP addresses will likely be accessible from Rest API in order 
 ## 2.1 Components (threads)
 ### 2.1.1 Epoll Server
 This thread will be dedicated to receiving clients packets with epoll on tcp connections, the optimal performances can be achieved with solarflare NIC card (kernel bypass).
-The workflow:
+
+Workflow:
 - Acquire orders batch from the memory pool.
 - Read packets into the orders batch (no waiting time).
 - Push the batch's address into a SPSC lock-free queue (the pointer will be released by the consumer of the queue).
 - If the message is an API key and not an order, send the API key to the fd that's connected to user details provider, one of the receivers will read on the same fd and get the response and handle the rest.
+### 2.1.2 Risk Service
+Risk service pops order batches from the queue where epoll server pushes orders and checks orders with details from client states array. This thread is in charge of releasing order batches and of sending orders to matching engines via TCP connections. 
 
+Workflow:
+- Pop a batch from the queue
+- Check user details in the map (all orders from the same batch come from the same fd/client)
+- If valid, send tcp message to matching engine and update the attempt the attempt value of the
 # 3. Assumptions
 ## 3.1 Socket Gateway
 - A client won't be in the client ID to fd map until he's connected (unless it's an old connection).
