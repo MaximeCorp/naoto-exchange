@@ -58,7 +58,8 @@ Everything above this line might be outdated.
 
 ## 1.2 Threads
 - Socket Gateways Receivers: The threads in the socket gateway that will listen to updates from market engine and user details provider.
-- Socket Gateways Writer: The thread that receives from receivers with SPSC lock-free queues (see bellow), it is the only producer of the client states array.
+- Socket Gateways Writer: The thread that receives from listeners with SPSC lock-free queues (see bellow), it is the only producer of the client states array.
+- Socket Gateway Listeners: Threads dedicated to receiving and processing updates. They push the updates to the central writer (from above). If listening to UDP, they're responsible for keeping track of sequence IDs and requesting missed packets to the message recovery service (see bellow, not written yet).
 
 ## 1.3 Data Structures
 - Client States Array (Socket Gateway): It is a fixed size SoA (see bellow), if a client connection has a socket with fd = 5, then we can access user details at index 5. This allows to make the hot path much faster. It is worth noting that individual double-buffering (see bellow) is used to reduce slow downs due to concurrent writting/reading, it is individual to reduce impact of a swap on cache misses.
@@ -101,6 +102,9 @@ The client states array is a structure that was designed for spsc acces, but the
 The workflow:
 - Pop up to N updates (N is a fixed size that can be determined at compile time) from each spsc queue. If N updates are processed or queues are empty, swap changes if any. Each client has its own independent double buffer, and an array of size N keeps track of the fds (clients) that need to be swapped.
 - Writter doesn't operate any kind of syscall, its only role is to drain update queues and write to client details map. It is designed to be faster than listener threads, because no syscalls nor update processing are involved.
+
+### 2.1.4 Market Updates Listener
+
 
 # 3 Assumptions
 ## 3.1 Socket Gateway
