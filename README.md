@@ -81,7 +81,7 @@ Everything above this line might be outdated.
 
 # 2 Socket Gateway
 The socket gateways expect clients messages to have little endian memory order.
-They are designed to be scaled out, they contain 5 threads each with one specific role.
+They are designed to be scaled out, they contain 5 threads.
 A dynamic list of IP addresses will likely be accessible from Rest API in order to avoid overhead of a load balancer.
 ## 2.1 Components (threads)
 ### 2.1.1 Epoll Server
