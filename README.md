@@ -115,7 +115,7 @@ The workflow:
 - Receive UDP packets and put them into the circular buffer according to their sequence ID.
 - Process, filter and push them to the writter
 - If a packet is missing, request it to the recovery service.
-- In case the buffer size is not enough (we have some missed packets and we're still full), the consequences on will be that the gateway will think some funds are still blocked (the source of truth of the system won't be mistaken). This is a risk the client will have to be aware of.   
+- In case the buffer size is not enough (we have some missed packets and we're still full), the consequences will be that the gateway will think some funds are still blocked (the source of truth of the system won't be mistaken). This is a risk the client will have to be aware of.   
 
 # 3 Assumptions
 ## 3.1 Socket Gateway
