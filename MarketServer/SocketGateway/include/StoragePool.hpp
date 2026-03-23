@@ -50,7 +50,7 @@ namespace Gateways
                       << " objects are available.\n";
         }
 
-        [[nodiscard]] inline T *acquire() noexcept
+        [[nodiscard]] T *acquire() noexcept
         {
             T *res = nullptr;
 
@@ -58,16 +58,28 @@ namespace Gateways
             return res;
         }
 
-        [[nodiscard]] inline bool release(T *element) noexcept
+        [[nodiscard]] bool release(T *element) noexcept
         {
             return element && Free.try_enqueue(element);
         }
 
-        [[nodiscard]] inline size_t getCapacity() const noexcept
+        void releaseCritical(T *element) noexcept
+        {
+            if (!element || !Free.try_enqueue(element)) [[unlikely]]
+            {
+                std::fprintf(stderr,
+                             "CRITICAL: Mempool corruption. Failed "
+                             "to release batch %p\n",
+                             element);
+                std::terminate();
+            }
+        }
+
+        [[nodiscard]] size_t getCapacity() const noexcept
         {
             return Capacity;
         }
-        [[nodiscard]] inline bool getAvailable() const noexcept
+        [[nodiscard]] bool getAvailable() const noexcept
         {
             return Free.peek() != nullptr;
         }

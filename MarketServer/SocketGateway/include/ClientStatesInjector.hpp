@@ -23,8 +23,8 @@ namespace Gateways
         ClientStates &ClientInfos;
         ska::flat_hash_map<std::int32_t, std::uint32_t> clientIdToFd;
 
-        UpdateQueue &MarketUpdatesQueue;
-        UpdateQueue &ClientInfoUpdates;
+        // UpdateQueue &MarketUpdatesQueue;
+        // UpdateQueue &ClientInfoUpdates;
 
         int ClientStatesFd; // Move to ClientsUpdateInjector
         int MarketUpdatesFd; // Move to MarketUpdatesInjector

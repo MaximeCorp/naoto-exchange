@@ -7,6 +7,7 @@
 #include <ReaderWriterCircularBuffer.hpp>
 #include <StoragePool.hpp>
 #include <atomic>
+#include <cstdlib>
 #include <fcntl.h>
 #include <iostream>
 #include <netinet/in.h>
@@ -86,19 +87,80 @@ namespace Gateways
 
             if (event.events & EPOLLIN)
             {
-                OrderBatch<BatchSize> *buffer = Pool.acquire();
-                buffer->setFd(curFd);
+                OrderBatch<BatchSize> *batch = nullptr;
+                OrderBuffer &buffer = Buffers[curFd];
+
+                std::cout << "Content of buffer:\n";
+
+                for (size_t i = 0; i < buffer.BufferSize; ++i)
+                {
+                    std::cout << buffer.Buffer[i];
+                }
+
+                std::cout << "\n";
+
                 ssize_t nread;
 
-                while ((nread = read(curFd, buffer->Data.data(),
-                                     sizeof(Order) * BatchSize))
-                       > 0)
+                while (true)
                 {
-                    // buffer[nread] = 0;
-                    // std::cout << "received:" << buffer <<
-                    // std::endl;
-                    buffer->setSize(nread / sizeof(Order));
-                    Orders.try_enqueue(buffer);
+                    batch = Pool.acquire();
+
+                    if (!batch) [[unlikely]]
+                    {
+                        // Send error message to client (don't forget to give
+                        // context: which order was refused)
+                        break;
+                    }
+
+                    if (buffer.BufferSize > 0) [[likely]]
+                    {
+                        std::memcpy(batch->Data.data(), buffer.Buffer.data(),
+                                    buffer.BufferSize);
+                    }
+
+                    nread = read(
+                        curFd, (char *)(batch->Data.data()) + buffer.BufferSize,
+                        sizeof(Order) * BatchSize - buffer.BufferSize);
+
+                    if (nread <= 0) [[unlikely]]
+                    {
+                        Pool.releaseCritical(batch);
+
+                        batch = nullptr;
+                        break;
+                    }
+
+                    batch->setFd(curFd);
+
+                    auto [batchSize, bufferSize] = std::div(
+                        (int)(nread + buffer.BufferSize), sizeof(Order));
+
+                    batch->setSize(batchSize);
+
+                    buffer.addBytes(
+                        batch->Data.data() + sizeof(Order) * batchSize,
+                        bufferSize); // Double check if sizeof(Order) *
+                                     // batchSize is right
+
+                    if (!Orders.try_enqueue(batch)) [[unlikely]]
+                    {
+                        Pool.releaseCritical(batch);
+                        // Send error message to client
+                    }
+
+                    if (batchSize <= 0)
+                    {
+                        std::cout << "cleared\n";
+                    }
+
+                    buffer.BufferSize *= batchSize <= 0;
+
+                    batch = nullptr;
+                }
+
+                if (batch != nullptr)
+                {
+                    Pool.releaseCritical(batch);
                 }
 
                 if (nread == 0)

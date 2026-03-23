@@ -1,5 +1,6 @@
 #pragma once
 
+#include <OrderBuffer.hpp>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -40,12 +41,12 @@ namespace Gateways
                       << "\n";
         }
 
-        [[nodiscard]] inline std::uint32_t
+        [[nodiscard]] std::uint32_t
         get_client_id(const std::uint32_t fd) noexcept
         {
             return Id[fd];
         }
-        [[nodiscard]] inline std::int64_t
+        [[nodiscard]] std::int64_t
         get_confirmed(const std::uint32_t fd) noexcept
         {
             return std::atomic_ref<char>(Complete[fd])
@@ -53,17 +54,15 @@ namespace Gateways
                 ? Confirmed1[fd]
                 : Confirmed2[fd];
         }
-        [[nodiscard]] inline std::int64_t
-        get_attempt(const std::uint32_t fd) noexcept
+        [[nodiscard]] std::int64_t get_attempt(const std::uint32_t fd) noexcept
         {
             return std::atomic_ref<char>(Complete[fd])
                        .load(std::memory_order_acquire)
                 ? Attempt1[fd]
                 : Attempt2[fd];
         }
-
-        inline void add_client(const std::uint32_t fd, const std::uint32_t id,
-                               const std::int64_t confirmed) noexcept
+        void add_client(const std::uint32_t fd, const std::uint32_t id,
+                        const std::int64_t confirmed) noexcept
         {
             Id[fd] = id;
             std::vector<std::int64_t> &confirmed_buffer =
@@ -83,9 +82,9 @@ namespace Gateways
                 .store(true, std::memory_order_release);
         }
 
-        inline void add_client(const std::uint32_t fd, const std::uint32_t id,
-                               const std::int64_t confirmed,
-                               const std::int64_t attempt) noexcept
+        void add_client(const std::uint32_t fd, const std::uint32_t id,
+                        const std::int64_t confirmed,
+                        const std::int64_t attempt) noexcept
         {
             Id[fd] = id;
             std::vector<std::int64_t> &confirmed_buffer =
@@ -105,14 +104,16 @@ namespace Gateways
                 .store(1, std::memory_order_release);
         }
 
-        inline void remove_client(const std::uint32_t fd) noexcept
+        void remove_client(const std::uint32_t fd) noexcept
         {
             std::atomic_ref<char>(Connected[fd])
                 .store(0, std::memory_order_release);
         }
 
-        [[nodiscard]] inline bool can_spend(const std::uint32_t fd,
-                                            const std::int64_t amount)
+        [[nodiscard]] bool can_spend(
+            const std::uint32_t fd,
+            const std::int64_t amount) // Not correct yet (needs the addition of
+                                       // local attempt for risk service)
         {
             std::vector<std::int64_t> &confirmed_buffer =
                 std::atomic_ref<char>(Complete[fd])
