@@ -8,7 +8,6 @@
 
 namespace Gateways
 {
-
     template <typename T>
     class StoragePool
     {

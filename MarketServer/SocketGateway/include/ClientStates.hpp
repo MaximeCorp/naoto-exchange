@@ -133,7 +133,7 @@ namespace Gateways
                 return true;
             }
 
-            return false;
+            return true;
         }
     };
 

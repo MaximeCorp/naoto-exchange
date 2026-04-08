@@ -32,8 +32,9 @@ namespace MarketExecution
         , Asset(0)
         , Timestamp(0)
     {}
-    Order::Order(const char *key, OrderType type, OrderSide side, float price,
-                 std::int32_t client_id, float amount, std::int32_t asset,
+    Order::Order(const char *key, OrderType type, OrderSide side,
+                 std::int64_t price, std::int32_t client_id,
+                 std::uint32_t amount, std::int32_t asset,
                  std::int64_t timestamp)
         : Type(type)
         , Side(side)
@@ -50,8 +51,8 @@ namespace MarketExecution
     }
 
     Order::Order(const char *key, OrderType type, OrderSide side,
-                 std::int32_t client_id, float amount, std::int32_t asset,
-                 std::int64_t timestamp)
+                 std::int32_t client_id, std::uint32_t amount,
+                 std::int32_t asset, std::int64_t timestamp)
         : Type(type)
         , Side(side)
         , ClientId(client_id)
@@ -89,7 +90,7 @@ namespace MarketExecution
     {
         return Side;
     }
-    const float &Order::getPrice() const
+    const std::int64_t &Order::getPrice() const
     {
         return Price;
     }
@@ -97,7 +98,7 @@ namespace MarketExecution
     {
         return ClientId;
     }
-    const float &Order::getAmount() const
+    const std::uint32_t &Order::getAmount() const
     {
         return Amount;
     }
@@ -109,7 +110,7 @@ namespace MarketExecution
     {
         return Timestamp;
     }
-    void Order::setAmount(float amout)
+    void Order::setAmount(std::uint32_t amout)
     {
         Amount = amout;
     }
@@ -121,7 +122,7 @@ namespace MarketExecution
     {
         Side = side;
     }
-    void Order::setPrice(float price)
+    void Order::setPrice(std::int64_t price)
     {
         Price = price;
     }
@@ -165,10 +166,10 @@ namespace MarketExecution
         output->setSide(static_cast<OrderSide>(ntohl(side_net)));
         ptr += sizeof(side_net);
 
-        std::int32_t price_bytes_net;
+        std::int64_t price_bytes_net;
         std::memcpy(&price_bytes_net, ptr, sizeof(price_bytes_net));
         price_bytes_net = ntohl(price_bytes_net);
-        float price;
+        std::int64_t price;
         std::memcpy(&price, &price_bytes_net, sizeof(price));
         output->setPrice(price);
         ptr += sizeof(price_bytes_net);
@@ -178,10 +179,10 @@ namespace MarketExecution
         output->setClientId(ntohl(client_id_net));
         ptr += sizeof(client_id_net);
 
-        std::int32_t amount_bytes_net;
+        std::uint32_t amount_bytes_net;
         std::memcpy(&amount_bytes_net, ptr, sizeof(amount_bytes_net));
         amount_bytes_net = ntohl(amount_bytes_net);
-        float amount;
+        std::uint32_t amount;
         std::memcpy(&amount, &amount_bytes_net, sizeof(amount));
         output->setAmount(amount);
         ptr += sizeof(amount_bytes_net);

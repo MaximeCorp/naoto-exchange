@@ -14,7 +14,6 @@
 #include <sys/epoll.h>
 #include <sys/socket.h>
 #include <unistd.h>
-#include <unordered_map>
 #include <vector>
 
 namespace Gateways
@@ -73,6 +72,8 @@ namespace Gateways
             epoll_ctl(EpollFd, EPOLL_CTL_DEL, clientFd, nullptr);
 
             close(clientFd);
+
+            Buffers[clientFd].clearBuffer();
 
             std::cout << "Closed connection on FD: " << clientFd << std::endl;
         }

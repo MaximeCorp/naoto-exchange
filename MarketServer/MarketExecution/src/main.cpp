@@ -1,43 +1,38 @@
-#include <Asset.hpp>
-#include <BidAsk.hpp>
-#include <EpollServer.hpp>
+#include <MatchingEngine.hpp>
 #include <Order.hpp>
-#include <StoragePool.hpp>
-#include <TopicProducer.hpp>
-#include <array>
-#include <atomic>
-#include <thread>
+#include <iomanip>
+#include <iostream>
+#include <sstream>
 
 using namespace MarketExecution;
 
+std::string ToEscapedString(const void *data, size_t size)
+{
+    std::stringstream ss;
+    const unsigned char *bytes = static_cast<const unsigned char *>(data);
+    for (size_t i = 0; i < size; ++i)
+    {
+        ss << "\\x" << std::hex << std::setw(2) << std::setfill('0')
+           << (int)bytes[i];
+    }
+    return ss.str();
+}
+
 int main(void)
 {
-    boost::lockfree::queue<Order *> ordersQueue(128);
-    boost::lockfree::queue<Order *> statusQueue(128);
-    StoragePool<Order> orderPool(1024);
-    StoragePool<std::array<char, sizeof(Order)>> binaryPool(1024);
+    MatchingEngine<16> engine(16, 0, 5, 8080, 16, 16, 128);
 
-    std::atomic<bool> running;
+    char key[25] = { 'a' };
 
-    EpollServer server = EpollServer(1234, 64, 128, &orderPool);
+    Order order1(key, OrderType::LIMIT, OrderSide::BUY, 100, 1, 110, 1, 1);
 
-    Asset marketAsset = Asset(1, 2);
+    Order order2(key, OrderType::MARKET, OrderSide::SELL, 2, 50, 1, 1);
 
-    BidAsk matchingEngine = BidAsk(marketAsset, 15.0);
+    Order order3(key, OrderType::MARKET, OrderSide::SELL, 2, 50, 1, 1);
 
-    TopicProducer test =
-        TopicProducer("kafka:9092", "ORDER_STATUS", &orderPool, &binaryPool);
+    std::cout << ToEscapedString(&order1, sizeof(Order)) << "\n";
+    std::cout << ToEscapedString(&order2, sizeof(Order)) << "\n";
+    std::cout << ToEscapedString(&order3, sizeof(Order)) << "\n";
 
-    std::thread tcpServerThread(startSocketLoop, std::ref(server),
-                                std::ref(ordersQueue));
-    std::thread mathchingThread(activateOrdersLoop, std::ref(matchingEngine),
-                                std::ref(ordersQueue), std::ref(statusQueue),
-                                std::ref(running));
-
-    tcpServerThread.detach();
-    mathchingThread.detach();
-
-    test.startConsumingStatusQueue(statusQueue, running);
-
-    return 0;
+    engine.StartMatchingEngine();
 }

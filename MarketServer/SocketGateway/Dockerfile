@@ -23,8 +23,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /usr/local/bin
 
-COPY --from=builder /app/marketExecution .
+COPY --from=builder /app/SocketGateway .
 
-ENTRYPOINT ["/usr/local/bin/marketExecution"]
+ENTRYPOINT ["/usr/local/bin/SocketGateway"]
 
 CMD [""]

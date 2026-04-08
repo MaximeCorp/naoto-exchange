@@ -1,21 +1,17 @@
 CC=g++
 
-KAFKA_CFLAGS=$(shell pkg-config --cflags rdkafka++)
-KAFKA_LDLIBS=$(shell pkg-config --libs rdkafka++)
-
-CFLAGS=-Wall -Werror -Wextra -I/usr/include/librdkafka/ -Iinclude $(KAFKA_CFLAGS) -fsanitize=address
-LDFLAGS=$(KAFKA_LDLIBS) #-lrocksdb -lstdc++ -lpthread -lsnappy -lz -lbz2
+CFLAGS=-Wall -Werror -Wextra -Iinclude -fsanitize=address
 
 SRC=$(shell find . -type f -name '*.cpp')
 OBJ=$(patsubst %.cpp,%.o,$(SRC))
 
 all: $(OBJ)
-	$(CC) $(CFLAGS) -o marketExecution $^ $(LDFLAGS)
+	$(CC) $(CFLAGS) -o MarketExecution $^ $(LDFLAGS)
 
 %.o: %.cpp
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 clean:
-	rm -f $(OBJ) marketExecution
+	rm -f $(OBJ) MarketExecution
 
 .PHONY: all clean

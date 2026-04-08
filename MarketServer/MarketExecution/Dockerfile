@@ -3,7 +3,6 @@ FROM gcc:12 AS builder
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y \
-    librdkafka-dev \
     pkg-config \
     libstdc++-12-dev \
     && rm -rf /var/lib/apt/lists/*
@@ -17,8 +16,6 @@ RUN make
 FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    librdkafka++1 \
-    librdkafka1 \
     libstdc++6 \
     netcat-openbsd \
     bash \
@@ -26,8 +23,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /usr/local/bin
 
-COPY --from=builder /app/marketExecution .
+COPY --from=builder /app/MarketExecution .
 
-ENTRYPOINT ["/usr/local/bin/marketExecution"]
+ENTRYPOINT ["/usr/local/bin/MarketExecution"]
 
 CMD [""]
