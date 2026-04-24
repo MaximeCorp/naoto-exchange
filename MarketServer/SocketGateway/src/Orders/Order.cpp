@@ -32,9 +32,10 @@ namespace Gateways
         , Asset(0)
         , Timestamp(0)
     {}
-    Order::Order(const char *key, OrderType type, OrderSide side, float price,
-                 std::int32_t client_id, float amount, std::int32_t asset,
-                 std::int64_t timestamp)
+    Order::Order(const char *key, const OrderType type, const OrderSide side,
+                 const float price, const std::int32_t client_id,
+                 const float amount, const std::int32_t asset,
+                 const std::int64_t timestamp)
         : Type(type)
         , Side(side)
         , Price(price)
@@ -49,9 +50,9 @@ namespace Gateways
         std::fill(Key + key_len + 1, Key + MAX_KEY_LEN, 0);
     }
 
-    Order::Order(const char *key, OrderType type, OrderSide side,
-                 std::int32_t client_id, float amount, std::int32_t asset,
-                 std::int64_t timestamp)
+    Order::Order(const char *key, const OrderType type, const OrderSide side,
+                 const std::int32_t client_id, const float amount,
+                 const std::int32_t asset, const std::int64_t timestamp)
         : Type(type)
         , Side(side)
         , ClientId(client_id)
@@ -78,63 +79,67 @@ namespace Gateways
         std::cout << "\n" << std::endl;
     }
 
-    const char *Order::getKey() const
+    [[nodiscard]] char *Order::getKey() const
     {
         return Key;
     }
-    const OrderType &Order::getType() const
+    [[nodiscard]] OrderType Order::getType() const
     {
         return Type;
     }
-    const OrderSide &Order::getSide() const
+    [[nodiscard]] OrderSide Order::getSide() const
     {
         return Side;
     }
-    const float &Order::getPrice() const
+    [[nodiscard]] float Order::getPrice() const
     {
         return Price;
     }
-    const std::int32_t &Order::getClientId() const
+    [[nodiscard]] std::int32_t Order::getClientId() const
     {
         return ClientId;
     }
-    const float &Order::getAmount() const
+    [[nodiscard]] float Order::getAmount() const
     {
         return Amount;
     }
-    const std::uint16_t &Order::getAsset() const
+    [[nodiscard]] std::uint16_t Order::getAsset() const
     {
         return Asset;
     }
-    const std::int64_t &Order::getTimestamp() const
+    [[nodiscard]] std::int64_t Order::getTimestamp() const
     {
         return Timestamp;
     }
-    void Order::setAmount(float amout)
+    void Order::setAmount(const float amout)
     {
         Amount = amout;
     }
-    void Order::setType(OrderType type)
+    void Order::setType(const OrderType type)
     {
         Type = type;
     }
-    void Order::setSide(OrderSide side)
+    void Order::setSide(const OrderSide side)
     {
         Side = side;
     }
-    void Order::setPrice(float price)
+    void Order::setStatus(const OrderStatus status)
+    {
+        Status = status;
+    }
+    void Order::setPrice(const float price)
     {
         Price = price;
     }
-    void Order::setClientId(std::int32_t clientId)
+    void Order::setClientId(const std::int32_t clientId)
     {
         ClientId = clientId;
     }
-    void Order::setAsset(std::uint16_t asset)
+    void Order::setAsset(const std::uint16_t asset)
     {
         Asset = asset;
     }
-    void Order::setTimestamp(std::int64_t timestamp)
+    void Order::setTimestamp(const std::int64_t timestamp)
     {
         Timestamp = timestamp;
     }

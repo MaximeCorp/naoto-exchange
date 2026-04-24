@@ -18,8 +18,6 @@ namespace Gateways
     private:
         ClientStates
             &clientStates; // Only for read (another object will write in it)
-        std::vector<std::uint32_t>
-            MatchingEngines; // Mapping from asset ID to matching engine fd
 
         StoragePool<OrderBatch<BatchSize>> &OrdersPool;
         OrderQueue &Orders;
@@ -58,20 +56,13 @@ namespace Gateways
             }
         }
 
-        void connectMatchingEngines(void) // Might need some args
-        {
-            // Todo
-        }
-
     public:
         RiskService(StoragePool<OrderBatch<BatchSize>> &ordersPool,
                     OrderQueue &orders, ClientStates &clientStates)
             : clientStates(clientStates)
             , OrdersPool(ordersPool)
             , Orders(orders)
-        {
-            connectMatchingEngines();
-        }
+        {}
 
         void startLoop(void)
         {

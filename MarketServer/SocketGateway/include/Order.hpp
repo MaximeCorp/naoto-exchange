@@ -16,6 +16,13 @@ namespace Gateways
         BUY,
         SELL
     };
+    enum class OrderStatus : std::int32_t
+    {
+        ACCEPTED,
+        REJECTED,
+        EXECUTED,
+        CANCELLED
+    };
 
     constexpr size_t MAX_KEY_LEN = 10;
 
@@ -25,6 +32,7 @@ namespace Gateways
         char Key[MAX_KEY_LEN];
         OrderType Type;
         OrderSide Side;
+        OrderStatus Status;
         float Price;
         std::int32_t ClientId;
         float Amount;
@@ -41,22 +49,24 @@ namespace Gateways
               std::int64_t timestamp);
         ~Order() = default;
 
-        const char *getKey() const;
-        const OrderType &getType() const;
-        const OrderSide &getSide() const;
-        const float &getPrice() const;
-        const std::int32_t &getClientId() const;
-        const float &getAmount() const;
-        const std::uint16_t &getAsset() const;
-        const std::int64_t &getTimestamp() const;
+        [[nodiscard]] char *getKey() const;
+        [[nodiscard]] OrderType getType() const;
+        [[nodiscard]] OrderSide getSide() const;
+        [[nodiscard]] OrderSide getSide() const;
+        [[nodiscard]] float getPrice() const;
+        [[nodiscard]] std::int32_t getClientId() const;
+        [[nodiscard]] float getAmount() const;
+        [[nodiscard]] std::uint16_t getAsset() const;
+        [[nodiscard]] std::int64_t getTimestamp() const;
 
-        void setAmount(float amout);
-        void setType(OrderType type);
-        void setSide(OrderSide side);
-        void setPrice(float price);
-        void setClientId(std::int32_t clientId);
-        void setAsset(std::uint16_t asset);
-        void setTimestamp(std::int64_t timestamp);
+        void setAmount(const float amout);
+        void setType(const OrderType type);
+        void setSide(const OrderSide side);
+        void setStatus(const OrderStatus status);
+        void setPrice(const float price);
+        void setClientId(const std::int32_t clientId);
+        void setAsset(const std::uint16_t asset);
+        void setTimestamp(const std::int64_t timestamp);
 
         void log() const;
     };

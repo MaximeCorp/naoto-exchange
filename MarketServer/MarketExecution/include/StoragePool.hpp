@@ -33,7 +33,7 @@ namespace MarketExecution
             std::cout << "Initializing Order Pool with capacity: " << Capacity
                       << " orders.\n";
 
-            OrderStorage.reserve(Capacity);
+            OrderStorage.resize(Capacity);
 
             for (size_t i = 0; i < Capacity; ++i)
             {
