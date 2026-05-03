@@ -17,9 +17,39 @@ namespace MarketExecution
         static const alignas(16) expr __m128i base_seq =
             _mm_setr_epi8(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15);
 
-        [[nodiscard]] std::uint64_t hash_64(const K &key)
+        [[nodiscard]] std::uint64_t hash_64(const K &key) noexcept
         {
             return key * 0x9E3779B97F4A7C15ULL;
+        }
+
+        void PaddingSafeWrite(size_t idx, std::uint8_t dib, V *val) noexcept
+        {
+            Tags[idx] = dib;
+            Data[idx] = val;
+
+            if (idx < 16)
+            {
+                Tags[Size + idx] = dib;
+                Data[Size + idx] = val;
+            }
+        }
+
+        void PaddingSafeSwap(size_t idx, std::uint8_t *dib, V **val) noexcept
+        {
+            V *temp_val = Data[idx];
+            std::uint8_t temp_dib = Tags[idx];
+
+            Data[idx] = *val;
+            Tags[idx] = *dib;
+
+            if (idx < 16)
+            {
+                Data[Size + idx] = *val;
+                Tags[Size + idx] = *dib;
+            }
+
+            *val = temp_val;
+            *dib = temp_dib;
         }
 
     public:
@@ -31,24 +61,23 @@ namespace MarketExecution
 
         [[nodiscard]] V *GetVal(const K &key) noexcept
         {
-            size_t offset = 0;
-            const std::uint64_t hash = (hash_64(key) & (Size - 1)) << 4;
+            size_t cur_idx = (hash_64(key) & (Size - 1)) << 4;
+            size_t cur_dib = 0;
+            size_t total_size = Size << 4;
 
-            const size_t total_size = (Size * 16) - 1;
-
-            while (offset <= total_size)
+            while (cur_dib < total_size)
             {
                 __m128i expected_dibs =
-                    _mm_add_epi8(base_seq, _mm_set1_epi8(offset));
+                    _mm_add_epi8(base_seq, _mm_set1_epi8(cur_dib));
                 __m128i actual_tags =
-                    _mm_load_si128((__m128i *)&(Tags[(hash + offset)]));
+                    _mm_load_si128((__m128i *)&(Tags[cur_idx]));
 
                 __m128i match_mask = _mm_cmpeq_epi8(actual_tags, expected_dibs);
-                __m128i empty_slots =
+                __m128i free_slots =
                     _mm_cmpeq_epi8(actual_tags, _mm_set1_epi8(EMPTY_MARKER));
                 __m128i richer_slots =
                     _mm_cmplt_epi8(actual_tags, expected_dibs);
-                __m128i stop_slots = _mm_or_si128(empty_slots, richer_slots);
+                __m128i stop_slots = _mm_or_si128(free_slots, richer_slots);
 
                 std::uint16_t matches = _mm_movemask_epi8(match_mask);
                 std::uint16_t stops = _mm_movemask_epi8(stop_slots);
@@ -64,7 +93,7 @@ namespace MarketExecution
                     if (first_stop > first_match)
                     {
                         size_t index_to_check =
-                            (hash + offset + first_match) & total_size;
+                            (cur_idx + first_match) & (total_size - 1);
                         if (Data[index_to_check]->GetKey() == key)
                         {
                             return Data[index_to_check];
@@ -83,7 +112,7 @@ namespace MarketExecution
                     return nullptr;
                 }
 
-                offset += 16;
+                cur_dib += 16;
             }
 
             return nullptr;
@@ -93,67 +122,56 @@ namespace MarketExecution
         {
             const K *key = val->GetKey();
 
-            size_t offset = 0;
-            std::uint64_t hash = (hash_64(key) & (Size - 1)) << 4;
+            size_t cur_idx = (hash_64(key) & (Size - 1)) << 4;
+            size_t cur_dib = 0;
 
-            const size_t total_size = (Size * 16) - 1;
-
-            while (offset <= total_size)
+            for (size_t i = 0; cur_dib < 16; ++i)
             {
-                while ((offset & 15) != 0)
+                if (Tags[cur_idx] == EMPTY_MARKER)
                 {
-                    if (Tags[hash + offset] == EMPTY_MARKER)
-                    {
-                        Tags[hash + offset] = offset;
-                        Data[hash + offset] = val;
-                        return;
-                    }
-
-                    if (Tags[hash + offset] < offset)
-                    {
-                        V *temp = Data[slot_idx];
-                        Data[slot_idx] = val;
-                        val = temp;
-                        std::uint8_t cur_bid = Tags[slot_idx];
-                        Tags[slot_idx] = offset + i;
-                        hash = slot_idx - cur_bid;
-                        offset = cur_bid + 1;
-                    }
+                    PaddingSafeWrite(cur_idx, cur_dib, val);
+                    return;
+                }
+                if (Tags[cur_idx] < cur_dib)
+                {
+                    PaddingSafeSwap(cur_idx, &cur_dib, &val);
                 }
 
-                for (size_t i = 0; i < 4; ++i)
+                ++cur_idx;
+                ++cur_dib;
+            }
+
+            size_t total_size = Size << 4;
+
+            while (cur_dib < total_size)
+            {
+                while ((cur_idx & 15) != 0)
                 {
-                    size_t slot_idx = hash + offset + i;
-                    if (Tags[slot_idx] == EMPTY_MARKER)
+                    if (Tags[cur_idx] == EMPTY_MARKER)
                     {
-                        Tags[slot_idx] = offset + i;
-                        Data[slot_idx] = val;
+                        PaddingSafeWrite(cur_idx, cur_dib, val);
                         return;
                     }
-
-                    if (Tags[slot_idx] < offset + i)
+                    if (Tags[cur_idx] < cur_dib)
                     {
-                        V *temp = Data[slot_idx];
-                        Data[slot_idx] = val;
-                        val = temp;
-                        std::uint8_t cur_bid = Tags[slot_idx];
-                        Tags[slot_idx] = offset + i;
-                        hash = slot_idx - cur_bid;
-                        offset = cur_bid + 1;
+                        PaddingSafeSwap(cur_idx, &cur_dib, &val);
                     }
+
+                    cur_idx = (cur_idx + 1) & (total_size - 1);
+                    ++cur_dib;
                 }
 
                 __m128i expected_dibs =
-                    _mm_add_epi8(base_seq, _mm_set1_epi8(offset));
+                    _mm_add_epi8(base_seq, _mm_set1_epi8(cur_dib));
                 __m128i actual_tags =
-                    _mm_load_si128((__m128i *)&(Tags[(hash + offset)]));
+                    _mm_load_si128((__m128i *)&(Tags[(cur_idx)]));
 
                 __m128i free_slots =
                     _mm_cmpeq_epi8(actual_tags, _mm_set1_epi8(EMPTY_MARKER));
-                __m128i replaceable_slots =
+                __m128i richer_slots =
                     _mm_cmplt_epi8(actual_tags, expected_dibs);
                 __m128i available_slots =
-                    _mm_or_si128(empty_slots, richer_slots);
+                    _mm_or_si128(free_slots, richer_slots);
 
                 std::uint16_t free = _mm_movemask_epi8(free_slots);
                 std::uint16_t available = _mm_movemask_epi8(available_slots);
@@ -165,31 +183,35 @@ namespace MarketExecution
 
                 if (first_available == 16)
                 {
-                    offset += 16;
+                    cur_idx = (cur_idx + 16) & (total_size - 1);
+                    cur_dib += 16;
                     continue;
                 }
 
-                size_t slot_idx = hash + offset + first_available;
+                size_t slot_idx =
+                    (cur_idx + first_available) & (total_size - 1);
 
-                // Handle when the padding is touched (mirror on start)
                 if (first_free == first_available)
                 {
-                    Data[slot_idx] = val;
-                    Tags[slot_idx] = offset + first_available;
+                    PaddingSafeWrite(slot_idx, cur_dib + first_available, val);
                     return;
                 }
                 else
                 {
-                    V *temp = Data[slot_idx];
-                    Data[slot_idx] = val;
-                    val = temp;
-                    std::uint8_t cur_bid = Tags[slot_idx];
-                    Tags[slot_idx] = offset + first_available;
-                    hash = slot_idx - cur_bid;
-                    offset = cur_bid + 1;
-                }
-            }
+                    cur_idx = slot_idx;
+                    cur_dib += first_available;
 
+                    PaddingSafeSwap(cur_idx, &cur_dib, &val);
+
+                    cur_idx = (cur_idx + 1) & (total_size - 1);
+                    cur_dib++;
+
+                    continue;
+                }
+
+                cur_idx = (cur_idx + 16) & (total_size - 1);
+                cur_dib += 16;
+            }
             // No available slot
         }
     };
