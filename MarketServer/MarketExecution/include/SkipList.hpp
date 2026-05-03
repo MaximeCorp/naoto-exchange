@@ -9,13 +9,12 @@ namespace MarketExecution
     template <typename K, typename V, size_t MaxLevel>
     class SkipList
     {
+    public:
         struct SkipNode
         {
             K Key;
             V *Value;
-
             size_t Height;
-
             std::array<SkipNode *, MaxLevel + 1> Forward;
 
             SkipNode(K &key)
@@ -23,20 +22,14 @@ namespace MarketExecution
                 , Value(nullptr)
                 , Height(MaxLevel)
             {
-                for (size_t i = 0; i < MaxLevel; ++i)
-                {
-                    Forward[i] = nullptr;
-                }
+                Forward.fill(nullptr);
             }
         };
 
     private:
         SkipNode *Sentinel;
         SkipNode *Tail;
-        UnsafeStoragePool<V> &DataPool;
         UnsafeStoragePool<SkipNode> NodesPool;
-        // replace with fix size custom queue
-        std::queue<SkipNode *> &DeleteQueue;
         uint64_t State;
 
         [[nodiscard]] int nextLevel(void) noexcept
@@ -128,8 +121,10 @@ namespace MarketExecution
             return curNode->Value;
         }
 
-        void AddNode(const K &key, V *val) noexcept
+        void AddNode(V *val) noexcept
         {
+            const K *key = val->GetKey();
+
             std::array<SkipNode *, MaxLevel + 1> prev;
 
             SkipNode *curNode = Sentinel;
@@ -189,30 +184,6 @@ namespace MarketExecution
 
                 DataPool.release(curNode->Value);
                 NodesPool.release(curNode);
-            }
-        }
-
-        void LazyDeleteNode(K &key) noexcept
-        {
-            std::array<SkipNode *, MaxLevel + 1> prev;
-
-            SkipNode *curNode = Sentinel;
-
-            for (int curLevel = MaxLevel; curLevel >= 0; --curLevel)
-            {
-                while (curNode->Forward[curLevel]->Key < key)
-                {
-                    curNode = curNode->Forward[curLevel];
-                }
-
-                prev[curLevel] = curNode;
-            }
-
-            curNode = curNode->Forward[0];
-
-            if (curNode->Key == key) [[likely]]
-            {
-                DeleteQueue.push(curNode);
             }
         }
     };
