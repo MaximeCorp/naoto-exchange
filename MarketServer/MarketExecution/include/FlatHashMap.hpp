@@ -121,7 +121,7 @@ namespace MarketExecution
 
         void AddNode(V *val) noexcept
         {
-            const K *key = val->GetKey();
+            const K &key = val->GetKey();
 
             size_t cur_idx = (hash_64(key) & (Size - 1)) << 4;
             size_t cur_dib = 0;
