@@ -94,7 +94,8 @@ namespace MarketExecution
                     {
                         size_t index_to_check =
                             (cur_idx + first_match) & (total_size - 1);
-                        if (Data[index_to_check]->GetKey() == key)
+                        if (Data[index_to_check]
+                            && Data[index_to_check]->GetKey() == key)
                         {
                             return Data[index_to_check];
                         }
@@ -213,6 +214,45 @@ namespace MarketExecution
                 cur_dib += 16;
             }
             // No available slot
+        }
+
+        void DeleteNode(const K &key)
+        {
+            size_t cur_idx = (hash_64(key) & (Size - 1)) << 4;
+            size_t cur_dib = 0;
+            size_t total_size = Size << 4;
+
+            while (cur_dib < total_size)
+            {
+                uint8_t tag = Tags[cur_idx];
+                if (tag == EMPTY_MARKER || tag < cur_dib)
+                    return;
+
+                if (Data[cur_idx]->GetKey() == key)
+                    break;
+
+                cur_idx = (cur_idx + 1) & (total_size - 1);
+                ++cur_dib;
+            }
+
+            if (cur_dib == total_size)
+                return;
+
+            while (true)
+            {
+                size_t next_idx = (cur_idx + 1) & (total_size - 1);
+                uint8_t next_tag = Tags[next_idx];
+
+                if (next_tag == EMPTY_MARKER || next_tag == 0)
+                {
+                    break;
+                }
+
+                PaddingSafeWrite(cur_idx, next_tag - 1, Data[next_idx]);
+                cur_idx = next_idx;
+            }
+
+            PaddingSafeWrite(cur_idx, EMPTY_MARKER, nullptr);
         }
     };
 } // namespace MarketExecution
