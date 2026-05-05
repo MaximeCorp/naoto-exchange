@@ -13,9 +13,11 @@ namespace MarketExecution
         struct SkipNode
         {
             K Key;
-            V *Value;
+            V Value;
             size_t Height;
             std::array<SkipNode *, MaxLevel + 1> Forward;
+
+            SkipNode() = default;
 
             SkipNode(K &key)
                 : Key(key)
@@ -27,86 +29,74 @@ namespace MarketExecution
         };
 
     private:
-        SkipNode *Sentinel;
+        SkipNode *Head;
         SkipNode *Tail;
         UnsafeStoragePool<SkipNode> NodesPool;
         uint64_t State;
+        size_t CurMax;
+        static inline uint64_t next_u64(const uint64_t state)
+        {
+            uint64_t newState = state + 0xa0761d6478bd642f;
+            __uint128_t t =
+                (__uint128_t)newState * (newState ^ 0xe7037ed1a0b428db);
+            return (uint64_t)(t >> 64) ^ (uint64_t)t;
+        }
 
         [[nodiscard]] int nextLevel(void) noexcept
         {
-            State ^= State << 13;
-            State ^= State >> 7;
-            State ^= State << 17;
+            State = next_u64(State);
 
-            int level = std::countr_zero(State);
+            size_t level = __builtin_ctzll(State);
 
             return (level <= MaxLevel) ? level : MaxLevel;
         }
 
     public:
-        SkipList(UnsafeStoragePool<V> &dataPool, std::queue<V *> &deleteQueue)
-            : Sentinel(nullptr)
+        SkipList(const size_t nodesPoolSize)
+            : Head(nullptr)
             , Tail(nullptr)
-            , DataPool(dataPool)
-            , NodesPool(DataPool.getCapacity())
-            , DeleteQueue(deleteQueue)
+            , NodesPool(nodesPoolSize + 2) // The head and the tail
             , State(__rdtsc())
+            , CurMax(0)
         {
             Tail = NodesPool.acquire();
             Tail->Key = std::numeric_limits<K>::max();
-            Tail->Value = nullptr;
             Tail->Height = MaxLevel;
             Tail->Forward.fill(nullptr);
 
-            Sentinel = NodesPool.acquire();
-            Sentinel->Key = std::numeric_limits<K>::min();
-            Sentinel->Value = nullptr;
-            Sentinel->Height = MaxLevel;
-            Sentinel->Forward.fill(Tail);
-        }
-
-        SkipList(const size_t nodesPoolSize, UnsafeStoragePool<V> &dataPool,
-                 std::queue<V *> &deleteQueue)
-            : Sentinel(nullptr)
-            , Tail(nullptr)
-            , DataPool(dataPool)
-            , NodesPool(nodesPoolSize)
-            , DeleteQueue(deleteQueue)
-            , State(__rdtsc())
-        {
-            Tail = NodesPool.acquire();
-            Tail->Key = std::numeric_limits<K>::max();
-            Tail->Value = nullptr;
-            Tail->Height = MaxLevel;
-            Tail->Forward.fill(nullptr);
-
-            Sentinel = NodesPool.acquire();
-            Sentinel->Key = std::numeric_limits<K>::min();
-            Sentinel->Value = nullptr;
-            Sentinel->Height = MaxLevel;
-            Sentinel->Forward.fill(Tail);
+            Head = NodesPool.acquire();
+            Head->Key = std::numeric_limits<K>::min();
+            Head->Height = MaxLevel;
+            Head->Forward.fill(Tail);
         }
 
         ~SkipList()
         {
-            SkipNode *curNode = Sentinel;
+            SkipNode *curNode = Head;
 
             while (curNode)
             {
                 SkipNode *toRelease = curNode;
                 curNode = curNode->Forward[0];
-                NodesPool.release(toRelease);
+                bool released = NodesPool.release(toRelease);
+
+                if (!released) [[unlikely]]
+                {
+                    std::terminate();
+                }
             }
         }
 
-        [[nodiscard]] V *GetVal(const K &key) noexcept
+        [[nodiscard]] V &GetVal(const K &key, bool &found) noexcept
         {
-            SkipNode *curNode = Sentinel;
+            SkipNode *curNode = Head;
 
             for (int curLevel = MaxLevel; curLevel >= 0; --curLevel)
             {
                 while (curNode->Forward[curLevel]->Key < key)
                 {
+                    __builtin_prefetch(
+                        &curNode->Forward[curLevel]->Forward[curLevel]->Key);
                     curNode = curNode->Forward[curLevel];
                 }
             }
@@ -115,35 +105,53 @@ namespace MarketExecution
 
             if (curNode->Key != key) [[unlikely]]
             {
-                return nullptr;
+                found = false;
+                return Head->Value;
             }
+
+            found = true;
 
             return curNode->Value;
         }
 
-        void AddNode(V *val) noexcept
+        void AddNode(const K &key, const V &val) noexcept
         {
-            const K *key = val->GetKey();
-
             std::array<SkipNode *, MaxLevel + 1> prev;
 
-            SkipNode *curNode = Sentinel;
+            SkipNode *curNode = Head;
 
             for (int curLevel = MaxLevel; curLevel >= 0; --curLevel)
             {
-                while (curNode->Forward[curLevel]->Key < key)
+                while (curNode->Forward[curLevel]->Key <= key)
                 {
+                    __builtin_prefetch(
+                        &curNode->Forward[curLevel]->Forward[curLevel]->Key);
                     curNode = curNode->Forward[curLevel];
                 }
 
                 prev[curLevel] = curNode;
             }
 
+            if (prev[0]->Key == key) [[unlikely]]
+            {
+                return;
+            }
+
             std::uint64_t level = nextLevel();
             SkipNode *__restrict newNode = NodesPool.acquire();
+
+            if (!newNode) [[unlikely]]
+            {
+                std::cerr << "Couldn't get a pointer from mempool."
+                          << std::endl;
+                std::terminate();
+                return;
+            }
+
             newNode->Key = key;
             newNode->Value = val;
             newNode->Height = level;
+            CurMax = std::max(CurMax, level);
 
             for (size_t i = 0; i <= level; ++i)
             {
@@ -157,16 +165,18 @@ namespace MarketExecution
             }
         }
 
-        void DeleteNode(K &key) noexcept
+        void DeleteNode(const K &key) noexcept
         {
             std::array<SkipNode *, MaxLevel + 1> prev;
 
-            SkipNode *curNode = Sentinel;
+            SkipNode *curNode = Head;
 
             for (int curLevel = MaxLevel; curLevel >= 0; --curLevel)
             {
                 while (curNode->Forward[curLevel]->Key < key)
                 {
+                    __builtin_prefetch(
+                        &curNode->Forward[curLevel]->Forward[curLevel]->Key);
                     curNode = curNode->Forward[curLevel];
                 }
 
@@ -182,9 +192,22 @@ namespace MarketExecution
                     prev[i]->Forward[i] = curNode->Forward[i];
                 }
 
-                DataPool.release(curNode->Value);
-                NodesPool.release(curNode);
+                bool released = NodesPool.release(curNode);
+
+                if (!released) [[unlikely]]
+                {
+                    std::terminate();
+                }
             }
+        }
+
+        [[nodiscard]] V &GetHead(bool &found) noexcept
+        {
+            V &res = Head->Forward[0] != Tail ? Head->Forward[0]->Value
+                                              : Head->Value;
+            found = res.GetKey() != Head->Value.GetKey();
+
+            return res;
         }
     };
 } // namespace MarketExecution

@@ -1,4 +1,4 @@
-#include <Order.hpp>
+#include <OrderNode.hpp>
 #include <cstdint>
 
 namespace MarketExecution
@@ -10,10 +10,18 @@ namespace MarketExecution
         size_t Generation;
         size_t Size;
         std::int64_t TotalAmount;
-        Order *Head; // Doubly linked list of orders
-        Order *Tail;
+        OrderNode *Head; // Doubly linked list of orders
+        OrderNode *Tail;
 
     public:
+        PriceLevel(void)
+            : Price(10)
+            , Generation(0)
+            , Size(0)
+            , TotalAmount(0)
+            , Head(nullptr)
+            , Tail(nullptr)
+        {}
         PriceLevel(std::int64_t price)
             : Price(price)
             , Generation(0)
@@ -23,7 +31,7 @@ namespace MarketExecution
             , Tail(nullptr)
         {}
 
-        [[nodiscard]] bool addOrder(Order *order) noexcept
+        [[nodiscard]] bool addOrder(OrderNode *order) noexcept
         {
             if (!Head) [[unlikely]]
             {
@@ -44,16 +52,16 @@ namespace MarketExecution
             return true;
         }
 
-        [[nodiscard]] Order *peekOrder(void) noexcept
+        [[nodiscard]] OrderNode *peekOrder(void) noexcept
         {
             return Head;
         }
 
-        [[nodiscard]] Order *
+        [[nodiscard]] OrderNode *
         popOrder(void) noexcept // The programmer is in charge to free/release
                                 // the orders
         {
-            Order *res = Head;
+            OrderNode *res = Head;
 
             Head = Head ? Head->next : nullptr;
 
@@ -73,6 +81,16 @@ namespace MarketExecution
             // queue
 
             return res;
+        }
+
+        void SetPrice(std::int64_t price) noexcept
+        {
+            Price = price;
+        }
+
+        [[nodiscard]] std::int64_t GetKey(void) const noexcept
+        {
+            return Price;
         }
     };
 } // namespace MarketExecution

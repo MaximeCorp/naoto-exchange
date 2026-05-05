@@ -10,11 +10,13 @@ namespace MarketExecution
     {
     private:
         // 16 slots per index (simd alignement) + a 16 slots padding (safety)
-        alignas(64) std::array<V *, (Size + 1) * 16> Data;
+        alignas(64) std::array<uint8_t, (Size + 1) * 16> FootPrints;
         alignas(64) std::array<uint8_t, (Size + 1) * 16> Tags;
+        alignas(64) std::array<K, (Size + 1) * 16> Keys;
+        alignas(64) std::array<V *, (Size + 1) * 16> Data;
 
-        constexpr uint8_t EMPTY_MARKER = 0x80;
-        static const alignas(16) expr __m128i base_seq =
+        static const uint8_t EMPTY_MARKER = 0x80;
+        alignas(16) inline static const __m128i base_seq =
             _mm_setr_epi8(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15);
 
         [[nodiscard]] std::uint64_t hash_64(const K &key) noexcept
@@ -22,45 +24,57 @@ namespace MarketExecution
             return key * 0x9E3779B97F4A7C15ULL;
         }
 
-        void PaddingSafeWrite(size_t idx, std::uint8_t dib, V *val) noexcept
+        void PaddingSafeWrite(const size_t idx, const size_t dib, const K &key,
+                              V *val) noexcept
         {
             Tags[idx] = dib;
             Data[idx] = val;
+            Keys[idx] = key;
+            FootPrints[idx] = hash_64(key) >> 56;
 
             if (idx < 16)
             {
-                Tags[Size + idx] = dib;
-                Data[Size + idx] = val;
+                Tags[Size * 16 + idx] = dib;
+                Data[Size * 16 + idx] = val;
+                Keys[Size * 16 + idx] = key;
+                FootPrints[Size * 16 + idx] = hash_64(key) >> 56;
             }
         }
 
-        void PaddingSafeSwap(size_t idx, std::uint8_t *dib, V **val) noexcept
+        void PaddingSafeSwap(const size_t idx, size_t &dib, K &key,
+                             V **val) noexcept
         {
             V *temp_val = Data[idx];
-            std::uint8_t temp_dib = Tags[idx];
+            const std::uint8_t temp_dib = Tags[idx];
+            const K temp_key = Keys[idx];
 
             Data[idx] = *val;
-            Tags[idx] = *dib;
+            Tags[idx] = dib;
+            Keys[idx] = key;
+            FootPrints[idx] = hash_64(key) >> 56;
 
             if (idx < 16)
             {
-                Data[Size + idx] = *val;
-                Tags[Size + idx] = *dib;
+                Data[Size * 16 + idx] = *val;
+                Tags[Size * 16 + idx] = dib;
+                Keys[Size * 16 + idx] = key;
+                FootPrints[Size * 16 + idx] = hash_64(key) >> 56;
             }
 
             *val = temp_val;
-            *dib = temp_dib;
+            dib = temp_dib;
+            key = temp_key;
         }
 
     public:
         FlatHashMap(void)
         {
-            Data.fill(nullptr);
             Tags.fill(EMPTY_MARKER);
         }
 
         [[nodiscard]] V *GetVal(const K &key) noexcept
         {
+            const uint8_t footprint = hash_64(key) >> 56;
             size_t cur_idx = (hash_64(key) & (Size - 1)) << 4;
             size_t cur_dib = 0;
             size_t total_size = Size << 4;
@@ -71,8 +85,13 @@ namespace MarketExecution
                     _mm_add_epi8(base_seq, _mm_set1_epi8(cur_dib));
                 __m128i actual_tags =
                     _mm_load_si128((__m128i *)&(Tags[cur_idx]));
+                __m128i actual_footprints =
+                    _mm_load_si128((__m128i *)&(FootPrints[cur_idx]));
 
-                __m128i match_mask = _mm_cmpeq_epi8(actual_tags, expected_dibs);
+                __m128i dib_mask = _mm_cmpeq_epi8(actual_tags, expected_dibs);
+                __m128i footprint_mask =
+                    _mm_cmpeq_epi8(actual_footprints, _mm_set1_epi8(footprint));
+                __m128i match_mask = _mm_and_si128(dib_mask, footprint_mask);
                 __m128i free_slots =
                     _mm_cmpeq_epi8(actual_tags, _mm_set1_epi8(EMPTY_MARKER));
                 __m128i richer_slots =
@@ -94,8 +113,8 @@ namespace MarketExecution
                     {
                         size_t index_to_check =
                             (cur_idx + first_match) & (total_size - 1);
-                        if (Data[index_to_check]
-                            && Data[index_to_check]->GetKey() == key)
+                        if (FootPrints[index_to_check] == footprint
+                            && Keys[index_to_check] == key)
                         {
                             return Data[index_to_check];
                         }
@@ -121,21 +140,26 @@ namespace MarketExecution
 
         void AddNode(V *val) noexcept
         {
-            const K &key = val->GetKey();
+            K key = val->GetKey();
+
+            if (GetVal(key)) [[unlikely]]
+            {
+                return;
+            }
 
             size_t cur_idx = (hash_64(key) & (Size - 1)) << 4;
             size_t cur_dib = 0;
 
-            for (size_t i = 0; cur_dib < 16; ++i)
+            while (cur_dib < 16)
             {
                 if (Tags[cur_idx] == EMPTY_MARKER)
                 {
-                    PaddingSafeWrite(cur_idx, cur_dib, val);
+                    PaddingSafeWrite(cur_idx, cur_dib, key, val);
                     return;
                 }
                 if (Tags[cur_idx] < cur_dib)
                 {
-                    PaddingSafeSwap(cur_idx, &cur_dib, &val);
+                    PaddingSafeSwap(cur_idx, cur_dib, key, &val);
                 }
 
                 ++cur_idx;
@@ -150,12 +174,12 @@ namespace MarketExecution
                 {
                     if (Tags[cur_idx] == EMPTY_MARKER)
                     {
-                        PaddingSafeWrite(cur_idx, cur_dib, val);
+                        PaddingSafeWrite(cur_idx, cur_dib, key, val);
                         return;
                     }
                     if (Tags[cur_idx] < cur_dib)
                     {
-                        PaddingSafeSwap(cur_idx, &cur_dib, &val);
+                        PaddingSafeSwap(cur_idx, cur_dib, key, &val);
                     }
 
                     cur_idx = (cur_idx + 1) & (total_size - 1);
@@ -194,15 +218,16 @@ namespace MarketExecution
 
                 if (first_free == first_available)
                 {
-                    PaddingSafeWrite(slot_idx, cur_dib + first_available, val);
+                    PaddingSafeWrite(slot_idx, cur_dib + first_available, key,
+                                     val);
                     return;
                 }
-                else
+                else if (first_available)
                 {
                     cur_idx = slot_idx;
                     cur_dib += first_available;
 
-                    PaddingSafeSwap(cur_idx, &cur_dib, &val);
+                    PaddingSafeSwap(cur_idx, cur_dib, key, &val);
 
                     cur_idx = (cur_idx + 1) & (total_size - 1);
                     cur_dib++;
@@ -216,8 +241,9 @@ namespace MarketExecution
             // No available slot
         }
 
-        void DeleteNode(const K &key)
+        void DeleteNode(const K &key) noexcept
         {
+            const uint8_t footprint = hash_64(key) >> 56;
             size_t cur_idx = (hash_64(key) & (Size - 1)) << 4;
             size_t cur_dib = 0;
             size_t total_size = Size << 4;
@@ -226,17 +252,23 @@ namespace MarketExecution
             {
                 uint8_t tag = Tags[cur_idx];
                 if (tag == EMPTY_MARKER || tag < cur_dib)
+                {
                     return;
+                }
 
-                if (Data[cur_idx]->GetKey() == key)
+                if (FootPrints[cur_idx] == footprint && Keys[cur_idx] == key)
+                {
                     break;
+                }
 
                 cur_idx = (cur_idx + 1) & (total_size - 1);
                 ++cur_dib;
             }
 
             if (cur_dib == total_size)
+            {
                 return;
+            }
 
             while (true)
             {
@@ -248,11 +280,12 @@ namespace MarketExecution
                     break;
                 }
 
-                PaddingSafeWrite(cur_idx, next_tag - 1, Data[next_idx]);
+                PaddingSafeWrite(cur_idx, next_tag - 1, Keys[next_idx],
+                                 Data[next_idx]);
                 cur_idx = next_idx;
             }
 
-            PaddingSafeWrite(cur_idx, EMPTY_MARKER, nullptr);
+            PaddingSafeWrite(cur_idx, EMPTY_MARKER, 0, nullptr);
         }
     };
 } // namespace MarketExecution
