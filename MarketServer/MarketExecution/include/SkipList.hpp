@@ -1,12 +1,17 @@
+#pragma once
+
 #include <UnsafeStoragePool.hpp>
 #include <array>
+#include <concepts>
 #include <cstdlib>
 #include <limits>
 #include <queue>
 
 namespace MarketExecution
 {
-    template <typename K, typename V, size_t MaxLevel>
+    template <std::integral K, typename V, size_t MaxLevel,
+              typename Compare = std::less<K>>
+    requires std::is_pointer_v<V>
     class SkipList
     {
     public:
@@ -29,11 +34,13 @@ namespace MarketExecution
         };
 
     private:
+        Compare comp;
         SkipNode *Head;
         SkipNode *Tail;
         UnsafeStoragePool<SkipNode> NodesPool;
         uint64_t State;
         size_t CurMax;
+
         static inline uint64_t next_u64(const uint64_t state)
         {
             uint64_t newState = state + 0xa0761d6478bd642f;
@@ -60,12 +67,32 @@ namespace MarketExecution
             , CurMax(0)
         {
             Tail = NodesPool.acquire();
-            Tail->Key = std::numeric_limits<K>::max();
+
+            if constexpr (std::is_same_v<Compare, std::less<K>>)
+            {
+                Tail->Key = std::numeric_limits<K>::max();
+            }
+            else
+            {
+                Tail->Key = std::numeric_limits<K>::min();
+            }
+
+            Tail->Value = nullptr;
             Tail->Height = MaxLevel;
             Tail->Forward.fill(nullptr);
 
             Head = NodesPool.acquire();
-            Head->Key = std::numeric_limits<K>::min();
+
+            if constexpr (std::is_same_v<Compare, std::less<K>>)
+            {
+                Head->Key = std::numeric_limits<K>::min();
+            }
+            else
+            {
+                Head->Key = std::numeric_limits<K>::max();
+            }
+
+            Head->Value = nullptr;
             Head->Height = MaxLevel;
             Head->Forward.fill(Tail);
         }
@@ -93,7 +120,7 @@ namespace MarketExecution
 
             for (int curLevel = MaxLevel; curLevel >= 0; --curLevel)
             {
-                while (curNode->Forward[curLevel]->Key < key)
+                while (comp(curNode->Forward[curLevel]->Key, key))
                 {
                     __builtin_prefetch(
                         &curNode->Forward[curLevel]->Forward[curLevel]->Key);
@@ -122,7 +149,7 @@ namespace MarketExecution
 
             for (int curLevel = MaxLevel; curLevel >= 0; --curLevel)
             {
-                while (curNode->Forward[curLevel]->Key <= key)
+                while (!comp(key, curNode->Forward[curLevel]->Key))
                 {
                     __builtin_prefetch(
                         &curNode->Forward[curLevel]->Forward[curLevel]->Key);
@@ -173,7 +200,7 @@ namespace MarketExecution
 
             for (int curLevel = MaxLevel; curLevel >= 0; --curLevel)
             {
-                while (curNode->Forward[curLevel]->Key < key)
+                while (comp(curNode->Forward[curLevel]->Key, key))
                 {
                     __builtin_prefetch(
                         &curNode->Forward[curLevel]->Forward[curLevel]->Key);
@@ -201,13 +228,9 @@ namespace MarketExecution
             }
         }
 
-        [[nodiscard]] V &GetHead(bool &found) noexcept
+        [[nodiscard]] V GetHead() noexcept
         {
-            V &res = Head->Forward[0] != Tail ? Head->Forward[0]->Value
-                                              : Head->Value;
-            found = res.GetKey() != Head->Value.GetKey();
-
-            return res;
+            return Head->Forward[0]->Value;
         }
     };
 } // namespace MarketExecution

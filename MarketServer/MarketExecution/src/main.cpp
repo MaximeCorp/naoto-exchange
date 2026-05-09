@@ -20,11 +20,13 @@ std::string ToEscapedString(const void *data, size_t size)
 
 int main(void)
 {
-    MatchingEngine<16> engine(16, 0, 5, 8080, 16, 16, 128);
+    MatchingEngine<16, 10, 100> engine(16, 100, 0, 5, 8080, 16, 16, 128, 128);
 
     char key[25] = { 'a' };
 
     Order order1(key, OrderType::LIMIT, OrderSide::BUY, 100, 1, 60, 1, 1);
+
+    Order order13(key, OrderType::LIMIT, OrderSide::BUY, 90, 1, 60, 1, 1);
 
     Order order12(key, OrderType::LIMIT, OrderSide::BUY, 200, 1, 60, 1, 1);
 
@@ -33,6 +35,8 @@ int main(void)
     Order order3(key, OrderType::MARKET, OrderSide::SELL, 2, 60, 1, 1);
 
     std::cout << ToEscapedString(&order1, sizeof(Order)) << "\n";
+    std::cout << ToEscapedString(&order13, sizeof(Order)) << "\n";
+    std::cout << ToEscapedString(&order12, sizeof(Order)) << "\n";
     std::cout << ToEscapedString(&order2, sizeof(Order)) << "\n";
     std::cout << ToEscapedString(&order3, sizeof(Order)) << "\n";
 

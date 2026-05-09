@@ -1,11 +1,15 @@
+#pragma once
+
 #include <array>
+#include <concepts>
 #include <cstdint>
 #include <immintrin.h>
 
 namespace MarketExecution
 {
-    template <typename K, typename V,
+    template <std::integral K, typename V,
               size_t Size> // CRITICAL: Size MUST be a power of 2
+    requires std::is_pointer_v<V>
     class FlatHashMap
     {
     private:
@@ -13,9 +17,9 @@ namespace MarketExecution
         alignas(64) std::array<uint8_t, (Size + 1) * 16> FootPrints;
         alignas(64) std::array<uint8_t, (Size + 1) * 16> Tags;
         alignas(64) std::array<K, (Size + 1) * 16> Keys;
-        alignas(64) std::array<V *, (Size + 1) * 16> Data;
+        alignas(64) std::array<V, (Size + 1) * 16> Data;
 
-        static const uint8_t EMPTY_MARKER = 0x80;
+        static constexpr uint8_t EMPTY_MARKER = 0x80;
         alignas(16) inline static const __m128i base_seq =
             _mm_setr_epi8(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15);
 
@@ -25,40 +29,42 @@ namespace MarketExecution
         }
 
         void PaddingSafeWrite(const size_t idx, const size_t dib, const K &key,
-                              V *val) noexcept
+                              V val) noexcept
         {
+            uint8_t h = hash_64(key) >> 56;
             Tags[idx] = dib;
             Data[idx] = val;
             Keys[idx] = key;
-            FootPrints[idx] = hash_64(key) >> 56;
+            FootPrints[idx] = h;
 
             if (idx < 16)
             {
                 Tags[Size * 16 + idx] = dib;
                 Data[Size * 16 + idx] = val;
                 Keys[Size * 16 + idx] = key;
-                FootPrints[Size * 16 + idx] = hash_64(key) >> 56;
+                FootPrints[Size * 16 + idx] = h;
             }
         }
 
         void PaddingSafeSwap(const size_t idx, size_t &dib, K &key,
-                             V **val) noexcept
+                             V *val) noexcept
         {
-            V *temp_val = Data[idx];
+            uint8_t h = hash_64(key) >> 56;
+            V temp_val = Data[idx];
             const std::uint8_t temp_dib = Tags[idx];
             const K temp_key = Keys[idx];
 
             Data[idx] = *val;
             Tags[idx] = dib;
             Keys[idx] = key;
-            FootPrints[idx] = hash_64(key) >> 56;
+            FootPrints[idx] = h;
 
             if (idx < 16)
             {
                 Data[Size * 16 + idx] = *val;
                 Tags[Size * 16 + idx] = dib;
                 Keys[Size * 16 + idx] = key;
-                FootPrints[Size * 16 + idx] = hash_64(key) >> 56;
+                FootPrints[Size * 16 + idx] = h;
             }
 
             *val = temp_val;
@@ -72,10 +78,11 @@ namespace MarketExecution
             Tags.fill(EMPTY_MARKER);
         }
 
-        [[nodiscard]] V *GetVal(const K &key) noexcept
+        [[nodiscard]] V GetVal(const K &key) noexcept
         {
-            const uint8_t footprint = hash_64(key) >> 56;
-            size_t cur_idx = (hash_64(key) & (Size - 1)) << 4;
+            const uint64_t h = hash_64(key);
+            const uint8_t footprint = h >> 56;
+            size_t cur_idx = (h & (Size - 1)) << 4;
             size_t cur_dib = 0;
             size_t total_size = Size << 4;
 
@@ -138,10 +145,8 @@ namespace MarketExecution
             return nullptr;
         }
 
-        void AddNode(V *val) noexcept
+        void AddNode(K key, V val) noexcept
         {
-            K key = val->GetKey();
-
             if (GetVal(key)) [[unlikely]]
             {
                 return;
@@ -243,8 +248,9 @@ namespace MarketExecution
 
         void DeleteNode(const K &key) noexcept
         {
+            const uint64_t h = hash_64(key);
             const uint8_t footprint = hash_64(key) >> 56;
-            size_t cur_idx = (hash_64(key) & (Size - 1)) << 4;
+            size_t cur_idx = (h & (Size - 1)) << 4;
             size_t cur_dib = 0;
             size_t total_size = Size << 4;
 

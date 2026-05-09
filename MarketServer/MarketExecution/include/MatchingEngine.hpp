@@ -8,7 +8,7 @@
 
 namespace MarketExecution
 {
-    template <size_t BatchSize>
+    template <size_t BatchSize, size_t SkipListMaxLevel, size_t FHMSize>
     class MatchingEngine
     {
         using OrdersQueue = moodycamel::BlockingReaderWriterCircularBuffer<
@@ -18,7 +18,7 @@ namespace MarketExecution
         OrdersQueue IncomingOrders;
         OrdersQueue OutgoingOrders;
         StoragePool<OrderBatch<BatchSize>> OrdersPool;
-        BidAsk<BatchSize> OrderBook;
+        BidAsk<FHMSize, SkipListMaxLevel, BatchSize> OrderBook;
         EpollServer<BatchSize> Server;
 
         void setAffinity(std::thread &t, const int core_id)
@@ -42,22 +42,25 @@ namespace MarketExecution
         }
 
     public:
-        MatchingEngine(const size_t queueSize, const std::int32_t assetId,
+        MatchingEngine(const size_t queueSize,
+                       const size_t skipListNodesPoolSize,
+                       const std::int32_t assetId,
                        const std::int64_t initialPrice, const int port,
                        const int maxEvents, const int maxPending,
-                       const size_t nb_fds)
+                       const size_t nb_fds, const size_t orderNodePoolSize)
             : IncomingOrders(queueSize)
             , OutgoingOrders(queueSize)
             , OrdersPool(queueSize)
             , OrderBook(assetId, initialPrice, IncomingOrders, OutgoingOrders,
-                        OrdersPool)
+                        OrdersPool, orderNodePoolSize, skipListNodesPoolSize)
             , Server(port, maxEvents, maxPending, OrdersPool, IncomingOrders,
                      nb_fds)
         {}
 
         void StartMatchingEngine(void)
         {
-            std::thread matchingThread(&BidAsk<BatchSize>::MarketExecutionLoop,
+            std::thread matchingThread(&BidAsk<FHMSize, SkipListMaxLevel,
+                                               BatchSize>::MarketExecutionLoop,
                                        &OrderBook);
             std::thread serverThread(&EpollServer<BatchSize>::startServer,
                                      &Server);

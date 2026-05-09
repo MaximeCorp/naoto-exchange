@@ -1,6 +1,6 @@
 CC=g++
 
-CFLAGS=-Wall -Werror -Wextra -Iinclude -fsanitize=address
+CFLAGS= -std=c++20 -Wall -Werror -Wextra -Iinclude -fsanitize=address
 
 SRC=$(shell find . -type f -name '*.cpp')
 OBJ=$(patsubst %.cpp,%.o,$(SRC))

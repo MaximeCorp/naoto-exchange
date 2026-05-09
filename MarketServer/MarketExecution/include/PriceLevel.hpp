@@ -1,4 +1,7 @@
+#pragma once
+
 #include <OrderNode.hpp>
+#include <UnsafeStoragePool.hpp>
 #include <cstdint>
 
 namespace MarketExecution
@@ -7,7 +10,6 @@ namespace MarketExecution
     {
     private:
         std::int64_t Price;
-        size_t Generation;
         size_t Size;
         std::int64_t TotalAmount;
         OrderNode *Head; // Doubly linked list of orders
@@ -15,8 +17,7 @@ namespace MarketExecution
 
     public:
         PriceLevel(void)
-            : Price(10)
-            , Generation(0)
+            : Price(0)
             , Size(0)
             , TotalAmount(0)
             , Head(nullptr)
@@ -24,50 +25,78 @@ namespace MarketExecution
         {}
         PriceLevel(std::int64_t price)
             : Price(price)
-            , Generation(0)
             , Size(0)
             , TotalAmount(0)
             , Head(nullptr)
             , Tail(nullptr)
         {}
 
-        [[nodiscard]] bool addOrder(OrderNode *order) noexcept
+        void AddOrder(OrderNode *order) noexcept
         {
             if (!Head) [[unlikely]]
             {
                 Head = order;
-                Tail = order;
-                ++Generation; // Increment generation because size is 0
+                Tail = order; // Increment generation because size is 0
             }
             else
             {
-                Tail->next = order;
-                order->prev = Tail;
+                Tail->SetNext(order);
+                order->SetPrev(Tail);
                 Tail = order;
             }
 
             ++Size;
-            TotalAmount += order->getAmount();
-
-            return true;
+            TotalAmount += order->GetAmount();
         }
 
-        [[nodiscard]] OrderNode *peekOrder(void) noexcept
+        [[nodiscard]] bool DeleteOrder(
+            OrderNode *order) noexcept // Assumes order is actually contained
+        {
+            --Size;
+            TotalAmount -= order->GetAmount();
+
+            if (order->GetPrev())
+            {
+                order->SetPrev(order->GetNext());
+            }
+            else
+            {
+                SetHead(order->GetNext());
+            }
+
+            if (order->GetNext())
+            {
+                order->SetNext(order->GetPrev());
+            }
+            else
+            {
+                SetTail(order->GetPrev());
+            }
+
+            return !order->GetPrev() && !order->GetNext();
+        }
+
+        [[nodiscard]] OrderNode *PeekOrder(void) noexcept
         {
             return Head;
         }
 
         [[nodiscard]] OrderNode *
-        popOrder(void) noexcept // The programmer is in charge to free/release
+        PopOrder(void) noexcept // The programmer is in charge to free/release
                                 // the orders
         {
+            if (!Head) [[unlikely]]
+            {
+                return nullptr;
+            }
+
             OrderNode *res = Head;
 
-            Head = Head ? Head->next : nullptr;
+            Head = Head ? Head->GetNext() : nullptr;
 
             if (Head) [[likely]]
             {
-                Head->prev = nullptr;
+                Head->SetPrev(nullptr);
             }
             else
             {
@@ -75,17 +104,51 @@ namespace MarketExecution
             }
 
             --Size;
-            TotalAmount -= res->getAmount();
+            TotalAmount -= res->GetAmount();
 
-            // If size is zero, push this price level to "empty price levels"
-            // queue
+            // If size is zero, push this price level to "empty price
+            // levels" queue
 
             return res;
+        }
+
+        void ClearPriceLevel(UnsafeStoragePool<OrderNode> &orderNodePool)
+        {
+            Size = 0;
+            TotalAmount = 0;
+
+            OrderNode *curNode = Head;
+
+            while (curNode)
+            {
+                OrderNode *toRelease = curNode;
+                curNode = curNode->GetNext();
+                bool released = orderNodePool.release(toRelease);
+
+                if (!released) [[unlikely]]
+                {
+                    std::cerr << "Failed to release\n";
+                    std::terminate();
+                }
+            }
+
+            Head = nullptr;
+            Tail = nullptr;
         }
 
         void SetPrice(std::int64_t price) noexcept
         {
             Price = price;
+        }
+
+        void SetHead(OrderNode *order) noexcept
+        {
+            Head = order;
+        }
+
+        void SetTail(OrderNode *order) noexcept
+        {
+            Tail = order;
         }
 
         [[nodiscard]] std::int64_t GetKey(void) const noexcept

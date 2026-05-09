@@ -1,9 +1,10 @@
 #pragma once
 
 #include <Asset.hpp>
-#include <FlatHashMap.hpp>
 #include <Order.hpp>
 #include <OrderBatch.hpp>
+#include <OrderBook.hpp>
+#include <OrderNode.hpp>
 #include <ReaderWriterCircularBuffer.hpp>
 #include <StoragePool.hpp>
 #include <cstdint>
@@ -12,43 +13,27 @@
 
 namespace MarketExecution
 {
-    template <size_t BatchSize>
+    template <size_t FHMSize, size_t SkipListMaxLevel, size_t BatchSize>
     class BidAsk
     {
         using OrdersQueue = moodycamel::BlockingReaderWriterCircularBuffer<
             OrderBatch<BatchSize> *>;
-        using OrderBookMap =
-            ska::flat_hash_map<std::int64_t, std::vector<Order>>;
-        using OrderHandlingFunc = void (BidAsk<BatchSize>::*)(Order &);
 
     private:
-        std::uint32_t MarketAssetId;
-        std::int64_t MarketPrice;
-
-        std::int64_t BestBidPrice;
-        std::int64_t BestAskPrice;
+        uint32_t MarketAssetId;
+        int64_t MarketPrice;
+        int64_t BestAskPrice;
+        int64_t BestBidPrice;
 
         OrdersQueue &IncomingOrders;
         OrdersQueue
             &OutgoingMarketUpdates; // Might wanna create proper object for this
         StoragePool<OrderBatch<BatchSize>> &OrdersPool;
+        UnsafeStoragePool<OrderNode> OrderNodePool;
+        UnsafeStoragePool<PriceLevel> PriceLevelPool;
 
-        OrderBookMap Bid;
-        OrderBookMap Ask;
-        // std::map<std::int64_t, std::vector<Order>, std::greater<>> Bid;
-        // std::map<std::int64_t, std::vector<Order>> Ask;
-
-        [[nodiscard]] std::vector<Order> *GetBestOffers(Order &order) noexcept
-        {
-            OrderBookMap &orderBook =
-                order.getSide() == OrderSide::BUY ? Ask : Bid;
-            std::int64_t bestPrice =
-                order.getSide() == OrderSide::BUY ? BestAskPrice : BestBidPrice;
-
-            std::vector<Order> &offers = orderBook[bestPrice];
-
-            return offers.empty() ? nullptr : &offers;
-        }
+        OrderBook<FHMSize, SkipListMaxLevel, std::greater<int64_t>> Bid;
+        OrderBook<FHMSize, SkipListMaxLevel> Ask;
 
         [[nodiscard]] bool IsMarketable(Order &order) const noexcept
         {
@@ -60,71 +45,152 @@ namespace MarketExecution
             bool limit_marketable =
                 is_buy ? (price >= BestAskPrice) : (price <= BestBidPrice);
 
-            return is_market | limit_marketable;
+            return is_market || limit_marketable;
         }
 
-        void FillOffer(Order &order, std::vector<Order> *bestOffers) noexcept
+        void FillBuyOrder(Order &order) noexcept
         {
-            size_t i = 0;
-
-            while (order.getAmount() > 0 && IsMarketable(order)
-                   && i < bestOffers->size())
+            while (order.getAmount() > 0 && IsMarketable(order))
             {
-                Order &curOffer = (*bestOffers)[i];
+                OrderNode *bestOffer = Ask.GetBestOffer();
 
-                std::cout << "Matching the following orders:\n";
-                order.log();
-                curOffer.log();
+                BestAskPrice = bestOffer->GetKey();
 
-                const std::uint32_t curOrderAmount = order.getAmount();
-                const std::uint32_t curOfferAmount = curOffer.getAmount();
+                if (!bestOffer) [[unlikely]]
+                {
+                    // Handle to letting know the client that order couldn't be
+                    // fully filled
+                    return;
+                }
 
-                const uint32_t tradedAmount = (curOrderAmount < curOfferAmount)
-                    ? curOrderAmount
-                    : curOfferAmount;
+                while (order.getAmount() > 0 && IsMarketable(order)
+                       && bestOffer)
+                {
+                    std::cout << "Matching the following orders:\n";
+                    order.log();
+                    bestOffer->log();
 
-                const std::uint32_t orderAmount = curOrderAmount - tradedAmount;
-                const std::uint32_t offerAmount = curOfferAmount - tradedAmount;
+                    const std::uint32_t curOrderAmount = order.getAmount();
+                    const std::uint32_t curOfferAmount = bestOffer->GetAmount();
 
-                order.setAmount(orderAmount);
-                curOffer.setAmount(offerAmount);
+                    const uint32_t tradedAmount =
+                        (curOrderAmount < curOfferAmount) ? curOrderAmount
+                                                          : curOfferAmount;
 
-                std::cout << "Orders after matching\n:";
-                order.log();
-                curOffer.log();
+                    const std::uint32_t orderAmount =
+                        curOrderAmount - tradedAmount;
+                    const std::uint32_t offerAmount =
+                        curOfferAmount - tradedAmount;
 
-                MarketPrice =
-                    tradedAmount > 0 ? curOffer.getPrice() : MarketPrice;
+                    order.setAmount(orderAmount);
+                    bestOffer->SetAmount(offerAmount);
 
-                std::cout << "New market price:\n" << MarketPrice << "\n";
+                    std::cout << "Orders after matching\n:";
+                    order.log();
+                    bestOffer->log();
 
-                i += (offerAmount == 0);
+                    MarketPrice =
+                        tradedAmount > 0 ? bestOffer->GetKey() : MarketPrice;
+
+                    std::cout << "New market price:\n" << MarketPrice << "\n";
+
+                    if (bestOffer->GetAmount() == 0)
+                    {
+                        OrderNode *toDelete = bestOffer;
+                        bestOffer = bestOffer->GetNext();
+                        Ask.DeleteOrder(toDelete);
+                    }
+                }
             }
+        }
 
-            bestOffers->erase(
-                bestOffers->begin(),
-                bestOffers->begin()
-                    + i); // O(n), should use circular buffer later
+        void FillSellOrder(Order &order) noexcept
+        {
+            while (order.getAmount() > 0 && IsMarketable(order))
+            {
+                OrderNode *bestOffer = Bid.GetBestOffer();
 
-            // If bestOffers empty, best ask/bid price should be updated (not
-            // easily doable with current map data structure)
+                if (!bestOffer) [[unlikely]]
+                {
+                    // Handle to letting know the client that order couldn't be
+                    // fully filled
+                    return;
+                }
+
+                BestBidPrice = bestOffer->GetKey();
+
+                while (order.getAmount() > 0 && IsMarketable(order)
+                       && bestOffer)
+                {
+                    std::cout << "Matching the following orders:\n";
+                    order.log();
+                    bestOffer->log();
+
+                    const std::uint32_t curOrderAmount = order.getAmount();
+                    const std::uint32_t curOfferAmount = bestOffer->GetAmount();
+
+                    const uint32_t tradedAmount =
+                        (curOrderAmount < curOfferAmount) ? curOrderAmount
+                                                          : curOfferAmount;
+
+                    const std::uint32_t orderAmount =
+                        curOrderAmount - tradedAmount;
+                    const std::uint32_t offerAmount =
+                        curOfferAmount - tradedAmount;
+
+                    order.setAmount(orderAmount);
+                    bestOffer->SetAmount(offerAmount);
+
+                    std::cout << "Orders after matching\n:";
+                    order.log();
+                    bestOffer->log();
+
+                    MarketPrice =
+                        tradedAmount > 0 ? bestOffer->GetKey() : MarketPrice;
+
+                    std::cout << "New market price:\n" << MarketPrice << "\n";
+
+                    if (bestOffer->GetAmount() == 0)
+                    {
+                        OrderNode *toDelete = bestOffer;
+                        bestOffer = bestOffer->GetNext();
+                        Bid.DeleteOrder(toDelete);
+                    }
+                }
+            }
         }
 
         void ExecuteMarketableOrder(
             Order &order) noexcept // assumption: the order IS marketable
         {
-            do
+            if (order.getSide() == OrderSide::BUY)
             {
-                std::vector<Order> *offers = GetBestOffers(order);
+                FillBuyOrder(order);
+            }
+            else
+            {
+                FillSellOrder(order);
+            }
+        }
 
-                if (offers == nullptr) [[unlikely]]
-                {
-                    // nullptr might not mean that we have to stop the loop
-                    break;
-                }
+        void AddSellLimitOrder(Order &order)
+        {
+            OrderNode *toAdd = OrderNodePool.acquire();
+            toAdd->SetOrder(order);
 
-                FillOffer(order, offers);
-            } while (order.getAmount() && IsMarketable(order));
+            BestBidPrice = std::min(BestAskPrice, order.getPrice());
+
+            Ask.AddLimitOrder(toAdd);
+        }
+
+        void AddBuyLimitOrder(Order &order)
+        {
+            OrderNode *toAdd = OrderNodePool.acquire();
+            toAdd->SetOrder(order);
+
+            BestBidPrice = std::max(BestBidPrice, order.getPrice());
+
+            Bid.AddLimitOrder(toAdd);
         }
 
         void AddLimitOrder(
@@ -132,47 +198,48 @@ namespace MarketExecution
         {
             std::cout << "Adding to order book\n";
             const bool isBuy = order.getSide() == OrderSide::BUY;
-            const std::int64_t price = order.getPrice();
 
-            // Get the correct map and price level
-            OrderBookMap &orderBook = isBuy ? Bid : Ask;
-            std::vector<Order> &priceLevel = orderBook[price];
-
-            // Add the order
-            priceLevel.emplace_back(order);
-
-            // Update best price
-            std::int64_t &bestPrice = isBuy ? BestBidPrice : BestAskPrice;
-            bestPrice =
-                isBuy ? std::max(bestPrice, price) : std::min(bestPrice, price);
+            if (isBuy)
+            {
+                AddBuyLimitOrder(order);
+            }
+            else
+            {
+                AddSellLimitOrder(order);
+            }
         }
-
-        static constexpr OrderHandlingFunc OrderHandlers[] = {
-            &BidAsk<BatchSize>::AddLimitOrder,
-            &BidAsk<BatchSize>::ExecuteMarketableOrder
-        };
 
         void executeOrder(Order &order) noexcept
         {
-            bool marketable = IsMarketable(order);
-            auto handler = OrderHandlers[marketable];
-            (this->*handler)(order);
+            if (IsMarketable(order))
+            {
+                ExecuteMarketableOrder(order);
+            }
+            else
+            {
+                AddLimitOrder(order);
+            }
         }
 
     public:
-        BidAsk(std::uint32_t assetId, std::int64_t initialPrice,
+        BidAsk(const std::uint32_t assetId, const std::int64_t initialPrice,
                OrdersQueue &incoming, OrdersQueue &outgoing,
-               StoragePool<OrderBatch<BatchSize>> &pool)
+               StoragePool<OrderBatch<BatchSize>> &pool,
+               const size_t orderNodePoolSize,
+               const size_t skipListNodesPoolSize)
             : MarketAssetId(assetId)
             , MarketPrice(initialPrice)
-            , BestBidPrice(INT64_MIN)
             , BestAskPrice(INT64_MAX)
+            , BestBidPrice(INT64_MIN)
             , IncomingOrders(incoming)
             , OutgoingMarketUpdates(outgoing)
             , OrdersPool(pool)
-            , Bid()
-            , Ask()
+            , OrderNodePool(orderNodePoolSize)
+            , PriceLevelPool(orderNodePoolSize)
+            , Bid(skipListNodesPoolSize, OrderNodePool, PriceLevelPool)
+            , Ask(skipListNodesPoolSize, OrderNodePool, PriceLevelPool)
         {}
+
         ~BidAsk() = default;
 
         void MarketExecutionLoop() noexcept
@@ -193,24 +260,15 @@ namespace MarketExecution
                         executeOrder(curOrder);
                         std::cout << "finished execution\n";
                     }
+
+                    bool released = OrdersPool.release(batch);
+
+                    if (!released) [[unlikely]]
+                    {
+                        std::terminate();
+                    }
                 }
             }
         }
-
-        [[nodiscard]] int getMarketOrdersSize();
-
-        [[nodiscard]] OrderBookMap &getBid()
-        {
-            return Bid;
-        }
-
-        [[nodiscard]] OrderBookMap &getAsk()
-        {
-            return Ask;
-        }
-
-        [[nodiscard]] std::int64_t getMarketPrice();
-
-        [[nodiscard]] std::uint32_t getMarketAssetId();
     };
 } // namespace MarketExecution

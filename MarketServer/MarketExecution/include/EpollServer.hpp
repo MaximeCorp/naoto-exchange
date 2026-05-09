@@ -122,6 +122,8 @@ namespace MarketExecution
                         curFd, (char *)(batch->Data.data()) + buffer.BufferSize,
                         sizeof(Order) * BatchSize - buffer.BufferSize);
 
+                    buffer.clearBuffer();
+
                     if (nread <= 0) [[unlikely]]
                     {
                         Pool.releaseCritical(batch);
