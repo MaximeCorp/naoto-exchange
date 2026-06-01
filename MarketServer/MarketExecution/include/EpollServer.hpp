@@ -234,6 +234,7 @@ namespace MarketExecution
 
         void startServer(void) noexcept
         {
+            std::cout << "listening on" << Port << "\n";
             std::vector<struct epoll_event> events(MaxEvents);
 
             while (true)

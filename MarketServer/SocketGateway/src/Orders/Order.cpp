@@ -2,7 +2,7 @@
 #include <arpa/inet.h>
 #include <cstring>
 
-[[nodiscard]] static inline uint64_t htonll(uint64_t hostval) noexcept
+uint64_t htonll(uint64_t hostval)
 {
 #if __BYTE_ORDER == __LITTLE_ENDIAN
     return __builtin_bswap64(hostval);
@@ -11,7 +11,7 @@
 #endif
 };
 
-[[nodiscard]] static inline uint64_t ntohll(uint64_t netval) noexcept
+uint64_t ntohll(uint64_t netval)
 {
 #if __BYTE_ORDER == __LITTLE_ENDIAN
     return __builtin_bswap64(netval);
@@ -32,10 +32,10 @@ namespace Gateways
         , Asset(0)
         , Timestamp(0)
     {}
-    Order::Order(const char *key, const OrderType type, const OrderSide side,
-                 const float price, const std::int32_t client_id,
-                 const float amount, const std::int32_t asset,
-                 const std::int64_t timestamp)
+    Order::Order(const char *key, OrderType type, OrderSide side,
+                 std::int64_t price, std::int32_t client_id,
+                 std::uint32_t amount, std::int32_t asset,
+                 std::int64_t timestamp)
         : Type(type)
         , Side(side)
         , Price(price)
@@ -50,9 +50,9 @@ namespace Gateways
         std::fill(Key + key_len + 1, Key + MAX_KEY_LEN, 0);
     }
 
-    Order::Order(const char *key, const OrderType type, const OrderSide side,
-                 const std::int32_t client_id, const float amount,
-                 const std::int32_t asset, const std::int64_t timestamp)
+    Order::Order(const char *key, OrderType type, OrderSide side,
+                 std::int32_t client_id, std::uint32_t amount,
+                 std::int32_t asset, std::int64_t timestamp)
         : Type(type)
         , Side(side)
         , ClientId(client_id)
@@ -74,72 +74,67 @@ namespace Gateways
         std::string type = Type == OrderType::LIMIT ? "LIMIT" : "MARKET";
         std::cout << side << " " << type << " ORDER - Amount: " << Amount
                   << " - Price: " << Price << " - Client ID: " << ClientId
-                  << "key:";
-        std::cout.write(Key, MAX_KEY_LEN);
-        std::cout << "\n" << std::endl;
+                  << "key:" << Key << "\n"
+                  << std::endl;
     }
 
-    [[nodiscard]] char *Order::getKey() const
+    const char *Order::getKey() const
     {
         return Key;
     }
-    [[nodiscard]] OrderType Order::getType() const
+    const OrderType &Order::getType() const
     {
         return Type;
     }
-    [[nodiscard]] OrderSide Order::getSide() const
+    const OrderSide &Order::getSide() const
     {
         return Side;
     }
-    [[nodiscard]] float Order::getPrice() const
+    const std::int64_t &Order::getPrice() const
     {
         return Price;
     }
-    [[nodiscard]] std::int32_t Order::getClientId() const
+    const std::int32_t &Order::getClientId() const
     {
         return ClientId;
     }
-    [[nodiscard]] float Order::getAmount() const
+    const std::uint32_t &Order::getAmount() const
     {
         return Amount;
     }
-    [[nodiscard]] std::uint16_t Order::getAsset() const
+    const std::int32_t &Order::getAsset() const
     {
         return Asset;
     }
-    [[nodiscard]] std::int64_t Order::getTimestamp() const
+    const std::int64_t &Order::getTimestamp() const
     {
         return Timestamp;
     }
-    void Order::setAmount(const float amout)
+    void Order::setAmount(std::uint32_t amout)
     {
         Amount = amout;
     }
-    void Order::setType(const OrderType type)
+    void Order::setType(OrderType type)
     {
         Type = type;
     }
-    void Order::setSide(const OrderSide side)
+    void Order::setSide(OrderSide side)
     {
         Side = side;
     }
-    void Order::setStatus(const OrderStatus status)
-    {
-        Status = status;
-    }
-    void Order::setPrice(const float price)
+    void Order::setPrice(std::int64_t price)
     {
         Price = price;
     }
-    void Order::setClientId(const std::int32_t clientId)
+    void Order::setClientId(std::int32_t clientId)
     {
         ClientId = clientId;
     }
-    void Order::setAsset(const std::uint16_t asset)
+    void Order::setAsset(std::int32_t asset)
     {
         Asset = asset;
     }
-    void Order::setTimestamp(const std::int64_t timestamp)
+    void Order::setTimestamp(std::int64_t timestamp)
     {
         Timestamp = timestamp;
     }
@@ -171,10 +166,10 @@ namespace Gateways
         output->setSide(static_cast<OrderSide>(ntohl(side_net)));
         ptr += sizeof(side_net);
 
-        std::int32_t price_bytes_net;
+        std::int64_t price_bytes_net;
         std::memcpy(&price_bytes_net, ptr, sizeof(price_bytes_net));
         price_bytes_net = ntohl(price_bytes_net);
-        float price;
+        std::int64_t price;
         std::memcpy(&price, &price_bytes_net, sizeof(price));
         output->setPrice(price);
         ptr += sizeof(price_bytes_net);
@@ -184,10 +179,10 @@ namespace Gateways
         output->setClientId(ntohl(client_id_net));
         ptr += sizeof(client_id_net);
 
-        std::int32_t amount_bytes_net;
+        std::uint32_t amount_bytes_net;
         std::memcpy(&amount_bytes_net, ptr, sizeof(amount_bytes_net));
         amount_bytes_net = ntohl(amount_bytes_net);
-        float amount;
+        std::uint32_t amount;
         std::memcpy(&amount, &amount_bytes_net, sizeof(amount));
         output->setAmount(amount);
         ptr += sizeof(amount_bytes_net);

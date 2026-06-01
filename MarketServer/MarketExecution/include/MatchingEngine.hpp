@@ -3,12 +3,18 @@
 #include <BidAsk.hpp>
 #include <EpollServer.hpp>
 #include <ReaderWriterCircularBuffer.hpp>
+#include <cstdlib>
+#include <etcd/KeepAlive.hpp>
+#include <etcd/SyncClient.hpp>
+#include <nlohmann/json.hpp>
 #include <pthread.h>
+#include <string>
 #include <thread>
 
 namespace MarketExecution
 {
-    template <size_t BatchSize, size_t SkipListMaxLevel, size_t FHMSize>
+    template <size_t BatchSize, size_t SkipListMaxLevel, size_t FHMSize,
+              size_t OrderMapSize>
     class MatchingEngine
     {
         using OrdersQueue = moodycamel::BlockingReaderWriterCircularBuffer<
@@ -18,8 +24,11 @@ namespace MarketExecution
         OrdersQueue IncomingOrders;
         OrdersQueue OutgoingOrders;
         StoragePool<OrderBatch<BatchSize>> OrdersPool;
-        BidAsk<FHMSize, SkipListMaxLevel, BatchSize> OrderBook;
+        BidAsk<FHMSize, SkipListMaxLevel, BatchSize, OrderMapSize> OrderBook;
         EpollServer<BatchSize> Server;
+
+        std::shared_ptr<etcd::KeepAlive> KeepAlive;
+        std::unique_ptr<etcd::SyncClient> etcdClient;
 
         void setAffinity(std::thread &t, const int core_id)
         {
@@ -41,6 +50,28 @@ namespace MarketExecution
             }
         }
 
+        void etcdClientSetUp(void)
+        {
+            const char *etcd_addr =
+                std::getenv("ETCD_ADDR") ?: "localhost:2379";
+            const char *symbol = std::getenv("SYMBOL") ?: "0";
+            const char *listen = std::getenv("LISTEN_ADDR") ?: "127.0.0.1:8080";
+
+            etcdClient = std::make_unique<etcd::SyncClient>(etcd_addr);
+
+            KeepAlive = etcdClient->leasekeepalive(10);
+            int64_t lid = KeepAlive->Lease();
+
+            std::string key = std::string("/matching-engines/") + symbol;
+
+            etcdClient->set(key,
+                            nlohmann::json({ { "addr", listen },
+                                             { "asset_id", std::atoi(symbol) },
+                                             { "status", "active" } })
+                                .dump(),
+                            lid);
+        }
+
     public:
         MatchingEngine(const size_t queueSize,
                        const size_t skipListNodesPoolSize,
@@ -57,11 +88,22 @@ namespace MarketExecution
                      nb_fds)
         {}
 
+        ~MatchingEngine()
+        {
+            if (KeepAlive)
+            {
+                KeepAlive->Cancel();
+            }
+        }
+
         void StartMatchingEngine(void)
         {
-            std::thread matchingThread(&BidAsk<FHMSize, SkipListMaxLevel,
-                                               BatchSize>::MarketExecutionLoop,
-                                       &OrderBook);
+            etcdClientSetUp();
+
+            std::thread matchingThread(
+                &BidAsk<FHMSize, SkipListMaxLevel, BatchSize,
+                        OrderMapSize>::MarketExecutionLoop,
+                &OrderBook);
             std::thread serverThread(&EpollServer<BatchSize>::startServer,
                                      &Server);
 

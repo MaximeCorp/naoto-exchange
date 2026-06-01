@@ -1,6 +1,7 @@
 CC=g++
 
 CFLAGS= -std=c++20 -Wall -Werror -Wextra -Iinclude -fsanitize=address
+LDFLAGS = -letcd-cpp-api -lgrpc++ -lgrpc -lprotobuf -lcpprest -lssl -lcrypto -lz -lpthread
 
 SRC=$(shell find . -type f -name '*.cpp')
 OBJ=$(patsubst %.cpp,%.o,$(SRC))

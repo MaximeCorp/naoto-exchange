@@ -2,7 +2,6 @@
 
 #include <chrono>
 #include <iostream>
-
 namespace Gateways
 {
 #pragma pack(push, 1)
@@ -16,15 +15,8 @@ namespace Gateways
         BUY,
         SELL
     };
-    enum class OrderStatus : std::int32_t
-    {
-        ACCEPTED,
-        REJECTED,
-        EXECUTED,
-        CANCELLED
-    };
 
-    constexpr size_t MAX_KEY_LEN = 10;
+    const size_t MAX_KEY_LEN = 25;
 
     struct Order
     {
@@ -32,41 +24,38 @@ namespace Gateways
         char Key[MAX_KEY_LEN];
         OrderType Type;
         OrderSide Side;
-        OrderStatus Status;
-        float Price;
+        std::int64_t Price;
         std::int32_t ClientId;
-        float Amount;
-        std::uint16_t Asset;
+        std::uint32_t Amount;
+        std::int32_t Asset;
         std::int64_t Timestamp;
 
     public:
         Order();
-        Order(const char *key, OrderType type, OrderSide side, float price,
-              std::int32_t client_id, float amount, std::int32_t asset,
-              std::int64_t timestamp);
         Order(const char *key, OrderType type, OrderSide side,
-              std::int32_t client_id, float amount, std::int32_t asset,
+              std::int64_t price, std::int32_t client_id, std::uint32_t amount,
+              std::int32_t asset, std::int64_t timestamp);
+        Order(const char *key, OrderType type, OrderSide side,
+              std::int32_t client_id, std::uint32_t amount, std::int32_t asset,
               std::int64_t timestamp);
         ~Order() = default;
 
-        [[nodiscard]] char *getKey() const;
-        [[nodiscard]] OrderType getType() const;
-        [[nodiscard]] OrderSide getSide() const;
-        [[nodiscard]] OrderSide getSide() const;
-        [[nodiscard]] float getPrice() const;
-        [[nodiscard]] std::int32_t getClientId() const;
-        [[nodiscard]] float getAmount() const;
-        [[nodiscard]] std::uint16_t getAsset() const;
-        [[nodiscard]] std::int64_t getTimestamp() const;
+        const char *getKey() const;
+        const OrderType &getType() const;
+        const OrderSide &getSide() const;
+        const std::int64_t &getPrice() const;
+        const std::int32_t &getClientId() const;
+        const std::uint32_t &getAmount() const;
+        const int &getAsset() const;
+        const std::int64_t &getTimestamp() const;
 
-        void setAmount(const float amout);
-        void setType(const OrderType type);
-        void setSide(const OrderSide side);
-        void setStatus(const OrderStatus status);
-        void setPrice(const float price);
-        void setClientId(const std::int32_t clientId);
-        void setAsset(const std::uint16_t asset);
-        void setTimestamp(const std::int64_t timestamp);
+        void setAmount(std::uint32_t amout);
+        void setType(OrderType type);
+        void setSide(OrderSide side);
+        void setPrice(std::int64_t price);
+        void setClientId(std::int32_t clientId);
+        void setAsset(std::int32_t asset);
+        void setTimestamp(std::int64_t timestamp);
 
         void log() const;
     };

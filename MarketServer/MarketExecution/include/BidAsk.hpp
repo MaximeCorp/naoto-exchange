@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Asset.hpp>
+#include <FlatHashMap.hpp>
 #include <Order.hpp>
 #include <OrderBatch.hpp>
 #include <OrderBook.hpp>
@@ -13,7 +14,8 @@
 
 namespace MarketExecution
 {
-    template <size_t FHMSize, size_t SkipListMaxLevel, size_t BatchSize>
+    template <size_t FHMSize, size_t SkipListMaxLevel, size_t BatchSize,
+              size_t OrderMapSize>
     class BidAsk
     {
         using OrdersQueue = moodycamel::BlockingReaderWriterCircularBuffer<
@@ -32,6 +34,8 @@ namespace MarketExecution
         UnsafeStoragePool<OrderNode> OrderNodePool;
         UnsafeStoragePool<PriceLevel> PriceLevelPool;
 
+        FlatHashMap<uint64_t, OrderNode *, OrderMapSize> OrderMap;
+
         OrderBook<FHMSize, SkipListMaxLevel, std::greater<int64_t>> Bid;
         OrderBook<FHMSize, SkipListMaxLevel> Ask;
 
@@ -46,6 +50,26 @@ namespace MarketExecution
                 is_buy ? (price >= BestAskPrice) : (price <= BestBidPrice);
 
             return is_market || limit_marketable;
+        }
+
+        template <OrderSide side>
+        void CancelOrder(Order &order) noexcept
+        {
+            OrderNode *toCancel = OrderMap.GetVal(order.getKey());
+
+            if (!toCancel) [[unlikely]]
+            {
+                return;
+            }
+
+            if constexpr (side == OrderSide::BUY)
+            {
+                Bid.DeleteOrder(toCancel);
+            }
+            else
+            {
+                Ask.DeleteOrder(toCancel);
+            }
         }
 
         void FillBuyOrder(Order &order) noexcept
