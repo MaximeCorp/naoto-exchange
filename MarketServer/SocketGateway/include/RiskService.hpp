@@ -204,9 +204,26 @@ namespace Gateways
                 std::cerr << "KeepAlive active\n";
             }
 
+            auto existing = etcdClient->ls("/matching-engines/");
+            for (auto &kv : existing.values())
+            {
+                auto val = nlohmann::json::parse(kv.as_string());
+                const std::string curAddr = val["addr"];
+                uint32_t symbol_id = val["asset_id"].get<uint32_t>();
+
+                std::cout << "Found matching engine " << symbol_id << "\n";
+                int32_t fd = connectMatchingEngines(curAddr);
+                if (fd != -1)
+                {
+                    MatchingEngines[symbol_id].SwitchFd(fd);
+                }
+            }
+
+            int64_t revision = existing.index();
+
             std::string engine_addr;
             etcdWatcher = std::make_unique<etcd::Watcher>(
-                *etcdClient, "/matching-engines/",
+                *etcdClient, "/matching-engines/", revision + 1,
                 [this](etcd::Response resp) { this->etcdOnResponse(resp); },
                 true);
         }
