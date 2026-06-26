@@ -1,6 +1,5 @@
 #pragma once
 
-#include <OrderBuffer.hpp>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>

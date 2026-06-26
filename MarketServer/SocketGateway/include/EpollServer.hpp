@@ -1,9 +1,9 @@
 #pragma once
 
 #include <FileDescriptorsOps.hpp>
+#include <ObjectBatch.hpp>
+#include <ObjectBuffer.hpp>
 #include <Order.hpp>
-#include <OrderBatch.hpp>
-#include <OrderBuffer.hpp>
 #include <ReaderWriterCircularBuffer.hpp>
 #include <StoragePool.hpp>
 #include <atomic>
@@ -18,11 +18,11 @@
 
 namespace Gateways
 {
-    template <size_t BatchSize>
+    template <typename T, size_t BatchSize>
     class EpollServer
     {
-        using OrderQueue = moodycamel::BlockingReaderWriterCircularBuffer<
-            OrderBatch<BatchSize> *>;
+        using ObjectQueue = moodycamel::BlockingReaderWriterCircularBuffer<
+            ObjectBatch<T, BatchSize> *>;
 
     private:
         int ListenFd;
@@ -32,9 +32,9 @@ namespace Gateways
         const int MaxEvents;
         const int MaxPending;
 
-        std::vector<OrderBuffer> Buffers;
-        StoragePool<OrderBatch<BatchSize>> &Pool;
-        alignas(64) OrderQueue &Orders;
+        std::vector<ObjectBuffer<T>> Buffers;
+        StoragePool<ObjectBatch<T, BatchSize>> &Pool;
+        alignas(64) ObjectQueue &Orders;
 
         inline void setNonBlocking(const int fd) noexcept
         {
@@ -88,8 +88,8 @@ namespace Gateways
 
             if (event.events & EPOLLIN)
             {
-                OrderBatch<BatchSize> *batch = nullptr;
-                OrderBuffer &buffer = Buffers[curFd];
+                ObjectBatch<T, BatchSize> *batch = nullptr;
+                ObjectBuffer<T> &buffer = Buffers[curFd];
 
                 std::cout << "Content of buffer:\n";
 
@@ -208,8 +208,8 @@ namespace Gateways
 
     public:
         EpollServer(const int port, const int maxEvents, const int maxPending,
-                    StoragePool<OrderBatch<BatchSize>> &pool,
-                    OrderQueue &orders, const int clientStatesUpdateFd,
+                    StoragePool<ObjectBatch<T, BatchSize>> &pool,
+                    ObjectQueue &orders, const int clientStatesUpdateFd,
                     const size_t nb_fds)
             : ClientStatesUpdateFd(clientStatesUpdateFd)
             , Port(port)
@@ -223,8 +223,8 @@ namespace Gateways
         }
 
         EpollServer(const int port, const int maxEvents, const int maxPending,
-                    StoragePool<OrderBatch<BatchSize>> &pool,
-                    const int clientStatesUpdateFd, OrderQueue &orders)
+                    StoragePool<ObjectBatch<T, BatchSize>> &pool,
+                    const int clientStatesUpdateFd, ObjectQueue &orders)
             : ClientStatesUpdateFd(clientStatesUpdateFd)
             , Port(port)
             , MaxEvents(maxEvents)

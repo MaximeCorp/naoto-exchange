@@ -1,22 +1,20 @@
 #pragma once
 
-#include <Order.hpp>
+#include <array>
 #include <cstring>
-#include <vector>
 
 namespace MarketExecution
 {
-    class OrderBuffer
+    template <typename T>
+    class ObjectBuffer
     {
     public:
-        std::vector<char> Buffer;
+        std::array<char, sizeof(T)> Buffer;
         size_t BufferSize;
 
-        OrderBuffer(void)
+        ObjectBuffer(void)
             : BufferSize(0)
-        {
-            Buffer.resize(sizeof(Order));
-        }
+        {}
 
         void clearBuffer(void) noexcept
         {
@@ -27,8 +25,7 @@ namespace MarketExecution
         // Size should be modulo sizeof(Order)
         void addBytes(Order *ptr, size_t size) noexcept
         {
-            if ((BufferSize + size > sizeof(Order)) | (ptr == nullptr))
-                [[unlikely]]
+            if (BufferSize + size > sizeof(Order)) [[unlikely]]
             {
                 // Might have to terminate
                 return;

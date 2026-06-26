@@ -4,8 +4,8 @@
 
 namespace MarketExecution
 {
-    template <size_t BatchSize>
-    void EpollServer<BatchSize>::initSocket()
+    template <typename T, size_t BatchSize>
+    void EpollServer<T, BatchSize>::initSocket()
     {
         struct sockaddr_in server_addr;
 

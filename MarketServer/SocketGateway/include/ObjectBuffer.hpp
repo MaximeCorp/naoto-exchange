@@ -1,22 +1,20 @@
 #pragma once
 
-#include <Order.hpp>
+#include <array>
 #include <cstring>
-#include <vector>
 
 namespace Gateways
 {
-    class OrderBuffer
+    template <typename T>
+    class ObjectBuffer
     {
     public:
-        std::vector<char> Buffer;
+        std::array<char, sizeof(T)> Buffer;
         size_t BufferSize;
 
-        OrderBuffer(void)
+        ObjectBuffer(void)
             : BufferSize(0)
-        {
-            Buffer.resize(sizeof(Order));
-        }
+        {}
 
         void clearBuffer(void) noexcept
         {

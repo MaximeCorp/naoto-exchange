@@ -1,9 +1,8 @@
 #pragma once
 
 #include <FileDescriptorsOps.hpp>
-#include <Order.hpp>
-#include <OrderBatch.hpp>
-#include <OrderBuffer.hpp>
+#include <ObjectBatch.hpp>
+#include <ObjectBuffer.hpp>
 #include <ReaderWriterCircularBuffer.hpp>
 #include <StoragePool.hpp>
 #include <atomic>
@@ -18,22 +17,23 @@
 
 namespace MarketExecution
 {
-    template <size_t BatchSize>
+    template <typename T, size_t BatchSize>
     class EpollServer
     {
-        using OrderQueue = moodycamel::BlockingReaderWriterCircularBuffer<
-            OrderBatch<BatchSize> *>;
+        using ObjectQueue = moodycamel::BlockingReaderWriterCircularBuffer<
+            ObjectBatch<T, BatchSize> *>;
 
     private:
         int ListenFd;
         int EpollFd;
+        int ClientStatesUpdateFd;
         const int Port;
         const int MaxEvents;
         const int MaxPending;
 
-        std::vector<OrderBuffer> Buffers;
-        StoragePool<OrderBatch<BatchSize>> &Pool;
-        alignas(64) OrderQueue &Orders;
+        std::vector<ObjectBuffer<T>> Buffers;
+        StoragePool<ObjectBatch<T, BatchSize>> &Pool;
+        alignas(64) ObjectQueue &Orders;
 
         inline void setNonBlocking(const int fd) noexcept
         {
@@ -87,8 +87,8 @@ namespace MarketExecution
 
             if (event.events & EPOLLIN)
             {
-                OrderBatch<BatchSize> *batch = nullptr;
-                OrderBuffer &buffer = Buffers[curFd];
+                ObjectBatch<T, BatchSize> *batch = nullptr;
+                ObjectBuffer<T> &buffer = Buffers[curFd];
 
                 std::cout << "Content of buffer:\n";
 
@@ -207,8 +207,8 @@ namespace MarketExecution
 
     public:
         EpollServer(const int port, const int maxEvents, const int maxPending,
-                    StoragePool<OrderBatch<BatchSize>> &pool,
-                    OrderQueue &orders, const size_t nb_fds)
+                    StoragePool<ObjectBatch<T, BatchSize>> &pool,
+                    ObjectQueue &orders, const size_t nb_fds)
             : Port(port)
             , MaxEvents(maxEvents)
             , MaxPending(maxPending)
@@ -220,8 +220,8 @@ namespace MarketExecution
         }
 
         EpollServer(const int port, const int maxEvents, const int maxPending,
-                    StoragePool<OrderBatch<BatchSize>> &pool,
-                    OrderQueue &orders)
+                    StoragePool<ObjectBatch<T, BatchSize>> &pool,
+                    ObjectQueue &orders)
             : Port(port)
             , MaxEvents(maxEvents)
             , MaxPending(maxPending)
@@ -234,7 +234,6 @@ namespace MarketExecution
 
         void startServer(void) noexcept
         {
-            std::cout << "listening on" << Port << "\n";
             std::vector<struct epoll_event> events(MaxEvents);
 
             while (true)

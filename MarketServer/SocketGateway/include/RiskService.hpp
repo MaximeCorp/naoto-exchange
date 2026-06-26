@@ -22,13 +22,13 @@ namespace Gateways
     class RiskService
     {
         using OrderQueue = moodycamel::BlockingReaderWriterCircularBuffer<
-            OrderBatch<BatchSize> *>;
+            ObjectBatch<Order, BatchSize> *>;
 
     private:
         ClientStates
             &clientStates; // Only for read (another object will write in it)
 
-        StoragePool<OrderBatch<BatchSize>> &OrdersPool;
+        StoragePool<ObjectBatch<Order, BatchSize>> &OrdersPool;
         std::array<FdGen, MaxAsset> MatchingEngines;
         OrderQueue &Orders;
         std::shared_ptr<etcd::KeepAlive> KeepAlive;
@@ -230,7 +230,7 @@ namespace Gateways
 
         void consumeOrder(void) noexcept
         {
-            OrderBatch<BatchSize> *to_check = nullptr;
+            ObjectBatch<Order, BatchSize> *to_check = nullptr;
 
             if (Orders.try_dequeue(to_check)) [[likely]]
             {
@@ -318,7 +318,7 @@ namespace Gateways
         }
 
     public:
-        RiskService(StoragePool<OrderBatch<BatchSize>> &ordersPool,
+        RiskService(StoragePool<ObjectBatch<Order, BatchSize>> &ordersPool,
                     OrderQueue &orders, ClientStates &clientStates)
             : clientStates(clientStates)
             , OrdersPool(ordersPool)

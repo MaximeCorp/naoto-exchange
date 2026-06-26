@@ -18,14 +18,14 @@ namespace MarketExecution
     class MatchingEngine
     {
         using OrdersQueue = moodycamel::BlockingReaderWriterCircularBuffer<
-            OrderBatch<BatchSize> *>;
+            ObjectBatch<Order, BatchSize> *>;
 
     private:
         OrdersQueue IncomingOrders;
         OrdersQueue OutgoingOrders;
-        StoragePool<OrderBatch<BatchSize>> OrdersPool;
+        StoragePool<ObjectBatch<Order, BatchSize>> OrdersPool;
         BidAsk<FHMSize, SkipListMaxLevel, BatchSize, OrderMapSize> OrderBook;
-        EpollServer<BatchSize> Server;
+        EpollServer<Order, BatchSize> Server;
 
         std::shared_ptr<etcd::KeepAlive> KeepAlive;
         std::unique_ptr<etcd::SyncClient> etcdClient;
@@ -104,8 +104,8 @@ namespace MarketExecution
                 &BidAsk<FHMSize, SkipListMaxLevel, BatchSize,
                         OrderMapSize>::MarketExecutionLoop,
                 &OrderBook);
-            std::thread serverThread(&EpollServer<BatchSize>::startServer,
-                                     &Server);
+            std::thread serverThread(
+                &EpollServer<Order, BatchSize>::startServer, &Server);
 
             setAffinity(matchingThread, 5);
             setAffinity(serverThread, 6);

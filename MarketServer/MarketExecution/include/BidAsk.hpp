@@ -2,8 +2,8 @@
 
 #include <Asset.hpp>
 #include <FlatHashMap.hpp>
+#include <ObjectBatch.hpp>
 #include <Order.hpp>
-#include <OrderBatch.hpp>
 #include <OrderBook.hpp>
 #include <OrderNode.hpp>
 #include <ReaderWriterCircularBuffer.hpp>
@@ -19,7 +19,7 @@ namespace MarketExecution
     class BidAsk
     {
         using OrdersQueue = moodycamel::BlockingReaderWriterCircularBuffer<
-            OrderBatch<BatchSize> *>;
+            ObjectBatch<Order, BatchSize> *>;
 
     private:
         uint32_t MarketAssetId;
@@ -30,7 +30,7 @@ namespace MarketExecution
         OrdersQueue &IncomingOrders;
         OrdersQueue
             &OutgoingMarketUpdates; // Might wanna create proper object for this
-        StoragePool<OrderBatch<BatchSize>> &OrdersPool;
+        StoragePool<ObjectBatch<Order, BatchSize>> &OrdersPool;
         UnsafeStoragePool<OrderNode> OrderNodePool;
         UnsafeStoragePool<PriceLevel> PriceLevelPool;
 
@@ -248,7 +248,7 @@ namespace MarketExecution
     public:
         BidAsk(const std::uint32_t assetId, const std::int64_t initialPrice,
                OrdersQueue &incoming, OrdersQueue &outgoing,
-               StoragePool<OrderBatch<BatchSize>> &pool,
+               StoragePool<ObjectBatch<Order, BatchSize>> &pool,
                const size_t orderNodePoolSize,
                const size_t skipListNodesPoolSize)
             : MarketAssetId(assetId)
@@ -270,7 +270,7 @@ namespace MarketExecution
         {
             while (true)
             {
-                OrderBatch<BatchSize> *batch = nullptr;
+                ObjectBatch<Order, BatchSize> *batch = nullptr;
 
                 if (IncomingOrders.try_dequeue(batch)) [[likely]]
                 {

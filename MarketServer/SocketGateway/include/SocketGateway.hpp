@@ -4,8 +4,8 @@
 #include <ClientStatesInjector.hpp>
 #include <EpollServer.hpp>
 #include <FileDescriptorsOps.hpp>
+#include <ObjectBatch.hpp>
 #include <Order.hpp>
-#include <OrderBatch.hpp>
 #include <ReaderWriterCircularBuffer.hpp>
 #include <RiskService.hpp>
 #include <netinet/tcp.h>
@@ -18,16 +18,16 @@ namespace Gateways
     class SocketGateway
     {
         using OrdersQueue = moodycamel::BlockingReaderWriterCircularBuffer<
-            OrderBatch<BatchSize> *>;
+            ObjectBatch<Order, BatchSize> *>;
 
     private:
         int ClientStatesUpdatesFd;
-        EpollServer<BatchSize> Server;
+        EpollServer<Order, BatchSize> Server;
         ClientStates ClientsInfo;
         RiskService<BatchSize, MaxAsset> Risk;
         ClientStatesInjector ClientsInfoInjector;
 
-        StoragePool<OrderBatch<BatchSize>> OrdersPool;
+        StoragePool<ObjectBatch<Order, BatchSize>> OrdersPool;
         OrdersQueue IncomingOrders;
 
         void setAffinity(std::thread &t, const int core_id)
@@ -118,8 +118,8 @@ namespace Gateways
         {
             std::thread riskThread(&RiskService<BatchSize, MaxAsset>::startLoop,
                                    &Risk);
-            std::thread serverThread(&EpollServer<BatchSize>::startServer,
-                                     &Server);
+            std::thread serverThread(
+                &EpollServer<Order, BatchSize>::startServer, &Server);
 
             setAffinity(riskThread, 2); // Hard coded for local tests
             setAffinity(serverThread, 4);

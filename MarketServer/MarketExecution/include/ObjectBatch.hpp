@@ -1,26 +1,26 @@
 #pragma once
 
-#include <Order.hpp>
 #include <array>
+#include <cstddef>
 #include <cstdint>
 
-namespace Gateways
+namespace MarketExecution
 {
-    template <size_t BatchSize>
-    class OrderBatch
+    template <typename T, size_t BatchSize>
+    class ObjectBatch
     {
     public:
-        alignas(64) std::array<Order, BatchSize> Data;
+        alignas(64) std::array<T, BatchSize> Data;
 
     private:
         alignas(64) size_t Size = 0;
         alignas(64) std::uint32_t Fd = 0;
 
     public:
-        OrderBatch(void) = default;
+        ObjectBatch(void) = default;
 
-        OrderBatch(OrderBatch &&) = default;
-        OrderBatch &operator=(OrderBatch &&) = default;
+        ObjectBatch(ObjectBatch &&) = default;
+        ObjectBatch &operator=(ObjectBatch &&) = default;
 
         inline void setSize(size_t size) noexcept
         {
@@ -42,14 +42,14 @@ namespace Gateways
             return Fd;
         }
 
-        [[nodiscard]] inline Order &operator[](size_t idx) noexcept
+        [[nodiscard]] T &operator[](size_t idx) noexcept
         {
             return Data[idx];
         }
 
-        [[nodiscard]] inline const Order &operator[](size_t idx) const noexcept
+        [[nodiscard]] const T &operator[](size_t idx) const noexcept
         {
             return Data[idx];
         }
     };
-} // namespace Gateways
+} // namespace MarketExecution
