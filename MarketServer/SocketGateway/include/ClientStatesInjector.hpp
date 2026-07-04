@@ -15,12 +15,14 @@
 
 namespace Gateways
 {
-    using UpdateQueue =
-        moodycamel::BlockingReaderWriterCircularBuffer<ClientStatesUpdate *>;
+    template <size_t MaxPositions>
     class ClientStatesInjector
     {
+        using UpdateQueue = moodycamel::BlockingReaderWriterCircularBuffer<
+            ClientStatesUpdate *>;
+
     private:
-        ClientStates &ClientInfos;
+        ClientStates<MaxPositions> &ClientInfos;
         ska::flat_hash_map<std::int32_t, std::uint32_t> clientIdToFd;
 
         // UpdateQueue &MarketUpdatesQueue;
@@ -59,7 +61,7 @@ namespace Gateways
         }
 
     public:
-        ClientStatesInjector(ClientStates &clientInfos,
+        ClientStatesInjector(ClientStates<MaxPositions> &clientInfos,
                              const int clientStatesFd,
                              const std::string &MarketUpdatesIp,
                              const int MarketUpdatesPort)

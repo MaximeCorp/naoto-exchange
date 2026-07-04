@@ -4,14 +4,15 @@ import (
 	"log"
 	"net/http"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"database/sql"
 	"github.com/golang-jwt/jwt/v5"
-	_ "github.com/lib/pq"
-	"golang.org/x/crypto/bcrypt"
+	"github.com/lib/pq"
 )
 
 type Claims struct {
@@ -223,23 +224,17 @@ func loginHandler(c *gin.Context) {
 }
 
 func GenerateNewSecretKey(length int) (string, string, error) {
-	b := make([]byte, length) 
-
-	_, err := rand.Read(b) 
-	if err != nil {
-		return "", "", err
-	}
-
-	key := base64.URLEncoding.EncodeToString(b)
-	
-	hashedKeyBytes, err := bcrypt.GenerateFromPassword([]byte(key), bcrypt.DefaultCost)
+    b := make([]byte, length)
+    _, err := rand.Read(b)
     if err != nil {
         return "", "", err
     }
 
-    hashedKey := string(hashedKeyBytes)
+    key := base64.URLEncoding.EncodeToString(b)
+    hash := sha256.Sum256([]byte(key))
+    hashedKey := hex.EncodeToString(hash[:])
 
-	return hashedKey, key, nil 
+    return hashedKey, key, nil
 }
 
 func insertAPIKEY(userId string, keyName string, keyHash string, keyPref string) (error) {

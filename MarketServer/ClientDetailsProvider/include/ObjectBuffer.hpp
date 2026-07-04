@@ -3,7 +3,7 @@
 #include <array>
 #include <cstring>
 
-namespace Gateways
+namespace ClientDetailsProvider
 {
     template <typename T>
     class ObjectBuffer
@@ -35,4 +35,4 @@ namespace Gateways
             BufferSize += size;
         }
     };
-} // namespace Gateways
+} // namespace ClientDetailsProvider

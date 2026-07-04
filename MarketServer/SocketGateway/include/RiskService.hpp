@@ -18,14 +18,14 @@
 
 namespace Gateways
 {
-    template <size_t BatchSize, size_t MaxAsset>
+    template <size_t BatchSize, size_t MaxAsset, size_t MaxPositions>
     class RiskService
     {
         using OrderQueue = moodycamel::BlockingReaderWriterCircularBuffer<
             ObjectBatch<Order, BatchSize> *>;
 
     private:
-        ClientStates
+        ClientStates<MaxPositions>
             &clientStates; // Only for read (another object will write in it)
 
         StoragePool<ObjectBatch<Order, BatchSize>> &OrdersPool;
@@ -230,31 +230,31 @@ namespace Gateways
 
         void consumeOrder(void) noexcept
         {
-            ObjectBatch<Order, BatchSize> *to_check = nullptr;
+            ObjectBatch<Order, BatchSize> *curBatch = nullptr;
 
-            if (Orders.try_dequeue(to_check)) [[likely]]
+            if (Orders.try_dequeue(curBatch)) [[likely]]
             {
                 std::cout << "Received order batch of size "
-                          << to_check->getSize() << " at risk service\n";
+                          << curBatch->getSize() << " at risk service\n";
 
-                for (size_t i = 0; i < to_check->getSize(); ++i)
+                for (size_t i = 0; i < curBatch->getSize(); ++i)
                 {
-                    const Order &cur_order = (*to_check)[i];
+                    const Order &curOrder = (*curBatch)[i];
 
-                    cur_order.log();
+                    curOrder.log();
 
-                    if (clientStates.can_spend(to_check->getFd(),
-                                               cur_order.getAmount()))
-                        [[likely]]
+                    if (clientStates.can_spend(curBatch->getFd(),
+                                               curOrder.getAmount(),
+                                               curOrder.getAsset())) [[likely]]
                     {
-                        if (cur_order.getAsset() >= (int32_t)MaxAsset)
+                        if (curOrder.getAsset() >= (int32_t)MaxAsset)
                             [[unlikely]]
                         {
                             std::cout << "refused because of max asset\n";
                             // Handle order rejection
                             continue;
                         }
-                        FdGen &curSlot = MatchingEngines[cur_order.getAsset()];
+                        FdGen &curSlot = MatchingEngines[curOrder.getAsset()];
                         uint64_t curVal =
                             curSlot.load(std::memory_order_relaxed);
 
@@ -266,7 +266,7 @@ namespace Gateways
                         if (curFd == -1) [[unlikely]]
                         {
                             std::cout << "no matching engine at asset id "
-                                      << cur_order.getAsset() << "\n";
+                                      << curOrder.getAsset() << "\n";
                             continue;
                         }
 
@@ -275,8 +275,8 @@ namespace Gateways
                         // this by closing fd after making sure the sender has
                         // seen the new fd
 
-                        ssize_t sent = send(curFd, &cur_order, sizeof(Order),
-                                            MSG_NOSIGNAL);
+                        ssize_t sent =
+                            send(curFd, &curOrder, sizeof(Order), MSG_NOSIGNAL);
 
                         std::cerr << "Sending order to fd " << curFd
                                   << ", size=" << sizeof(Order)
@@ -306,7 +306,7 @@ namespace Gateways
                     }
                 }
 
-                if (!OrdersPool.release(to_check))
+                if (!OrdersPool.release(curBatch))
                 {
                     perror("Failed mempool release.\n");
                 }
@@ -319,7 +319,8 @@ namespace Gateways
 
     public:
         RiskService(StoragePool<ObjectBatch<Order, BatchSize>> &ordersPool,
-                    OrderQueue &orders, ClientStates &clientStates)
+                    OrderQueue &orders,
+                    ClientStates<MaxPositions> &clientStates)
             : clientStates(clientStates)
             , OrdersPool(ordersPool)
             , Orders(orders)

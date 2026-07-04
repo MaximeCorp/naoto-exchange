@@ -3,8 +3,9 @@
 
 namespace Gateways
 {
-    [[nodiscard]] ClientStates make_fd_array(void)
+    template <size_t MaxPositions>
+    [[nodiscard]] ClientStates<MaxPositions> make_fd_array(void)
     {
-        return ClientStates(FileDescriptorsOps::getMaxFd());
+        return ClientStates<MaxPositions>(FileDescriptorsOps::getMaxFd());
     }
 } // namespace Gateways

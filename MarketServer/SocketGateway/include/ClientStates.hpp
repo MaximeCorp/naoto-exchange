@@ -1,106 +1,78 @@
 #pragma once
 
+#include <ClientState.hpp>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <iostream>
 #include <vector>
 
 namespace Gateways
 {
+    template <size_t MaxPositions>
     class ClientStates
     {
     private:
+        // Should switch to AoS -> Access per client, not per field
         // Id = 0 means slot not used
-        alignas(64) std::vector<std::uint32_t> Id;
-        // Confirmed amount of money
-        alignas(64) std::vector<std::int64_t> Confirmed1;
-        alignas(64) std::vector<std::int64_t> Confirmed2;
-        // Amount of money taking pending transactions into account
-        alignas(64) std::vector<std::int64_t> Attempt1;
-        alignas(64) std::vector<std::int64_t> Attempt2;
+
+        alignas(64) std::vector<ClientState<MaxPositions>> States1;
+        alignas(64) std::vector<ClientState<MaxPositions>> States2;
+
         // Fd is connected
         alignas(
             64) std::vector<char> Connected; // Always access with atomic_ref
-        // Which buffer (granular double buffer)
+        // Determine which buffer to read/write (granular double buffer)
         alignas(64) std::vector<char> Complete; // Always access with atomic_ref
 
     public:
         ClientStates(const size_t size)
         {
-            Id.resize(size, 0);
-            Confirmed1.resize(size, 0);
-            Attempt1.resize(size, 0);
-            Confirmed2.resize(size, 0);
-            Attempt2.resize(size, 0);
-            Connected.resize(size, 0);
-            Complete.resize(size, 0);
+            States1.resize(size);
+            States2.resize(size);
 
             std::cout << "Creating a Client States array of size " << size
                       << "\n";
         }
 
-        [[nodiscard]] std::uint32_t
-        get_client_id(const std::uint32_t fd) noexcept
-        {
-            return Id[fd];
-        }
-        [[nodiscard]] std::int64_t
-        get_confirmed(const std::uint32_t fd) noexcept
+        [[nodiscard]] int32_t get_client_id(const uint32_t fd) noexcept
         {
             return std::atomic_ref<char>(Complete[fd])
                        .load(std::memory_order_acquire)
-                ? Confirmed1[fd]
-                : Confirmed2[fd];
+                ? States1[fd].GetClientId()
+                : States2[fd].GetClientId();
         }
-        [[nodiscard]] std::int64_t get_attempt(const std::uint32_t fd) noexcept
+        [[nodiscard]] int64_t get_confirmed(const uint32_t fd,
+                                            const uint16_t assetId) noexcept
         {
             return std::atomic_ref<char>(Complete[fd])
                        .load(std::memory_order_acquire)
-                ? Attempt1[fd]
-                : Attempt2[fd];
+                ? States1[fd].GetAssetConfirmed(assetId)
+                : States2[fd].GetAssetConfirmed(assetId);
         }
-        void add_client(const std::uint32_t fd, const std::uint32_t id,
-                        const std::int64_t confirmed) noexcept
+        [[nodiscard]] int64_t get_attempt(const uint32_t fd,
+                                          const uint16_t assetId) noexcept
         {
-            Id[fd] = id;
-            std::vector<std::int64_t> &confirmed_buffer =
+            return std::atomic_ref<char>(Complete[fd])
+                       .load(std::memory_order_acquire)
+                ? States1[fd].GetAssetAttempt(assetId)
+                : States2[fd].GetAssetAttempt(assetId);
+        }
+        void add_client(const uint32_t fd,
+                        const ClientState<MaxPositions> *clientState) noexcept
+        {
+            ClientState<MaxPositions> *curClient =
                 std::atomic_ref<char>(Complete[fd])
                     .load(std::memory_order_acquire)
-                ? Confirmed1
-                : Confirmed2;
-            std::vector<std::int64_t> &attempt_buffer =
-                std::atomic_ref<char>(Complete[fd])
-                    .load(std::memory_order_acquire)
-                ? Attempt1
-                : Attempt2;
-            confirmed_buffer[fd] = confirmed;
-            attempt_buffer[fd] = 0;
+                ? &States2[fd]
+                : &States1[fd];
+
+            std::memcpy(clientState, curClient,
+                        sizeof(ClientState<MaxPositions>));
 
             std::atomic_ref<char>(Connected[fd])
                 .store(true, std::memory_order_release);
-        }
-
-        void add_client(const std::uint32_t fd, const std::uint32_t id,
-                        const std::int64_t confirmed,
-                        const std::int64_t attempt) noexcept
-        {
-            Id[fd] = id;
-            std::vector<std::int64_t> &confirmed_buffer =
-                std::atomic_ref<char>(Complete[fd])
-                    .load(std::memory_order_acquire)
-                ? Confirmed1
-                : Confirmed2;
-            std::vector<std::int64_t> &attempt_buffer =
-                std::atomic_ref<char>(Complete[fd])
-                    .load(std::memory_order_acquire)
-                ? Attempt1
-                : Attempt2;
-            confirmed_buffer[fd] = confirmed;
-            attempt_buffer[fd] = attempt;
-
-            std::atomic_ref<char>(Connected[fd])
-                .store(1, std::memory_order_release);
         }
 
         void remove_client(const std::uint32_t fd) noexcept
@@ -109,32 +81,44 @@ namespace Gateways
                 .store(0, std::memory_order_release);
         }
 
-        [[nodiscard]] bool can_spend(
-            const std::uint32_t fd,
-            const std::int64_t amount) // Not correct yet (needs the addition of
-                                       // local attempt for risk service)
+        [[nodiscard]] bool
+        can_spend(const std::uint32_t fd, const std::int64_t amount,
+                  const uint16_t assetId) // Not correct yet (needs the addition
+                                          // of local attempt for risk service)
         {
-            std::vector<std::int64_t> &confirmed_buffer =
+            const ClientState<MaxPositions> &curClient =
                 std::atomic_ref<char>(Complete[fd])
                     .load(std::memory_order_acquire)
-                ? Confirmed1
-                : Confirmed2;
-            std::vector<std::int64_t> &attempt_buffer =
-                std::atomic_ref<char>(Complete[fd])
-                    .load(std::memory_order_acquire)
-                ? Attempt1
-                : Attempt2;
-            std::cout << "checking client at fd " << fd << "\n";
-            if (amount >= 0
-                && amount <= confirmed_buffer[fd] - attempt_buffer[fd])
-                [[likely]]
+                ? States1[fd]
+                : States2[fd];
+
+            size_t assetIdx = 0;
+
+            while (curClient.GetAssetIdAt(assetIdx) != assetId
+                   && assetIdx < MaxPositions)
             {
-                return true;
+                ++assetIdx;
+            }
+
+            std::cout << "checking client at fd " << fd << "\n";
+
+            if (assetIdx >= MaxPositions) [[unlikely]]
+            {
+                return false;
+            }
+
+            int64_t curConfirmed = curClient.GetConfirmedAt(assetIdx);
+            int64_t curAttempt = curClient.GetAttemptAt(assetIdx);
+
+            if (amount <= 0 || amount > curConfirmed - curAttempt) [[unlikely]]
+            {
+                return false;
             }
 
             return true;
         }
     };
 
-    [[nodiscard]] ClientStates make_fd_array(void);
+    template <size_t MaxPositions>
+    [[nodiscard]] ClientStates<MaxPositions> make_fd_array(void);
 } // namespace Gateways

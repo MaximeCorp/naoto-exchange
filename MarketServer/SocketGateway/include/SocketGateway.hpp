@@ -14,7 +14,7 @@
 
 namespace Gateways
 {
-    template <size_t BatchSize, size_t MaxAsset>
+    template <size_t BatchSize, size_t MaxAsset, size_t MaxPositions>
     class SocketGateway
     {
         using OrdersQueue = moodycamel::BlockingReaderWriterCircularBuffer<
@@ -23,9 +23,9 @@ namespace Gateways
     private:
         int ClientStatesUpdatesFd;
         EpollServer<Order, BatchSize> Server;
-        ClientStates ClientsInfo;
-        RiskService<BatchSize, MaxAsset> Risk;
-        ClientStatesInjector ClientsInfoInjector;
+        ClientStates<MaxPositions> ClientsInfo;
+        RiskService<BatchSize, MaxAsset, MaxPositions> Risk;
+        ClientStatesInjector<MaxPositions> ClientsInfoInjector;
 
         StoragePool<ObjectBatch<Order, BatchSize>> OrdersPool;
         OrdersQueue IncomingOrders;
@@ -116,8 +116,9 @@ namespace Gateways
 
         void StartGateway(void)
         {
-            std::thread riskThread(&RiskService<BatchSize, MaxAsset>::startLoop,
-                                   &Risk);
+            std::thread riskThread(
+                &RiskService<BatchSize, MaxAsset, MaxPositions>::startLoop,
+                &Risk);
             std::thread serverThread(
                 &EpollServer<Order, BatchSize>::startServer, &Server);
 
