@@ -255,13 +255,15 @@ namespace Gateways
                             continue;
                         }
                         FdGen &curSlot = MatchingEngines[curOrder.getAsset()];
-                        uint64_t curVal =
-                            curSlot.load(std::memory_order_relaxed);
+                        uint64_t curVal = curSlot.load(
+                            std::memory_order_relaxed); // Relaxed because
+                                                        // memory dependancy
+                                                        // allows it
 
                         std::cout << "(int32_t)curVal is " << (int32_t)curVal
                                   << "\n";
 
-                        int32_t curFd = curVal;
+                        int32_t curFd = FdGen::Fd(curVal);
 
                         if (curFd == -1) [[unlikely]]
                         {
@@ -294,7 +296,7 @@ namespace Gateways
                         // edge case: send < sizeof(Order)
 
                         uint64_t newVal =
-                            curSlot.load(std::memory_order_release);
+                            curSlot.load(std::memory_order_acquire);
 
                         if (newVal != curVal) [[unlikely]]
                         {
