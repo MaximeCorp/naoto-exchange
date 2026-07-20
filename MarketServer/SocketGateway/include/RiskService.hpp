@@ -228,6 +228,58 @@ namespace Gateways
                 true);
         }
 
+        void SendOrder(const Order &curOrder) noexcept
+        {
+            FdGen &curSlot = MatchingEngines[curOrder.getAsset()];
+            uint64_t curVal =
+                curSlot.load(std::memory_order_relaxed); // Relaxed because
+                                                         // memory dependancy
+                                                         // allows it
+
+            std::cout << "(int32_t)curVal is " << (int32_t)curVal << "\n";
+
+            int32_t curFd = FdGen::Fd(curVal);
+
+            if (curFd == -1) [[unlikely]]
+            {
+                std::cout << "no matching engine at asset id "
+                          << curOrder.getAsset() << "\n";
+                continue;
+            }
+
+            // edge case: if fd gets closed then recycled by and the
+            // new fd is for client, then information leak, handle
+            // this by closing fd after making sure the sender has
+            // seen the new fd
+
+            ssize_t sent = send(curFd, &curOrder, sizeof(Order), MSG_NOSIGNAL);
+
+            std::cerr << "Sending order to fd " << curFd
+                      << ", size=" << sizeof(Order) << ", sent=" << sent
+                      << "\n";
+
+            if (sent < 0) [[unlikely]]
+            {
+                if (errno == EPIPE || errno == ECONNRESET)
+                {
+                    // handle order rejection
+                }
+                // reject order
+                continue;
+            }
+            // edge case: send < sizeof(Order)
+
+            uint64_t newVal = curSlot.load(std::memory_order_acquire);
+
+            if (newVal != curVal) [[unlikely]]
+            {
+                // Means the send was potentially sent to the wrong
+                // fd
+                // For later : push to the array / vector of
+                // messages to send again
+            }
+        }
+
         void consumeOrder(void) noexcept
         {
             ObjectBatch<Order, BatchSize> *curBatch = nullptr;
@@ -254,57 +306,8 @@ namespace Gateways
                             // Handle order rejection
                             continue;
                         }
-                        FdGen &curSlot = MatchingEngines[curOrder.getAsset()];
-                        uint64_t curVal = curSlot.load(
-                            std::memory_order_relaxed); // Relaxed because
-                                                        // memory dependancy
-                                                        // allows it
 
-                        std::cout << "(int32_t)curVal is " << (int32_t)curVal
-                                  << "\n";
-
-                        int32_t curFd = FdGen::Fd(curVal);
-
-                        if (curFd == -1) [[unlikely]]
-                        {
-                            std::cout << "no matching engine at asset id "
-                                      << curOrder.getAsset() << "\n";
-                            continue;
-                        }
-
-                        // edge case: if fd gets closed then recycled by and the
-                        // new fd is for client, then information leak, handle
-                        // this by closing fd after making sure the sender has
-                        // seen the new fd
-
-                        ssize_t sent =
-                            send(curFd, &curOrder, sizeof(Order), MSG_NOSIGNAL);
-
-                        std::cerr << "Sending order to fd " << curFd
-                                  << ", size=" << sizeof(Order)
-                                  << ", sent=" << sent << "\n";
-
-                        if (sent < 0) [[unlikely]]
-                        {
-                            if (errno == EPIPE || errno == ECONNRESET)
-                            {
-                                // handle order rejection
-                            }
-                            // reject order
-                            continue;
-                        }
-                        // edge case: send < sizeof(Order)
-
-                        uint64_t newVal =
-                            curSlot.load(std::memory_order_acquire);
-
-                        if (newVal != curVal) [[unlikely]]
-                        {
-                            // Means the send was potentially sent to the wrong
-                            // fd
-                            // For later : push to the array / vector of
-                            // messages to send again
-                        }
+                        SendOrder(curOrder);
                     }
                 }
 

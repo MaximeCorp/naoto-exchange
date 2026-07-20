@@ -7,7 +7,7 @@
 namespace ClientDetailsProvider
 {
     template <size_t MaxPositions>
-    class alignas(64) ClientState
+    struct alignas(64) ClientState
     {
     private:
         uint32_t ClientId;

@@ -189,10 +189,13 @@ namespace ClientDetailsProvider
                 int clientFd;
 
                 while ((clientFd =
-                            accept(ListenFd, (struct sockaddr *)&client_addr,
-                                   &client_len))
+                            accept4(ListenFd, (struct sockaddr *)&client_addr,
+                                    &client_len, SOCK_NONBLOCK))
                        != -1)
                 {
+                    int one = 1;
+                    setsockopt(clientFd, IPPROTO_TCP, TCP_NODELAY, &one,
+                               sizeof(one));
                     addClient(clientFd);
                 }
 

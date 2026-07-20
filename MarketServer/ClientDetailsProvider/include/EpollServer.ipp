@@ -22,8 +22,8 @@ namespace ClientDetailsProvider
         server_addr.sin_port = htons(Port);
 
         int opt = 1;
-        setsockopt(ListenFd, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt,
-                   sizeof(opt));
+        setsockopt(ListenFd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+        setsockopt(ListenFd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
 
         if (bind(ListenFd, (struct sockaddr *)&server_addr, sizeof(server_addr))
             == -1)

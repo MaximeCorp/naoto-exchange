@@ -18,6 +18,17 @@ namespace ClientDetailsProvider
         std::array<uint16_t, MaxPositions> AssetId;
         std::array<int64_t, MaxPositions> Confirmed;
         std::array<int64_t, MaxPositions> Attempt;
+
+        void Clear(void) noexcept
+        {
+            curResponse->Status = 'R';
+            curResponse->SequenceId = 0; // Handle sequence ID
+            curResponse->ClientId = clientId;
+            curResponse->ClientFd = 0;
+            curResponse->AssetId.fill(0);
+            curResponse->Confirmed.fill(0);
+            curResponse->Attempt.fill(0);
+        }
     };
 #pragma pack(pop)
 } // namespace ClientDetailsProvider
