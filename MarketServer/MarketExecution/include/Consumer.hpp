@@ -7,10 +7,10 @@ namespace MarketExecution
 {
     template <typename DerivedConsumer, typename T>
     concept HasHandle = requires(DerivedConsumer d, T *item) {
-        { d.handle(item) } -> std::same_as<void>;
+        { d.Handle(item) } -> std::same_as<void>;
     };
 
-    template <typename DerivedConsumer, typename T>
+    template <typename DerivedConsumer, typename T, size_t BatchSize = 0>
         requires HasHandle<DerivedConsumer, T>
     class Consumer
     {

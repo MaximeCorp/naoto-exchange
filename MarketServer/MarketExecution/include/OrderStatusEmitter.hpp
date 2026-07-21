@@ -6,13 +6,30 @@
 #include <StoragePool.hpp>
 #include <UdpMulticastEmitter.hpp>
 
-namespace MarketeExecution
+namespace MarketExecution
 {
-    class MarketUpdatesEmitter
+    class OrderStatusEmitter
         : public Consumer<MarketUpdatesEmitter, OrderStateReport>
         , public UdpMulticastEmitter<MarketUpdatesEmitter, OrderStateReport>
     {
-        void Handle(OrderStateReport *report)
+    public:
+        void Handle(OrderStateReport *report) noexcept
         {}
+
+        void StartLoop(void) noexcept
+        {
+            while (true)
+            {
+            }
+        }
     };
-} // namespace MarketeExecution
+
+    static int StartOrderStatusLoop(void *arg) noexcept
+    {
+        OrderStatusEmitter *emitter = static_cast<OrderStatusEmitter *>(arg);
+
+        emitter.StartLoop();
+
+        return 0;
+    }
+} // namespace MarketExecution

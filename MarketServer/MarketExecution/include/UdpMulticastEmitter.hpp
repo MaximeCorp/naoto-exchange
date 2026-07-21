@@ -14,5 +14,8 @@ namespace MarketExecution
     template <typename DeriverEmitter, typename T>
         requires HasSequenceId<T>
     class UdpMulticastEmitter
-    {};
+    {
+        void Send(const T *object) noexcept
+        {}
+    };
 } // namespace MarketExecution
