@@ -13,6 +13,10 @@ namespace MarketExecution
         , public UdpMulticastEmitter<MarketUpdatesEmitter, OrderStateReport>
     {
     public:
+        OrderStatusEmitter(const uint16_t portId, const uint16_t nbTxQueueSlots,
+                           const uint16_t queueId, const unsigned lcoreId)
+        {}
+
         void Handle(OrderStateReport *report) noexcept
         {}
 
