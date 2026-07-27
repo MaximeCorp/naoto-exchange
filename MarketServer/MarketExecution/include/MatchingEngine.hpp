@@ -2,6 +2,9 @@
 
 #include <BidAsk.hpp>
 #include <EpollServer.hpp>
+#include <MarketUpdates.hpp>
+#include <OrderBookUpdate.hpp>
+#include <OrderStateReport.hpp>
 #include <ReaderWriterCircularBuffer.hpp>
 #include <cstdlib>
 #include <etcd/KeepAlive.hpp>
@@ -19,13 +22,21 @@ namespace MarketExecution
     {
         using OrdersQueue = moodycamel::BlockingReaderWriterCircularBuffer<
             ObjectBatch<Order, BatchSize> *>;
+        using OrderStatesQueue =
+            moodycamel::BlockingReaderWriterCircularBuffer<OrderStateReport *>;
+        using OrderBookUpdatesQueue =
+            moodycamel::BlockingReaderWriterCircularBuffer<OrderBookUpdate *>;
 
     private:
         OrdersQueue IncomingOrders;
-        OrdersQueue OutgoingOrders;
+        OrderStatesQueue OutgoingOrders;
+        OrderBookUpdatesQueue OutgoingBook;
         StoragePool<ObjectBatch<Order, BatchSize>> OrdersPool;
+        StoragePool<OrderStateReport> OrderStatesPool;
+        StoragePool<OrderBookUpdate> OrderBookUpdatesPool;
         BidAsk<FHMSize, SkipListMaxLevel, BatchSize, OrderMapSize> OrderBook;
         EpollServer<Order, BatchSize> Server;
+        MarketUpdates<BatchSize> MarketUpdatesSender;
 
         std::shared_ptr<etcd::KeepAlive> KeepAlive;
         std::unique_ptr<etcd::SyncClient> etcdClient;
@@ -73,19 +84,33 @@ namespace MarketExecution
         }
 
     public:
-        MatchingEngine(const size_t queueSize,
+        MatchingEngine(int argc, char **argv, const size_t queueSize,
                        const size_t skipListNodesPoolSize,
                        const std::int32_t assetId,
                        const std::int64_t initialPrice, const int port,
                        const int maxEvents, const int maxPending,
-                       const size_t nb_fds, const size_t orderNodePoolSize)
+                       const size_t nb_fds, const size_t orderNodePoolSize,
+                       const uint16_t portId, const uint16_t nbTxQueueSlots,
+                       const size_t poolSize, const uint32_t srcIp,
+                       const uint16_t srcPort, const uint32_t dstOrderIp,
+                       const uint16_t dstOrderPort, const uint32_t dstBookIp,
+                       const uint16_t dstBookPort)
             : IncomingOrders(queueSize)
             , OutgoingOrders(queueSize)
+            , OutgoingBook(queueSize)
             , OrdersPool(queueSize)
+            , OrderStatesPool(queueSize)
+            , OrderBookUpdatesPool(queueSize)
             , OrderBook(assetId, initialPrice, IncomingOrders, OutgoingOrders,
-                        OrdersPool, orderNodePoolSize, skipListNodesPoolSize)
+                        OutgoingBook, OrdersPool, OrderStatesPool,
+                        OrderBookUpdatesPool, orderNodePoolSize,
+                        skipListNodesPoolSize)
             , Server(port, maxEvents, maxPending, OrdersPool, IncomingOrders,
                      nb_fds)
+            , MarketUpdatesSender(
+                  argc, argv, OutgoingOrders, OutgoingBook, OrderStatesPool,
+                  OrderBookUpdatesPool, portId, nbTxQueueSlots, poolSize, srcIp,
+                  srcPort, dstOrderIp, dstOrderPort, dstBookIp, dstBookPort)
         {}
 
         ~MatchingEngine()
@@ -98,6 +123,11 @@ namespace MarketExecution
 
         void StartMatchingEngine(void)
         {
+            assert(rte_lcore_id() == rte_get_main_lcore()
+                   && "StartMatchingEngine must run on the thread that "
+                      "constructed "
+                      "MatchingEngine (the DPDK main lcore)");
+
             etcdClientSetUp();
 
             std::thread matchingThread(
@@ -113,6 +143,8 @@ namespace MarketExecution
             pthread_setname_np(matchingThread.native_handle(),
                                "MatchineEngine");
             pthread_setname_np(serverThread.native_handle(), "EpollServer");
+
+            MarketUpdatesSender.StartEmittersLoop();
 
             matchingThread.join();
             serverThread.join();

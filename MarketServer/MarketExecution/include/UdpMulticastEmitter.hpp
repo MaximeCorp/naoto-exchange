@@ -23,12 +23,11 @@ namespace MarketExecution
 
     template <typename T>
     concept HasSequenceId = requires(T t) {
-        { t.SequenceId } -> std::same_as<uint32_t>;
+        { t.SequenceId } -> std::convertible_to<uint32_t>;
     };
 
-    template <typename DeriverEmitter, typename T, size_t MTU = 1500,
-              size_t BatchSize = 0>
-        requires HasSequenceId<T>
+    template <typename DeriverEmitter, typename T, size_t BatchSize = 0,
+              size_t MTU = 1500>
     class UdpMulticastEmitter
     {
         static constexpr size_t ObjectsPerPacket =
@@ -49,14 +48,14 @@ namespace MarketExecution
     protected:
         [[no_unique_address]] PacketsBuffer Packets;
         uint32_t SequenceId;
-        const uint16_t PortId;
-        const uint16_t QueueId;
-        const unsigned LcoreId;
+        uint16_t PortId;
+        uint16_t QueueId;
+        unsigned LcoreId;
         rte_mempool *Mempool;
-        const uint32_t SrcIp;
-        const uint32_t DstIp;
-        const uint16_t SrcPort;
-        const uint16_t DstPort;
+        uint32_t SrcIp;
+        uint32_t DstIp;
+        uint16_t SrcPort;
+        uint16_t DstPort;
         rte_ether_addr DstMac;
         rte_ether_addr SrcMac;
 
@@ -146,7 +145,7 @@ namespace MarketExecution
                             const uint16_t queueId, const unsigned lcoreId,
                             const char *poolName, const size_t poolSize,
                             const uint32_t srcIp, const uint32_t dstIp,
-                            uint16_t srcPort, uint16_t dstPort)
+                            const uint16_t srcPort, const uint16_t dstPort)
 
             : SequenceId(0)
             , PortId(portId)
@@ -181,8 +180,11 @@ namespace MarketExecution
             ipv4_multicast_to_mac(DstIp, &DstMac);
         }
 
-        void Send(T *const object) noexcept
+        void Send(T *object) noexcept
         {
+            static_assert(HasSequenceId<T>,
+                          "SequenceId field of T is missing.\n");
+
             object->SequenceId = SequenceId++;
 
             rte_mbuf *pkt = rte_pktmbuf_alloc(Mempool);
@@ -201,16 +203,20 @@ namespace MarketExecution
 
             uint16_t sent = rte_eth_tx_burst(PortId, QueueId, &pkt, 1);
 
+            std::cout << "sent " << sent << " packets via dpdk udp multicast\n";
+
             if (sent == 0) [[unlikely]]
             {
                 rte_pktmbuf_free(pkt);
             }
         }
 
-        void Send(const std::array<T *const, BatchSize> &buffer,
-                  size_t curSize) noexcept
+        void Send(std::array<T *, BatchSize> &buffer, size_t curSize) noexcept
             requires(BatchSize > 0)
         {
+            static_assert(HasSequenceId<T>,
+                          "SequenceId field of T is missing.\n");
+
             size_t curPacket = 0;
             size_t totalCopied = 0;
 
@@ -254,10 +260,17 @@ namespace MarketExecution
             uint16_t sent =
                 rte_eth_tx_burst(PortId, QueueId, &Packets[0], curPacket);
 
+            std::cout << "sent " << sent << " packets via dpdk udp multicast\n";
+
             if (sent < curPacket)
             {
                 rte_pktmbuf_free_bulk(&Packets[sent], curPacket - sent);
             }
+        }
+
+        [[nodiscard]] unsigned GetLcoreId(void) const noexcept
+        {
+            return LcoreId;
         }
     };
 

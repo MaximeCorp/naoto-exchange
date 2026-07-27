@@ -244,7 +244,7 @@ namespace Gateways
             {
                 std::cout << "no matching engine at asset id "
                           << curOrder.getAsset() << "\n";
-                continue;
+                return;
             }
 
             // edge case: if fd gets closed then recycled by and the
@@ -265,7 +265,7 @@ namespace Gateways
                     // handle order rejection
                 }
                 // reject order
-                continue;
+                return;
             }
             // edge case: send < sizeof(Order)
 

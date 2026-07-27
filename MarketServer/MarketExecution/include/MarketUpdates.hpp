@@ -1,6 +1,8 @@
 #pragma once
 
 #include <OrderBookEmitter.hpp>
+#include <OrderBookUpdate.hpp>
+#include <OrderStateReport.hpp>
 #include <OrderStatusEmitter.hpp>
 #include <cstddef>
 #include <cstring>
@@ -16,15 +18,29 @@
 
 namespace MarketExecution
 {
+    template <size_t BatchSize = 0>
     class MarketUpdates
     {
+        using OrdersQueue =
+            moodycamel::BlockingReaderWriterCircularBuffer<OrderStateReport *>;
+        using BookQueue =
+            moodycamel::BlockingReaderWriterCircularBuffer<OrderBookUpdate *>;
+
     private:
-        OrderBookEmitter BookEmitter;
-        OrderStatusEmitter StatusEmitter;
+        std::optional<OrderBookEmitter<BatchSize>> BookEmitter;
+        std::optional<OrderStatusEmitter<BatchSize>> StatusEmitter;
 
     public:
         // Must be called on a dedicated thread
-        MarketUpdates(uint16_t portId, int argc, char **argv)
+        MarketUpdates(int argc, char **argv, OrdersQueue &incomingOrderStates,
+                      BookQueue &incomingBookUpdates,
+                      StoragePool<OrderStateReport> &orderStatesPool,
+                      StoragePool<OrderBookUpdate> &orderBookUpdatesPool,
+                      const uint16_t portId, const uint16_t nbTxQueueSlots,
+                      const size_t poolSize, const uint32_t srcIp,
+                      const uint16_t srcPort, const uint32_t dstOrderIp,
+                      const uint16_t dstOrderPort, const uint32_t dstBookIp,
+                      const uint16_t dstBookPort)
         {
             int ret = rte_eal_init(argc, argv);
 
@@ -55,14 +71,18 @@ namespace MarketExecution
             {
                 if (lcoreId == mainLcore)
                 {
-                    BookEmitter =
-                        OrderBookEmitter(portId, assignedQueues, lcoreId);
-                    mainLcoreFound = true;
+                    BookEmitter.emplace(
+                        incomingBookUpdates, orderBookUpdatesPool, portId,
+                        nbTxQueueSlots, assignedQueues, lcoreId, "book_pool",
+                        poolSize, srcIp, dstBookIp, srcPort, dstBookPort);
+                    mainLcoreComing = false;
                 }
-                else if (assignedQueues + mainLcoreFound == 1)
+                else if (assignedQueues + mainLcoreComing == 1)
                 {
-                    StatusEmitter =
-                        OrderStatusEmitter(portId, assignedQueues, lcoreId);
+                    StatusEmitter.emplace(
+                        incomingOrderStates, orderStatesPool, portId,
+                        nbTxQueueSlots, assignedQueues, lcoreId, "status_pool",
+                        poolSize, srcIp, dstOrderIp, srcPort, dstOrderPort);
                 }
                 else
                 {
@@ -70,6 +90,12 @@ namespace MarketExecution
                 }
 
                 ++assignedQueues;
+            }
+
+            if (!BookEmitter || !StatusEmitter)
+            {
+                rte_exit(EXIT_FAILURE,
+                         "Not enough lcores to assign emitters\n");
             }
 
             ret = rte_eth_dev_start(portId);
@@ -82,29 +108,13 @@ namespace MarketExecution
 
         void StartEmittersLoop(void) noexcept
         {
-            const size_t mainLcore = rte_get_main_lcore();
+            rte_eal_remote_launch(StartOrderStatusLoop<BatchSize>,
+                                  &StatusEmitter.value(),
+                                  StatusEmitter->GetLcoreId());
 
-            size_t launchedEMitters = 0;
+            BookEmitter->StartLoop();
 
-            size_t lcoreId;
-            RTE_LCORE_FOREACH_WORKER(lcoreId)
-            {
-                if (launchedEmitters == 0)
-                {
-                    rte_eal_remote_launch(StartOrderStatusLoop, &StatusEmitter,
-                                          lcoreId);
-                }
-                else // No other emitter for now
-                {
-                    continue;
-                }
-
-                ++launchedEMitters;
-            }
-
-            BookEmitter.StartLoop();
-
-            ret = rte_eal_mp_wait_lcore();
+            rte_eal_mp_wait_lcore();
 
             rte_eal_cleanup();
         }

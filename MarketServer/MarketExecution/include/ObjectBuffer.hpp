@@ -6,9 +6,8 @@
 namespace MarketExecution
 {
     template <typename T>
-    class ObjectBuffer
+    struct ObjectBuffer
     {
-    public:
         std::array<char, sizeof(T)> Buffer;
         size_t BufferSize;
 
@@ -19,7 +18,6 @@ namespace MarketExecution
         void clearBuffer(void) noexcept
         {
             BufferSize = 0;
-            std::cout << "cleared\n";
         }
 
         // Size should be modulo sizeof(Order)

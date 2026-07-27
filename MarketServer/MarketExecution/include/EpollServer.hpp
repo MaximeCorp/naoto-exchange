@@ -90,15 +90,6 @@ namespace MarketExecution
                 ObjectBatch<T, BatchSize> *batch = nullptr;
                 ObjectBuffer<T> &buffer = Buffers[curFd];
 
-                std::cout << "Content of buffer:\n";
-
-                for (size_t i = 0; i < buffer.BufferSize; ++i)
-                {
-                    std::cout << buffer.Buffer[i];
-                }
-
-                std::cout << "\n";
-
                 ssize_t nread;
 
                 while (true)
@@ -122,13 +113,13 @@ namespace MarketExecution
                         curFd, (char *)(batch->Data.data()) + buffer.BufferSize,
                         sizeof(Order) * BatchSize - buffer.BufferSize);
 
-                    buffer.clearBuffer();
+                    std::cout << "received " << nread << " size of object is "
+                              << sizeof(T) << "\n";
 
                     if (nread <= 0) [[unlikely]]
                     {
-                        Pool.releaseCritical(batch);
-
-                        batch = nullptr;
+                        batch->setSize(0);
+                        Orders.try_enqueue(batch);
                         break;
                     }
 
@@ -139,6 +130,7 @@ namespace MarketExecution
 
                     batch->setSize(batchSize);
 
+                    buffer.clearBuffer();
                     buffer.addBytes(
                         batch->Data.data() + sizeof(Order) * batchSize,
                         bufferSize); // Double check if sizeof(Order) *
@@ -146,8 +138,12 @@ namespace MarketExecution
 
                     if (!Orders.try_enqueue(batch)) [[unlikely]]
                     {
-                        Pool.releaseCritical(batch);
-                        // Send error message to client
+                        // handle
+                    }
+                    else
+                    {
+                        std::cout << "push succesful, batch of size "
+                                  << batchSize << "\n\n";
                     }
 
                     if (batchSize <= 0)
@@ -162,7 +158,7 @@ namespace MarketExecution
 
                 if (batch != nullptr)
                 {
-                    Pool.releaseCritical(batch);
+                    // Pool.releaseCritical(batch);
                 }
 
                 if (nread == 0)

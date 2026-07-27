@@ -4,42 +4,18 @@
 #include <iostream>
 #include <sstream>
 
+#define IPV4(a, b, c, d)                                                       \
+    (((uint32_t)(a) << 24) | ((uint32_t)(b) << 16) | ((uint32_t)(c) << 8)      \
+     | (uint32_t)(d))
+
 using namespace MarketExecution;
 
-std::string ToEscapedString(const void *data, size_t size)
+int main(int argc, char **argv)
 {
-    std::stringstream ss;
-    const unsigned char *bytes = static_cast<const unsigned char *>(data);
-    for (size_t i = 0; i < size; ++i)
-    {
-        ss << "\\x" << std::hex << std::setw(2) << std::setfill('0')
-           << (int)bytes[i];
-    }
-    return ss.str();
-}
-
-int main(void)
-{
-    MatchingEngine<16, 10, 100, 1000> engine(16, 100, 0, 5, 8080, 16, 16, 128,
-                                             128);
-
-    char key[25] = { 'a' };
-
-    Order order1(key, OrderType::LIMIT, OrderSide::BUY, 100, 1, 60, 0, 1);
-
-    Order order13(key, OrderType::LIMIT, OrderSide::BUY, 90, 1, 60, 0, 1);
-
-    Order order12(key, OrderType::LIMIT, OrderSide::BUY, 200, 1, 60, 0, 1);
-
-    Order order2(key, OrderType::MARKET, OrderSide::SELL, 2, 50, 0, 1);
-
-    Order order3(key, OrderType::MARKET, OrderSide::SELL, 2, 60, 0, 1);
-
-    std::cout << ToEscapedString(&order1, sizeof(Order)) << "\n";
-    std::cout << ToEscapedString(&order13, sizeof(Order)) << "\n";
-    std::cout << ToEscapedString(&order12, sizeof(Order)) << "\n";
-    std::cout << ToEscapedString(&order2, sizeof(Order)) << "\n";
-    std::cout << ToEscapedString(&order3, sizeof(Order)) << "\n";
+    MatchingEngine<128, 10, 100, 1000> engine(
+        argc, argv, 128, 128, 0, 5, 8080, 16, 16, 128, 128, 0, 512, 1024,
+        RTE_IPV4(10, 0, 0, 20), 30000, RTE_IPV4(239, 1, 1, 1), 30001,
+        RTE_IPV4(239, 1, 1, 2), 30002);
 
     engine.StartMatchingEngine();
 }

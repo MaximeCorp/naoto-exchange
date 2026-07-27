@@ -2,6 +2,7 @@
 
 #include <ReaderWriterCircularBuffer.hpp>
 #include <StoragePool.hpp>
+#include <array>
 #include <variant>
 
 namespace MarketExecution
@@ -11,7 +12,7 @@ namespace MarketExecution
         { d.Handle(item) } -> std::same_as<void>;
     };
 
-    template <typename DerivedConsumer, typename T, size_t BatchSize>
+    template <typename DerivedConsumer, typename T, size_t BatchSize = 0>
     concept HasBatchHandle = requires(
         DerivedConsumer d, std::array<T *, BatchSize> &batch, size_t curSize) {
         { d.Handle(batch, curSize) } -> std::same_as<void>;
@@ -19,11 +20,10 @@ namespace MarketExecution
 
     template <typename DerivedConsumer, typename T, size_t BatchSize>
     concept ValidConsumerHandler =
-        (BatchSize == 0 ? HasHandle<DerivedConsumer, T>
-                        : HasBatchHandle<DerivedConsumer, T, BatchSize>);
+        ((BatchSize == 0 && HasHandle<DerivedConsumer, T>)
+         || (BatchSize > 0 && HasBatchHandle<DerivedConsumer, T, BatchSize>));
 
     template <typename DerivedConsumer, typename T, size_t BatchSize = 0>
-        requires ValidConsumerHandler<DerivedConsumer, T, BatchSize>
     class Consumer
     {
         using TQueue = moodycamel::BlockingReaderWriterCircularBuffer<T *>;
@@ -33,8 +33,8 @@ namespace MarketExecution
 
     protected:
         TQueue &Incoming;
-        [[no_unique_address]] BufferType Buffer{};
         StoragePool<T> &Mempool;
+        [[no_unique_address]] BufferType Buffer{};
 
         [[nodiscard]] bool FreeElement(
             T *element) noexcept // Caller"s responsability to check pointer
@@ -43,10 +43,15 @@ namespace MarketExecution
         }
 
     public:
-        Consumer(TQueue &incoming, StoragePool<T> &mempool);
+        Consumer(TQueue &incoming, StoragePool<T> &mempool)
+            : Incoming(incoming)
+            , Mempool(mempool)
+        {}
 
         void TryConsume(void) noexcept
         {
+            static_assert(ValidConsumerHandler<DerivedConsumer, T, BatchSize>,
+                          "DerivedConsumer must provide a matching Handle()");
             if constexpr (BatchSize > 0)
             {
                 T *curElement = nullptr;
@@ -98,6 +103,8 @@ namespace MarketExecution
 
         void Consume(void) noexcept // Not opportunistic batching
         {
+            static_assert(ValidConsumerHandler<DerivedConsumer, T, BatchSize>,
+                          "DerivedConsumer must provide a matching Handle()");
             if constexpr (BatchSize > 0)
             {
                 T *curElement = nullptr;

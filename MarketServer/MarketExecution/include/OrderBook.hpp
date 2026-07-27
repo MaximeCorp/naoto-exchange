@@ -4,6 +4,7 @@
 #include <PriceLevel.hpp>
 #include <SkipList.hpp>
 #include <UnsafeStoragePool.hpp>
+#include <iostream>
 
 namespace MarketExecution
 {
@@ -27,6 +28,11 @@ namespace MarketExecution
             , PriceLevelPool(priceLevelPool)
         {}
 
+        [[nodiscard]] PriceLevel *GetBestLevel(void) noexcept
+        {
+            return BestPricesMap.GetHead();
+        }
+
         [[nodiscard]] OrderNode *GetBestOffer(void) noexcept
         {
             PriceLevel *bestPrice = BestPricesMap.GetHead();
@@ -39,9 +45,9 @@ namespace MarketExecution
             return bestPrice->PeekOrder();
         }
 
-        void AddLimitOrder(OrderNode *order) noexcept
+        [[nodiscard]] PriceLevel *AddLimitOrder(OrderNode *order) noexcept
         {
-            int64_t key = order->GetKey();
+            int64_t key = order->GetPrice();
 
             PriceLevel *curPrice = FastMap.GetVal(key);
 
@@ -51,6 +57,7 @@ namespace MarketExecution
 
                 if (!curPrice) [[unlikely]]
                 {
+                    std::cerr << "couldn't acquire price level\n";
                     std::terminate();
                 }
 
@@ -62,15 +69,18 @@ namespace MarketExecution
             }
 
             curPrice->AddOrder(order);
+
+            return curPrice;
         }
 
         void DeleteOrder(OrderNode *order) noexcept
         {
-            const int64_t key = order->GetKey();
+            const int64_t key = order->GetPrice();
             PriceLevel *curPrice = FastMap.GetVal(key);
 
             if (!curPrice) [[unlikely]]
             {
+                std::cerr << "tried deleting node with no price level\n";
                 std::terminate();
             }
 
@@ -82,6 +92,7 @@ namespace MarketExecution
 
                 if (!released) [[unlikely]]
                 {
+                    std::cerr << "oops\n";
                     std::terminate();
                 }
             }
@@ -90,6 +101,7 @@ namespace MarketExecution
 
             if (!released) [[unlikely]]
             {
+                std::cerr << "caca\n";
                 std::terminate();
             }
         }

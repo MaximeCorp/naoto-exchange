@@ -1,18 +1,31 @@
-CC=g++
+CXX := g++
 
-CFLAGS= -std=c++20 -Wall -Werror -Wextra -Iinclude -fsanitize=address
-LDFLAGS = -letcd-cpp-api -lgrpc++ -lgrpc -lprotobuf -lcpprest -lssl -lcrypto -lz -lpthread
+DPDK_CFLAGS  := $(shell pkg-config --cflags libdpdk)
+DPDK_LDFLAGS := $(shell pkg-config --static --libs libdpdk)
 
-SRC=$(shell find . -type f -name '*.cpp')
+CXXFLAGS := -std=c++20 -Wall -Werror -Wextra -Wno-volatile -Iinclude -fsanitize=address $(DPDK_CFLAGS)
+LDFLAGS = -letcd-cpp-api -lgrpc++ -lgrpc -lprotobuf -lcpprest -lssl -lcrypto -lz -lpthread -fsanitize=address $(DPDK_LDFLAGS)
+
+SRC=$(shell find src -type f -name '*.cpp')
 OBJ=$(patsubst %.cpp,%.o,$(SRC))
 
-all: $(OBJ)
-	$(CC) $(CFLAGS) -o MarketExecution $^ $(LDFLAGS)
+# TEST_SRCS := $(wildcard tests/*.cpp)
+# TEST_OBJS := $(TEST_SRCS:.cpp=.o)
+
+all: MarketExecution
+
+MarketExecution: $(OBJ)
+	$(CXX) -o $@ $^ $(LDFLAGS)
+
+
+# tests: $(TEST_OBJS)
+#	g++ -std=c++20 -Wall -Wextra -Iinclude -o run_tests $(TEST_OBJS) \
+#	    -lgtest -lgtest_main -pthread
 
 %.o: %.cpp
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
 clean:
 	rm -f $(OBJ) MarketExecution
 
-.PHONY: all clean
+.PHONY: all clean # tests

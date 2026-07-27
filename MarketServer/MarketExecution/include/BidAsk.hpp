@@ -5,10 +5,13 @@
 #include <ObjectBatch.hpp>
 #include <Order.hpp>
 #include <OrderBook.hpp>
+#include <OrderBookUpdate.hpp>
 #include <OrderNode.hpp>
+#include <OrderStateReport.hpp>
 #include <ReaderWriterCircularBuffer.hpp>
 #include <StoragePool.hpp>
 #include <cstdint>
+#include <gtest/gtest_prod.h>
 #include <thread>
 #include <vector>
 
@@ -18,8 +21,15 @@ namespace MarketExecution
               size_t OrderMapSize>
     class BidAsk
     {
+        FRIEND_TEST(BidAskTest, MarketableBuyCrossesRestingAsk);
+        FRIEND_TEST(BidAskTest, NonMarketableBuyRestsInBook);
+
         using OrdersQueue = moodycamel::BlockingReaderWriterCircularBuffer<
             ObjectBatch<Order, BatchSize> *>;
+        using OrderStatesQueue =
+            moodycamel::BlockingReaderWriterCircularBuffer<OrderStateReport *>;
+        using OrderBookUpdatesQueue =
+            moodycamel::BlockingReaderWriterCircularBuffer<OrderBookUpdate *>;
 
     private:
         uint32_t MarketAssetId;
@@ -28,9 +38,11 @@ namespace MarketExecution
         int64_t BestBidPrice;
 
         OrdersQueue &IncomingOrders;
-        OrdersQueue
-            &OutgoingMarketUpdates; // Might wanna create proper object for this
+        OrderStatesQueue &OutgoingOrders;
+        OrderBookUpdatesQueue &OutgoingBook;
         StoragePool<ObjectBatch<Order, BatchSize>> &OrdersPool;
+        StoragePool<OrderStateReport> &OrderReportsPool;
+        StoragePool<OrderBookUpdate> &OrderBookUpdatesPool;
         UnsafeStoragePool<OrderNode> OrderNodePool;
         UnsafeStoragePool<PriceLevel> PriceLevelPool;
 
@@ -55,7 +67,7 @@ namespace MarketExecution
         template <OrderSide side>
         void CancelOrder(Order &order) noexcept
         {
-            OrderNode *toCancel = OrderMap.GetVal(order.getKey());
+            OrderNode *toCancel = OrderMap.GetVal(order.getPrice());
 
             if (!toCancel) [[unlikely]]
             {
@@ -76,9 +88,16 @@ namespace MarketExecution
         {
             while (order.getAmount() > 0 && IsMarketable(order))
             {
-                OrderNode *bestOffer = Ask.GetBestOffer();
+                PriceLevel *bestLevel = Ask.GetBestLevel();
 
-                BestAskPrice = bestOffer->GetKey();
+                if (!bestLevel) [[unlikely]]
+                {
+                    // Handle to letting know the client that order couldn't be
+                    // fully filled
+                    return;
+                }
+
+                OrderNode *bestOffer = bestLevel->PeekOrder();
 
                 if (!bestOffer) [[unlikely]]
                 {
@@ -86,6 +105,8 @@ namespace MarketExecution
                     // fully filled
                     return;
                 }
+
+                BestAskPrice = bestLevel->GetKey();
 
                 while (order.getAmount() > 0 && IsMarketable(order)
                        && bestOffer)
@@ -106,15 +127,37 @@ namespace MarketExecution
                     const std::uint32_t offerAmount =
                         curOfferAmount - tradedAmount;
 
+                    MarketPrice =
+                        tradedAmount > 0 ? bestOffer->GetPrice() : MarketPrice;
+
                     order.setAmount(orderAmount);
                     bestOffer->SetAmount(offerAmount);
+                    bestLevel->IncTotalAmount(-tradedAmount);
+
+                    OrderStateReport *orderReport = OrderReportsPool.acquire();
+                    orderReport->FillReport(tradedAmount,
+                                            -tradedAmount * BestAskPrice,
+                                            order.getClientId(), order.getId(),
+                                            0, MarketAssetId, 0);
+                    OutgoingOrders.try_enqueue(orderReport);
+
+                    OrderStateReport *offerReport = OrderReportsPool.acquire();
+                    offerReport->FillReport(
+                        tradedAmount * BestAskPrice, -tradedAmount,
+                        bestOffer->GetClientId(), bestOffer->GetId(), 0, 0,
+                        MarketAssetId);
+                    OutgoingOrders.try_enqueue(offerReport);
+
+                    OrderBookUpdate *curOrderBookUpdate =
+                        OrderBookUpdatesPool.acquire();
+                    curOrderBookUpdate->FillUpdate(bestLevel->GetTotalAmount(),
+                                                   BestAskPrice, MarketAssetId,
+                                                   ORDER_BOOK_UPDATE_BUY);
+                    OutgoingBook.try_enqueue(curOrderBookUpdate);
 
                     std::cout << "Orders after matching\n:";
                     order.log();
                     bestOffer->log();
-
-                    MarketPrice =
-                        tradedAmount > 0 ? bestOffer->GetKey() : MarketPrice;
 
                     std::cout << "New market price:\n" << MarketPrice << "\n";
 
@@ -132,7 +175,16 @@ namespace MarketExecution
         {
             while (order.getAmount() > 0 && IsMarketable(order))
             {
-                OrderNode *bestOffer = Bid.GetBestOffer();
+                PriceLevel *bestLevel = Bid.GetBestLevel();
+
+                if (!bestLevel) [[unlikely]]
+                {
+                    // Handle to letting know the client that order couldn't be
+                    // fully filled
+                    return;
+                }
+
+                OrderNode *bestOffer = bestLevel->PeekOrder();
 
                 if (!bestOffer) [[unlikely]]
                 {
@@ -141,7 +193,7 @@ namespace MarketExecution
                     return;
                 }
 
-                BestBidPrice = bestOffer->GetKey();
+                BestBidPrice = bestOffer->GetPrice();
 
                 while (order.getAmount() > 0 && IsMarketable(order)
                        && bestOffer)
@@ -162,15 +214,36 @@ namespace MarketExecution
                     const std::uint32_t offerAmount =
                         curOfferAmount - tradedAmount;
 
+                    MarketPrice =
+                        tradedAmount > 0 ? bestOffer->GetPrice() : MarketPrice;
+
                     order.setAmount(orderAmount);
                     bestOffer->SetAmount(offerAmount);
+                    bestLevel->IncTotalAmount(-tradedAmount);
+
+                    OrderStateReport *orderReport = OrderReportsPool.acquire();
+                    orderReport->FillReport(tradedAmount * BestBidPrice,
+                                            -tradedAmount, order.getClientId(),
+                                            order.getId(), 0, 0, MarketAssetId);
+                    OutgoingOrders.try_enqueue(orderReport);
+
+                    OrderStateReport *offerReport = OrderReportsPool.acquire();
+                    offerReport->FillReport(
+                        tradedAmount, -tradedAmount * BestBidPrice,
+                        bestOffer->GetClientId(), bestOffer->GetId(), 0,
+                        MarketAssetId, 0);
+                    OutgoingOrders.try_enqueue(offerReport);
+
+                    OrderBookUpdate *curOrderBookUpdate =
+                        OrderBookUpdatesPool.acquire();
+                    curOrderBookUpdate->FillUpdate(bestLevel->GetTotalAmount(),
+                                                   BestBidPrice, MarketAssetId,
+                                                   ORDER_BOOK_UPDATE_SELL);
+                    OutgoingBook.try_enqueue(curOrderBookUpdate);
 
                     std::cout << "Orders after matching\n:";
                     order.log();
                     bestOffer->log();
-
-                    MarketPrice =
-                        tradedAmount > 0 ? bestOffer->GetKey() : MarketPrice;
 
                     std::cout << "New market price:\n" << MarketPrice << "\n";
 
@@ -202,9 +275,16 @@ namespace MarketExecution
             OrderNode *toAdd = OrderNodePool.acquire();
             toAdd->SetOrder(order);
 
-            BestBidPrice = std::min(BestAskPrice, order.getPrice());
+            BestAskPrice = std::min(BestAskPrice, order.getPrice());
 
-            Ask.AddLimitOrder(toAdd);
+            PriceLevel *curLevel = Ask.AddLimitOrder(toAdd);
+
+            OrderBookUpdate *curOrderBookUpdate =
+                OrderBookUpdatesPool.acquire();
+            curOrderBookUpdate->FillUpdate(curLevel->GetTotalAmount(),
+                                           curLevel->GetKey(), MarketAssetId,
+                                           ORDER_BOOK_UPDATE_SELL);
+            OutgoingBook.try_enqueue(curOrderBookUpdate);
         }
 
         void AddBuyLimitOrder(Order &order)
@@ -214,7 +294,14 @@ namespace MarketExecution
 
             BestBidPrice = std::max(BestBidPrice, order.getPrice());
 
-            Bid.AddLimitOrder(toAdd);
+            PriceLevel *curLevel = Bid.AddLimitOrder(toAdd);
+
+            OrderBookUpdate *curOrderBookUpdate =
+                OrderBookUpdatesPool.acquire();
+            curOrderBookUpdate->FillUpdate(curLevel->GetTotalAmount(),
+                                           curLevel->GetKey(), MarketAssetId,
+                                           ORDER_BOOK_UPDATE_BUY);
+            OutgoingBook.try_enqueue(curOrderBookUpdate);
         }
 
         void AddLimitOrder(
@@ -247,8 +334,11 @@ namespace MarketExecution
 
     public:
         BidAsk(const std::uint32_t assetId, const std::int64_t initialPrice,
-               OrdersQueue &incoming, OrdersQueue &outgoing,
+               OrdersQueue &incoming, OrderStatesQueue &outgoingOrders,
+               OrderBookUpdatesQueue &outgoingBook,
                StoragePool<ObjectBatch<Order, BatchSize>> &pool,
+               StoragePool<OrderStateReport> &orderReportsPool,
+               StoragePool<OrderBookUpdate> &orderBookUpdatesPool,
                const size_t orderNodePoolSize,
                const size_t skipListNodesPoolSize)
             : MarketAssetId(assetId)
@@ -256,8 +346,11 @@ namespace MarketExecution
             , BestAskPrice(INT64_MAX)
             , BestBidPrice(INT64_MIN)
             , IncomingOrders(incoming)
-            , OutgoingMarketUpdates(outgoing)
+            , OutgoingOrders(outgoingOrders)
+            , OutgoingBook(outgoingBook)
             , OrdersPool(pool)
+            , OrderReportsPool(orderReportsPool)
+            , OrderBookUpdatesPool(orderBookUpdatesPool)
             , OrderNodePool(orderNodePoolSize)
             , PriceLevelPool(orderNodePoolSize)
             , Bid(skipListNodesPoolSize, OrderNodePool, PriceLevelPool)
@@ -274,6 +367,8 @@ namespace MarketExecution
 
                 if (IncomingOrders.try_dequeue(batch)) [[likely]]
                 {
+                    std::cout << "batch of size " << batch->getSize() << "\n";
+
                     for (size_t i = 0; i < batch->getSize(); ++i)
                     {
                         Order &curOrder = batch->Data[i];
@@ -289,6 +384,7 @@ namespace MarketExecution
 
                     if (!released) [[unlikely]]
                     {
+                        std::cerr << "failed to release in execution loop\n";
                         std::terminate();
                     }
                 }

@@ -2,7 +2,7 @@
 #include <arpa/inet.h>
 #include <cstring>
 
-uint64_t htonll(uint64_t hostval)
+[[nodiscard]] uint64_t htonll(uint64_t hostval) noexcept
 {
 #if __BYTE_ORDER == __LITTLE_ENDIAN
     return __builtin_bswap64(hostval);
@@ -11,7 +11,7 @@ uint64_t htonll(uint64_t hostval)
 #endif
 };
 
-uint64_t ntohll(uint64_t netval)
+[[nodiscard]] uint64_t ntohll(uint64_t netval) noexcept
 {
 #if __BYTE_ORDER == __LITTLE_ENDIAN
     return __builtin_bswap64(netval);
@@ -23,7 +23,7 @@ uint64_t ntohll(uint64_t netval)
 namespace MarketExecution
 {
     Order::Order()
-        : Key()
+        : Id()
         , Type(OrderType::LIMIT)
         , Side(OrderSide::BUY)
         , Price(0)
@@ -32,28 +32,25 @@ namespace MarketExecution
         , Asset(0)
         , Timestamp(0)
     {}
-    Order::Order(const char *key, OrderType type, OrderSide side,
+    Order::Order(const uint32_t id, OrderType type, OrderSide side,
                  std::int64_t price, std::int32_t client_id,
                  std::uint32_t amount, std::int32_t asset,
                  std::int64_t timestamp)
-        : Type(type)
+        : Id(id)
+        , Type(type)
         , Side(side)
         , Price(price)
         , ClientId(client_id)
         , Amount(amount)
         , Asset(asset)
         , Timestamp(timestamp)
-    {
-        size_t key_len = std::min(std::strlen(key), (size_t)MAX_KEY_LEN - 1);
-        std::copy(key, key + key_len, Key);
-        Key[key_len - 1] = 0;
-        std::fill(Key + key_len + 1, Key + MAX_KEY_LEN, 0);
-    }
+    {}
 
-    Order::Order(const char *key, OrderType type, OrderSide side,
+    Order::Order(const uint32_t id, OrderType type, OrderSide side,
                  std::int32_t client_id, std::uint32_t amount,
                  std::int32_t asset, std::int64_t timestamp)
-        : Type(type)
+        : Id(id)
+        , Type(type)
         , Side(side)
         , ClientId(client_id)
         , Amount(amount)
@@ -61,85 +58,85 @@ namespace MarketExecution
         , Timestamp(timestamp)
     {
         Price = -1;
-
-        size_t key_len = std::min(std::strlen(key), (size_t)MAX_KEY_LEN - 1);
-        std::copy(key, key + key_len, Key);
-        Key[key_len - 1] = 0;
-        std::fill(Key + key_len + 1, Key + MAX_KEY_LEN, 0);
     }
 
-    void Order::log()
+    void Order::log() noexcept
     {
         std::string side = Side == OrderSide::BUY ? "BUY" : "SELL";
         std::string type = Type == OrderType::LIMIT ? "LIMIT" : "MARKET";
         std::cout << side << " " << type << " ORDER - Amount: " << Amount
                   << " - Price: " << Price << " - Client ID: " << ClientId
-                  << "key:" << Key << "\n"
+                  << "id:" << Id << "\n"
                   << std::endl;
     }
 
-    const char *Order::getKey() const
+    [[nodiscard]] const uint32_t &Order::getId() const noexcept
     {
-        return Key;
+        return Id;
     }
-    const OrderType &Order::getType() const
+    [[nodiscard]] const OrderType &Order::getType() const noexcept
     {
         return Type;
     }
-    const OrderSide &Order::getSide() const
+    [[nodiscard]] const OrderSide &Order::getSide() const noexcept
     {
         return Side;
     }
-    const std::int64_t &Order::getPrice() const
+    [[nodiscard]] const std::int64_t &Order::getPrice() const noexcept
     {
         return Price;
     }
-    const std::int32_t &Order::getClientId() const
+    [[nodiscard]] const std::int32_t &Order::getClientId() const noexcept
     {
         return ClientId;
     }
-    const std::uint32_t &Order::getAmount() const
+    [[nodiscard]] const std::uint32_t &Order::getAmount() const noexcept
     {
         return Amount;
     }
-    const std::int32_t &Order::getAsset() const
+    [[nodiscard]] const std::int32_t &Order::getAsset() const noexcept
     {
         return Asset;
     }
-    const std::int64_t &Order::getTimestamp() const
+    [[nodiscard]] const std::int64_t &Order::getTimestamp() const noexcept
     {
         return Timestamp;
     }
-    void Order::setAmount(std::uint32_t amout)
+    void Order::setId(const uint32_t id) noexcept
+    {
+        Id = id;
+    }
+    void Order::setAmount(std::uint32_t amout) noexcept
     {
         Amount = amout;
     }
-    void Order::setType(OrderType type)
+    void Order::setType(OrderType type) noexcept
     {
         Type = type;
     }
-    void Order::setSide(OrderSide side)
+    void Order::setSide(OrderSide side) noexcept
     {
         Side = side;
     }
-    void Order::setPrice(std::int64_t price)
+    void Order::setPrice(std::int64_t price) noexcept
     {
         Price = price;
     }
-    void Order::setClientId(std::int32_t clientId)
+    void Order::setClientId(std::int32_t clientId) noexcept
     {
         ClientId = clientId;
     }
-    void Order::setAsset(std::int32_t asset)
+    void Order::setAsset(std::int32_t asset) noexcept
     {
         Asset = asset;
     }
-    void Order::setTimestamp(std::int64_t timestamp)
+    void Order::setTimestamp(std::int64_t timestamp) noexcept
     {
         Timestamp = timestamp;
     }
 
-    bool parseBinOrder(const char *binstr, size_t n, Order *output)
+    [[nodiscard]] bool parseBinOrder(const char *binstr, size_t n,
+                                     Order *output) noexcept
     {
         if (!binstr || !output)
         {
@@ -153,8 +150,8 @@ namespace MarketExecution
 
         const char *ptr = binstr;
 
-        std::memcpy((void *)output->getKey(), ptr, MAX_KEY_LEN);
-        ptr += MAX_KEY_LEN;
+        std::memcpy((void *)&output->getId(), ptr, sizeof(uint32_t));
+        ptr += sizeof(uint32_t);
 
         std::int32_t type_net;
         std::memcpy(&type_net, ptr, sizeof(type_net));
@@ -199,12 +196,12 @@ namespace MarketExecution
         return true;
     }
 
-    void serializeOrder(const Order &order, char buffer[sizeof(Order)])
+    void serializeOrder(const Order &order, char buffer[sizeof(Order)]) noexcept
     {
         char *ptr = buffer;
 
-        std::memcpy(ptr, order.getKey(), MAX_KEY_LEN);
-        ptr += MAX_KEY_LEN;
+        std::memcpy(ptr, &order.getId(), sizeof(uint32_t));
+        ptr += sizeof(uint32_t);
 
         std::int32_t type = htonl(static_cast<std::int32_t>(order.getType()));
         std::memcpy(ptr, &type, sizeof(type));

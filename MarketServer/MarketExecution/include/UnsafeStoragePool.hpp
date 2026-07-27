@@ -1,5 +1,8 @@
 #pragma once
 
+#include <OrderNode.hpp>
+#include <concepts>
+#include <iostream>
 #include <vector>
 
 namespace MarketExecution
@@ -39,6 +42,10 @@ namespace MarketExecution
 
         [[nodiscard]] T *acquire() noexcept
         {
+            if (std::is_same_v<T, OrderNode>)
+            {
+                std::cout << "acquiring from unsafe storage pool\n";
+            }
             T *res = nullptr;
 
             if (FreeSize > 0) [[likely]]
@@ -51,6 +58,11 @@ namespace MarketExecution
 
         [[nodiscard]] bool release(T *toRelease) noexcept
         {
+            if (std::is_same_v<T, OrderNode>)
+            {
+                std::cout << "releasing from unsafe storage pool\n";
+            }
+
             if (toRelease && FreeSize < Capacity) [[likely]]
             {
                 FreeQueue[FreeSize++] = toRelease;

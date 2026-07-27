@@ -4,12 +4,13 @@
 #include <concepts>
 #include <cstdint>
 #include <immintrin.h>
+#include <iostream>
 
 namespace MarketExecution
 {
     template <std::integral K, typename V,
               size_t Size> // CRITICAL: Size MUST be a power of 2
-    requires std::is_pointer_v<V>
+        requires std::is_pointer_v<V>
     class FlatHashMap
     {
     private:
@@ -292,6 +293,41 @@ namespace MarketExecution
             }
 
             PaddingSafeWrite(cur_idx, EMPTY_MARKER, 0, nullptr);
+        }
+
+        void DebugDump(void) noexcept
+        {
+            const size_t total_size = Size << 4;
+
+            std::cout << "=== FlatHashMap dump (" << total_size
+                      << " slots) ===\n";
+
+            size_t count = 0;
+            for (size_t i = 0; i < total_size; ++i)
+            {
+                if (Tags[i] == EMPTY_MARKER)
+                {
+                    continue;
+                }
+
+                std::cout << "[idx=" << i
+                          << "] dib=" << static_cast<int>(Tags[i])
+                          << " footprint=" << static_cast<int>(FootPrints[i])
+                          << " key=" << Keys[i] << " -> ";
+
+                if (Data[i])
+                {
+                    Data[i]->log();
+                }
+                else
+                {
+                    std::cout << "nullptr\n";
+                }
+
+                ++count;
+            }
+
+            std::cout << "=== " << count << " entries total ===\n";
         }
     };
 } // namespace MarketExecution

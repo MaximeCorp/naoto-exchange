@@ -123,13 +123,10 @@ namespace Gateways
                         curFd, (char *)(batch->Data.data()) + buffer.BufferSize,
                         sizeof(Order) * BatchSize - buffer.BufferSize);
 
-                    buffer.clearBuffer();
-
                     if (nread <= 0) [[unlikely]]
                     {
-                        Pool.releaseCritical(batch);
-
-                        batch = nullptr;
+                        batch->setSize(0);
+                        Orders.try_enqueue(batch);
                         break;
                     }
 
@@ -140,6 +137,7 @@ namespace Gateways
 
                     batch->setSize(batchSize);
 
+                    buffer.clearBuffer();
                     buffer.addBytes(
                         batch->Data.data() + sizeof(Order) * batchSize,
                         bufferSize); // Double check if sizeof(Order) *

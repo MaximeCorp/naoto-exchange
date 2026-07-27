@@ -11,7 +11,7 @@ namespace MarketExecution
 {
     template <std::integral K, typename V, size_t MaxLevel,
               typename Compare = std::less<K>>
-    requires std::is_pointer_v<V>
+        requires std::is_pointer_v<V>
     class SkipList
     {
     public:
@@ -109,6 +109,7 @@ namespace MarketExecution
 
                 if (!released) [[unlikely]]
                 {
+                    std::cerr << "skip list\n";
                     std::terminate();
                 }
             }
@@ -223,6 +224,7 @@ namespace MarketExecution
 
                 if (!released) [[unlikely]]
                 {
+                    std::cerr << "skiplist2\n";
                     std::terminate();
                 }
             }

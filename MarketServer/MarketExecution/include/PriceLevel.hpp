@@ -3,15 +3,16 @@
 #include <OrderNode.hpp>
 #include <UnsafeStoragePool.hpp>
 #include <cstdint>
+#include <iostream>
 
 namespace MarketExecution
 {
     class PriceLevel
     {
     private:
-        std::int64_t Price;
+        int64_t Price;
         size_t Size;
-        std::int64_t TotalAmount;
+        uint64_t TotalAmount;
         OrderNode *Head; // Doubly linked list of orders
         OrderNode *Tail;
 
@@ -23,6 +24,7 @@ namespace MarketExecution
             , Head(nullptr)
             , Tail(nullptr)
         {}
+
         PriceLevel(std::int64_t price)
             : Price(price)
             , Size(0)
@@ -37,11 +39,14 @@ namespace MarketExecution
             {
                 Head = order;
                 Tail = order; // Increment generation because size is 0
+                order->SetPrev(nullptr);
+                order->SetNext(nullptr);
             }
             else
             {
                 Tail->SetNext(order);
                 order->SetPrev(Tail);
+                order->SetNext(nullptr);
                 Tail = order;
             }
 
@@ -57,7 +62,7 @@ namespace MarketExecution
 
             if (order->GetPrev())
             {
-                order->SetPrev(order->GetNext());
+                order->GetPrev()->SetNext(order->GetNext());
             }
             else
             {
@@ -66,17 +71,17 @@ namespace MarketExecution
 
             if (order->GetNext())
             {
-                order->SetNext(order->GetPrev());
+                order->GetNext()->SetPrev(order->GetPrev());
             }
             else
             {
                 SetTail(order->GetPrev());
             }
 
-            return !order->GetPrev() && !order->GetNext();
+            return Size == 0;
         }
 
-        [[nodiscard]] OrderNode *PeekOrder(void) noexcept
+        [[nodiscard]] OrderNode *PeekOrder(void) const noexcept
         {
             return Head;
         }
@@ -123,11 +128,18 @@ namespace MarketExecution
             {
                 OrderNode *toRelease = curNode;
                 curNode = curNode->GetNext();
+
+                if (!curNode)
+                {
+                    break;
+                }
+
                 bool released = orderNodePool.release(toRelease);
 
                 if (!released) [[unlikely]]
                 {
-                    std::cerr << "Failed to release\n";
+                    std::cerr
+                        << "Failed to release while clearing price level\n";
                     std::terminate();
                 }
             }
@@ -151,9 +163,27 @@ namespace MarketExecution
             Tail = order;
         }
 
-        [[nodiscard]] std::int64_t GetKey(void) const noexcept
+        void IncTotalAmount(int64_t amountDelta) noexcept
+        {
+            TotalAmount += amountDelta;
+        }
+
+        [[nodiscard]] int64_t GetKey(void) const noexcept
         {
             return Price;
+        }
+
+        [[nodiscard]] uint64_t GetTotalAmount(void) const noexcept
+        {
+            return TotalAmount;
+        }
+
+        void log(void) const noexcept
+        {
+            std::cout << "PriceLevel[price=" << Price << ", size=" << Size
+                      << ", totalAmount=" << TotalAmount
+                      << ", head=" << static_cast<void *>(Head)
+                      << ", tail=" << static_cast<void *>(Tail) << "]\n";
         }
     };
 } // namespace MarketExecution
