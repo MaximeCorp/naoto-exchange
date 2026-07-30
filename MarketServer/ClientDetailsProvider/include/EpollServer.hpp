@@ -122,8 +122,6 @@ namespace ClientDetailsProvider
                         curFd, (char *)(batch->Data.data()) + buffer.BufferSize,
                         sizeof(Order) * BatchSize - buffer.BufferSize);
 
-                    buffer.clearBuffer();
-
                     if (nread <= 0) [[unlikely]]
                     {
                         Pool.releaseCritical(batch);
@@ -139,6 +137,7 @@ namespace ClientDetailsProvider
 
                     batch->setSize(batchSize);
 
+                    buffer.clearBuffer();
                     buffer.addBytes(
                         batch->Data.data() + sizeof(Order) * batchSize,
                         bufferSize); // Double check if sizeof(Order) *

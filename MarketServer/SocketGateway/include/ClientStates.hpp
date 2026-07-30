@@ -14,7 +14,6 @@ namespace Gateways
     class ClientStates
     {
     private:
-        // Should switch to AoS -> Access per client, not per field
         // Id = 0 means slot not used
 
         alignas(64) std::vector<ClientState<MaxPositions>> States1;
