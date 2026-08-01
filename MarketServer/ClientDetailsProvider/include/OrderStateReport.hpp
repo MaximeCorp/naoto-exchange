@@ -8,7 +8,7 @@ namespace AccountService
     struct OrderStateReport
     {
         uint32_t SequenceId;
-        int64_t BoughtDelta;
+        int64_t BoughtDelta; // Applied negatively on the sold asset
         int64_t SoldDelta;
         uint32_t ClientId;
         uint32_t OrderId;

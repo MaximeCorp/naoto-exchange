@@ -5,7 +5,7 @@
 #include <concepts>
 #include <cstddef>
 
-namespace ClientDetailsProvider
+namespace AccountService
 {
     template <size_t Size>
     concept PowerOfTwo = (Size > 0) && std::has_single_bit(Size);
@@ -60,4 +60,4 @@ namespace ClientDetailsProvider
             return true;
         }
     };
-} // namespace ClientDetailsProvider
+} // namespace AccountService

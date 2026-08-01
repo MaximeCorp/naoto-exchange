@@ -20,6 +20,7 @@ namespace MarketExecution
         alignas(64) std::array<K, (Size + 1) * 16> Keys;
         alignas(64) std::array<V, (Size + 1) * 16> Data;
 
+        // FIXME: This empty market might be confused with an actual dib value
         static constexpr uint8_t EMPTY_MARKER = 0x80;
         alignas(16) inline static const __m128i base_seq =
             _mm_setr_epi8(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15);

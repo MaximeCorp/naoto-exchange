@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-namespace ClientDetailsProvider
+namespace AccountService
 {
     template <typename T>
     struct MessageContainer
@@ -10,4 +10,4 @@ namespace ClientDetailsProvider
         uint16_t GatewayId;
         T *Message;
     };
-} // namespace ClientDetailsProvider
+} // namespace AccountService

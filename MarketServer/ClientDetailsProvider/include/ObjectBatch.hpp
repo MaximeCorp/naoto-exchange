@@ -4,7 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace ClientDetailsProvider
+namespace AccountService
 {
     template <typename T, size_t BatchSize>
     class ObjectBatch
@@ -52,4 +52,4 @@ namespace ClientDetailsProvider
             return Data[idx];
         }
     };
-} // namespace ClientDetailsProvider
+} // namespace AccountService

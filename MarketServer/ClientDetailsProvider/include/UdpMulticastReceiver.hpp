@@ -5,18 +5,31 @@
 #include <StoragePool.hpp>
 #include <concepts>
 #include <cstddef>
+#include <cstring>
+#include <iostream>
+#include <netinet/in.h>
+#include <rte_ethdev.h>
+#include <rte_ether.h>
+#include <rte_ip.h>
+#include <rte_lcore.h>
+#include <rte_mbuf.h>
+#include <rte_udp.h>
 #include <string>
 #include <variant>
 
-namespace ClientDetailsProvider
+namespace AccountService
 {
+    static void ipv4_multicast_to_mac(uint32_t ip_host_order,
+                                      rte_ether_addr *mac);
+
     template <typename T>
-    concept HasSequenceId = requires(T t) {
+    concept HasSequenceIdLocal = requires(T t) {
         { t.SequenceId } -> std::convertible_to<uint32_t>;
     };
 
-    template <typename DerivedReceiver, typename T, size_t RingBufferSize,
-              size_t BatchSize = 0, size_t MTU = 1500>
+    template <typename T, size_t RingBufferSize, size_t BatchSize = 0,
+              size_t MTU = 1500>
+        requires HasSequenceIdLocal<T>
     class UdpMulticastReceiver
     {
         static constexpr size_t ObjectsPerPacket =
@@ -47,12 +60,13 @@ namespace ClientDetailsProvider
         uint32_t NextToRead;
         uint32_t DstIp;
         uint16_t DstPort;
-        rte_ether_addr DstMac;
 
     public:
         UdpMulticastReceiver(TQueue &outgoing, StoragePool<T> &pool,
-                             uint16_t portId, uint16_t queueId,
-                             unsigned lcoreId, char *poolName, size_t poolSize)
+                             uint16_t portId, uint16_t nbRxQueueSlots,
+                             uint16_t queueId, unsigned lcoreId,
+                             const char *poolName, size_t poolSize,
+                             uint32_t dstIp, uint32_t dstPort)
             : Outgoing(outgoing)
             , TPool(pool)
             , PortId(portId)
@@ -63,12 +77,36 @@ namespace ClientDetailsProvider
                   std::min<size_t>(poolSize, RTE_MEMPOOL_CACHE_MAX_SIZE), 0,
                   RTE_PKTMBUF_HEADROOM + MTU + sizeof(rte_ether_hdr),
                   rte_lcore_to_socket_id(lcoreId)))
-        {}
+            , NextToRead(0)
+            , DstIp(dstIp)
+            , DstPort(dstPort)
+        {
+            int ret = rte_eth_rx_queue_setup(PortId, QueueId, nbRxQueueSlots,
+                                             rte_lcore_to_socket_id(lcoreId),
+                                             nullptr, Mempool);
+
+            if (ret < 0)
+            {
+                rte_exit(EXIT_FAILURE, "Failed setting up Rx queue\n");
+            }
+
+            rte_ether_addr mcastMac;
+            ipv4_multicast_to_mac(DstIp, &mcastMac);
+
+            ret = rte_eth_dev_mac_addr_add(PortId, &mcastMac, 0);
+
+            if (ret != 0)
+            {
+                rte_exit(EXIT_FAILURE,
+                         "Failed to add multicast MAC filter: %d\n", ret);
+            }
+        }
 
         void Receive(void) noexcept
         {
             uint16_t nbRx =
                 rte_eth_rx_burst(PortId, QueueId, Packets, MaxPackets);
+
             for (uint16_t i = 0; i < nbRx; ++i)
             {
                 rte_mbuf *pkt = Packets[i];
@@ -144,11 +182,11 @@ namespace ClientDetailsProvider
 
                     if (added)
                     {
-                        // Forgot what I wanted to do here
+                        // FIXME: Forgot what I wanted to do here
                     }
                     else
                     {
-                        // Free without spsc (save pointer locally)
+                        // TODO: Free without spsc (save pointer locally)
                     }
                 }
 
@@ -160,7 +198,7 @@ namespace ClientDetailsProvider
 
                     if (!pushed) [[unlikely]]
                     {
-                        // Free without spsc (save pointer locally)
+                        // TODO: Free without spsc (save pointer locally)
                     }
 
                     ++NextToRead;
@@ -169,5 +207,24 @@ namespace ClientDetailsProvider
                 rte_pktmbuf_free(pkt);
             }
         }
+
+        void StartLoop() noexcept
+        {
+            while (true)
+            {
+                Receive();
+            }
+        }
     };
-} // namespace ClientDetailsProvider
+    // Should be moved to a "dpdk utils" file or something like that
+    static void ipv4_multicast_to_mac(uint32_t ip_host_order,
+                                      struct rte_ether_addr *mac)
+    {
+        mac->addr_bytes[0] = 0x01;
+        mac->addr_bytes[1] = 0x00;
+        mac->addr_bytes[2] = 0x5E;
+        mac->addr_bytes[3] = (ip_host_order >> 16) & 0x7F;
+        mac->addr_bytes[4] = (ip_host_order >> 8) & 0xFF;
+        mac->addr_bytes[5] = ip_host_order & 0xFF;
+    }
+} // namespace AccountService

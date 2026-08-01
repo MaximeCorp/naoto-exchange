@@ -11,7 +11,7 @@
 #include <sys/socket.h>
 #include <type_traits>
 
-namespace ClientDetailsProvider
+namespace AccountService
 {
     template <size_t MaxPositions, size_t BatchesSize, size_t MaxGateways,
               size_t ResendBufferSize>
@@ -25,18 +25,20 @@ namespace ClientDetailsProvider
 
     private:
         ResponsesQueue &Responses;
-        UpdatesQueue &Updates;
-        StoragePool<MessageContainer<ClientRequestResponse<MaxPositions>>>
-            &ResponsesPool;
-        StoragePool<ClientUpdate> &UpdatesPool;
+        // UpdatesQueue &Updates;
+        StoragePool<ClientRequestResponse<MaxPositions>> &ResponsesPool;
+        // StoragePool<ClientUpdate> &UpdatesPool;
         std::array<FdGen, MaxGateways> &GatewayFd; // Consumer
 
         std::array<MessageContainer<ClientRequestResponse<MaxPositions>>,
                    ResendBufferSize>
             ResponsesResend;
         size_t ResponsesResendSize;
+
+        /*
         std::array<ClientUpdate, ResendBufferSize> UpdatesResend;
         size_t UpdatesResendSize;
+        */
 
         template <typename T>
         void DrainResendBuffers(void) noexcept // Call before SendMessage if
@@ -53,6 +55,7 @@ namespace ClientDetailsProvider
                                                   curResponse.GatewayId);
                 }
             }
+            /*
             else if constexpr (std::is_same_v<T, ClientUpdate>)
             {
                 while (UpdatesResendSize)
@@ -64,6 +67,7 @@ namespace ClientDetailsProvider
                                               curUpdate.GatewayId);
                 }
             }
+            */
         }
 
         template <typename T>
@@ -105,11 +109,13 @@ namespace ClientDetailsProvider
                         ResponsesResend[ResponsesResendSize++].Message =
                             curMessage;
                     }
+                    /*
                     else if constexpr (std::is_same_v<T, ClientUpdate>)
                     {
                         UpdatesResend[UpdatesResendSize].GatewayId = idx;
                         UpdatesResend[UpdatesResendSize++].Message = curMessage;
                     }
+                    */
                     return;
                 }
                 // EPIPE / ECONNRESET / other: connection dead
@@ -131,11 +137,13 @@ namespace ClientDetailsProvider
                     ResponsesResend[ResponsesResendSize].GatewayId = idx;
                     ResponsesResend[ResponsesResendSize++].Message = curMessage;
                 }
+                /*
                 else if constexpr (std::is_same_v<T, ClientUpdate>)
                 {
                     UpdatesResend[UpdatesResendSize].GatewayId = idx;
                     UpdatesResend[UpdatesResendSize++].Message = curMessage;
                 }
+                */
 
                 return;
             }
@@ -151,6 +159,7 @@ namespace ClientDetailsProvider
                     std::terminate();
                 }
             }
+            /*
             else if constexpr (std::is_same_v<T, ClientUpdate>)
             {
                 bool released = UpdatesPool.release(curMessage);
@@ -161,6 +170,7 @@ namespace ClientDetailsProvider
                     std::terminate();
                 }
             }
+            */
         }
 
         void ConsumeMessages(void) noexcept
@@ -179,6 +189,7 @@ namespace ClientDetailsProvider
                     curResponse.Message, curResponse.GatewayId);
             }
 
+            /*
             for (size_t i = 0; i < BatchesSize; ++i)
             {
                 const MessageContainer<ClientUpdate> curUpdate;
@@ -191,17 +202,21 @@ namespace ClientDetailsProvider
                 SendMessage<ClientUpdate>(curUpdate.Message,
                                           curUpdate.GatewayId);
             }
+            */
         }
 
     public:
-        GatewayWriter(ResponsesQueue &responses, UpdatesQueue &updates,
-                      StoragePool<ClientRequestResponse> &responsesPool,
-                      StoragePool<ClientUpdate> &updatesPool)
+        GatewayWriter(
+            ResponsesQueue &responses, // UpdatesQueue &updates,
+            StoragePool<ClientRequestResponse<MaxPositions>> &responsesPool, //,
+            // StoragePool<ClientUpdate> &updatesPool,
+            std::array<FdGen, MaxGateways> &gatewayFd)
             : Responses(responses)
-            , Updates(updates)
+            //, Updates(updates)
             , ResponsesPool(responsesPool)
-            , UpdatesPool(updatesPool)
-            , BufferSize(0)
+            , GatewayFd(gatewayFd)
+            //, UpdatesPool(updatesPool)
+            , ResponsesResendSize(0)
         {}
 
         void StartLoop(void) noexcept
@@ -212,4 +227,4 @@ namespace ClientDetailsProvider
             }
         }
     };
-} // namespace ClientDetailsProvider
+} // namespace AccountService

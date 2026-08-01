@@ -3,7 +3,7 @@
 #include <array>
 #include <cstring>
 
-namespace ClientDetailsProvider
+namespace AccountService
 {
     template <typename T>
     class ObjectBuffer
@@ -35,4 +35,4 @@ namespace ClientDetailsProvider
             BufferSize += size;
         }
     };
-} // namespace ClientDetailsProvider
+} // namespace AccountService

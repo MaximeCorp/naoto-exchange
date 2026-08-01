@@ -4,7 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace ClientDetailsProvider
+namespace AccountService
 {
 #pragma pack(push, 1)
     template <size_t MaxPositions>
@@ -21,14 +21,14 @@ namespace ClientDetailsProvider
 
         void Clear(void) noexcept
         {
-            curResponse->Status = 'R';
-            curResponse->SequenceId = 0; // Handle sequence ID
-            curResponse->ClientId = clientId;
-            curResponse->ClientFd = 0;
-            curResponse->AssetId.fill(0);
-            curResponse->Confirmed.fill(0);
-            curResponse->Attempt.fill(0);
+            Status = 'R';
+            SequenceId = 0; // Handle sequence ID
+            ClientId = 0;
+            ClientFd = 0;
+            AssetId.fill(0);
+            Confirmed.fill(0);
+            Attempt.fill(0);
         }
     };
 #pragma pack(pop)
-} // namespace ClientDetailsProvider
+} // namespace AccountService

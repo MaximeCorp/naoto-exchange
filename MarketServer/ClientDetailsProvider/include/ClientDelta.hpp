@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace ClientDetailsProvider
+namespace AccountService
 {
     template <size_t MaxPositions>
     struct ClientDelta
@@ -13,4 +13,4 @@ namespace ClientDetailsProvider
         std::array<int64_t, MaxPositions> Confirmation;
         std::array<int64_t, MaxPositions> Attempt;
     };
-} // namespace ClientDetailsProvider
+} // namespace AccountService

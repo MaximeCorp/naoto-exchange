@@ -3,20 +3,31 @@
 #include <ClientStates.hpp>
 #include <Consumer.hpp>
 #include <OrderStateReport.hpp>
+#include <absl/container/flat_hash_set.h>
 #include <array>
 
-namespace ClientStatesProvider
+namespace AccountService
 {
     template <size_t MaxPositions, size_t BatchSize>
     class ClientStatesWriter
-        : public Consumer<ClientStatesWriter, OrderStateReport, BatchSize>
+        : public Consumer<ClientStatesWriter<MaxPositions, BatchSize>,
+                          OrderStateReport, BatchSize>
     {
+        using Base = Consumer<ClientStatesWriter<MaxPositions, BatchSize>,
+                              OrderStateReport, BatchSize>;
+        using ReportQueue =
+            moodycamel::BlockingReaderWriterCircularBuffer<OrderStateReport *>;
+
     private:
         ClientStates<MaxPositions> &States;
         absl::flat_hash_set<uint32_t> Touched;
 
     public:
-        ClientStatesWriter()
+        ClientStatesWriter(ClientStates<MaxPositions> &states,
+                           ReportQueue &incoming,
+                           StoragePool<OrderStateReport> &mempool)
+            : Base(incoming, mempool)
+            , States(states)
         {
             Touched.reserve(BatchSize);
         }
@@ -26,7 +37,7 @@ namespace ClientStatesProvider
             States.SetClientAssets(report->ClientId, report->BoughtDelta, 0,
                                    report->BoughtAssetId);
             States.SetClientAssets(report->ClientId, report->SoldDelta,
-                                   report->SoldDelta, report->SoldAsset);
+                                   report->SoldDelta, report->SoldAssetId);
             States.FlushTripleBuffer(report->ClientId);
         }
 
@@ -59,5 +70,13 @@ namespace ClientStatesProvider
 
             Touched.clear();
         }
+
+        void StartLoop(void) noexcept
+        {
+            while (true)
+            {
+                Base::TryConsume();
+            }
+        }
     };
-} // namespace ClientStatesProvider
+} // namespace AccountService

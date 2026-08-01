@@ -3,7 +3,7 @@
 #include <array>
 #include <cstdint>
 
-namespace ClientDetailsProvider
+namespace AccountService
 {
 #pragma pack(push, 1)
     struct ClientRequest
@@ -12,9 +12,10 @@ namespace ClientDetailsProvider
                           // 'D' For client disconnect
         uint32_t ClientId;
         std::array<uint8_t, 32> Key; // Used for client details request only
-        uint32_t ClientFd; // Information given by gateway, only for details request
+        uint32_t
+            ClientFd; // Information given by gateway, only for details request
         uint16_t GatewayId; // always needed
     };
 
 #pragma pack(pop)
-} // namespace ClientDetailsProvider
+} // namespace AccountService

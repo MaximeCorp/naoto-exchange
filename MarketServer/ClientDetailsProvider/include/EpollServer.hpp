@@ -15,7 +15,7 @@
 #include <unistd.h>
 #include <vector>
 
-namespace ClientDetailsProvider
+namespace AccountService
 {
     template <typename T, size_t BatchSize>
     class EpollServer
@@ -90,15 +90,6 @@ namespace ClientDetailsProvider
                 ObjectBatch<T, BatchSize> *batch = nullptr;
                 ObjectBuffer<T> &buffer = Buffers[curFd];
 
-                std::cout << "Content of buffer:\n";
-
-                for (size_t i = 0; i < buffer.BufferSize; ++i)
-                {
-                    std::cout << buffer.Buffer[i];
-                }
-
-                std::cout << "\n";
-
                 ssize_t nread;
 
                 while (true)
@@ -122,11 +113,13 @@ namespace ClientDetailsProvider
                         curFd, (char *)(batch->Data.data()) + buffer.BufferSize,
                         sizeof(Order) * BatchSize - buffer.BufferSize);
 
+                    std::cout << "received " << nread << " size of object is "
+                              << sizeof(T) << "\n";
+
                     if (nread <= 0) [[unlikely]]
                     {
-                        Pool.releaseCritical(batch);
-
-                        batch = nullptr;
+                        batch->setSize(0);
+                        Orders.try_enqueue(batch);
                         break;
                     }
 
@@ -145,8 +138,12 @@ namespace ClientDetailsProvider
 
                     if (!Orders.try_enqueue(batch)) [[unlikely]]
                     {
-                        Pool.releaseCritical(batch);
-                        // Send error message to client
+                        // handle
+                    }
+                    else
+                    {
+                        std::cout << "push succesful, batch of size "
+                                  << batchSize << "\n\n";
                     }
 
                     if (batchSize <= 0)
@@ -161,7 +158,7 @@ namespace ClientDetailsProvider
 
                 if (batch != nullptr)
                 {
-                    Pool.releaseCritical(batch);
+                    // Pool.releaseCritical(batch);
                 }
 
                 if (nread == 0)
@@ -188,13 +185,10 @@ namespace ClientDetailsProvider
                 int clientFd;
 
                 while ((clientFd =
-                            accept4(ListenFd, (struct sockaddr *)&client_addr,
-                                    &client_len, SOCK_NONBLOCK))
+                            accept(ListenFd, (struct sockaddr *)&client_addr,
+                                   &client_len))
                        != -1)
                 {
-                    int one = 1;
-                    setsockopt(clientFd, IPPROTO_TCP, TCP_NODELAY, &one,
-                               sizeof(one));
                     addClient(clientFd);
                 }
 
@@ -230,7 +224,7 @@ namespace ClientDetailsProvider
             , Pool(pool)
             , Orders(orders)
         {
-            Buffers.resize(FileDescriptorsOps::findMaxFd());
+            Buffers.resize(FileDescriptorsOps::getMaxFd());
             initSocket();
         }
 
@@ -273,6 +267,6 @@ namespace ClientDetailsProvider
         }
     };
 
-} // namespace ClientDetailsProvider
+} // namespace AccountService
 
 #include "EpollServer.ipp"

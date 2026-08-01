@@ -3,7 +3,7 @@
 #include <atomic>
 #include <cstdlib>
 
-namespace ClientDetailsProvider
+namespace AccountService
 {
     class FdGen
     {
@@ -50,4 +50,4 @@ namespace ClientDetailsProvider
             return gen;
         }
     };
-} // namespace ClientDetailsProvider
+} // namespace AccountService

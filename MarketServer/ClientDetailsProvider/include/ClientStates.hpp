@@ -6,7 +6,7 @@
 #include <atomic>
 #include <vector>
 
-namespace ClientDetailsProvider
+namespace AccountService
 {
     template <size_t MaxPositions>
     class ClientStates // Data coherence not guaranteed, pls update the right
@@ -20,7 +20,7 @@ namespace ClientDetailsProvider
         alignas(
             64) std::vector<std::array<ClientDelta<MaxPositions>, 3>> Deltas;
 
-        alignas(64) std::vector<std::atomic<uint8_t>> Complete;
+        alignas(64) std::vector<uint8_t> Complete;
 
     public:
         ClientStates(size_t maxClients)
@@ -35,14 +35,15 @@ namespace ClientDetailsProvider
         [[nodiscard]] uint8_t
         GetComplete(const uint32_t clientId) const noexcept
         {
-            return Complete[clientId].load(std::memory_order_acquire);
+            return std::atomic_ref(Complete[clientId])
+                .load(std::memory_order_acquire);
         }
 
         [[nodiscard]] const ClientState<MaxPositions>
         GetClientState(const uint32_t clientId) const noexcept
         {
-            uint8_t complete =
-                Complete[clientId].load(std::memory_order_acquire);
+            uint8_t complete = std::atomic_ref(Complete[clientId])
+                                   .load(std::memory_order_acquire);
             return complete == 0 ? States1[clientId]
                 : complete == 1  ? States2[clientId]
                                  : States3[clientId];
@@ -54,22 +55,22 @@ namespace ClientDetailsProvider
         {
             const uint32_t clientId = clientState.ClientId;
 
-            uint8_t complete =
-                Complete[clientId].load(std::memory_order_relaxed);
+            uint8_t complete = std::atomic_ref(Complete[clientId])
+                                   .load(std::memory_order_relaxed);
 
             ClientState<MaxPositions> &toChange = complete == 0
                 ? States2[clientId]
                 : (complete == 1 ? States3[clientId] : States1[clientId]);
             toChange = clientState;
 
-            // Should update deltas if this function is ever used
+            // TODO: Should update deltas if this function is ever used
         }
 
         void SetClientAssets(const uint32_t clientId, const int64_t confirmed,
                              const int64_t attempt, uint16_t assetId) noexcept
         {
-            uint8_t complete =
-                Complete[clientId].load(std::memory_order_relaxed);
+            uint8_t complete = std::atomic_ref(Complete[clientId])
+                                   .load(std::memory_order_relaxed);
 
             ClientState<MaxPositions> &toChange = complete == 0
                 ? States2[clientId]
@@ -87,8 +88,8 @@ namespace ClientDetailsProvider
 
         void FlushTripleBuffer(const uint32_t clientId) noexcept
         {
-            uint8_t complete =
-                Complete[clientId].load(std::memory_order_relaxed);
+            uint8_t complete = std::atomic_ref(Complete[clientId])
+                                   .load(std::memory_order_relaxed);
 
             std::array<ClientDelta<MaxPositions>, 3> &curDelta =
                 Deltas[clientId];
@@ -105,7 +106,8 @@ namespace ClientDetailsProvider
 
             complete = complete == 2 ? 0 : complete + 1;
 
-            Complete[clientId].store(complete, std::memory_order_release);
+            std::atomic_ref(Complete[clientId])
+                .store(complete, std::memory_order_release);
 
             // Assumption: the client details will always contain MaxPositions
             // assets (even if some aren't used)
@@ -127,4 +129,4 @@ namespace ClientDetailsProvider
             }
         }
     };
-} // namespace ClientDetailsProvider
+} // namespace AccountService

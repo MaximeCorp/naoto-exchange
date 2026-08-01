@@ -6,7 +6,7 @@
 #include <stdexcept>
 #include <vector>
 
-namespace ClientDetailsProvider
+namespace AccountService
 {
     template <typename T>
     class StoragePool
@@ -15,6 +15,7 @@ namespace ClientDetailsProvider
 
     private:
         std::vector<T> OrderStorage;
+        // TODO: Add buffer for producer side release
 
         const size_t Capacity;
         FreeQueue Free;
@@ -83,4 +84,4 @@ namespace ClientDetailsProvider
             return Free.peek() != nullptr;
         }
     };
-} // namespace ClientDetailsProvider
+} // namespace AccountService

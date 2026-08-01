@@ -10,12 +10,12 @@
 #include <StoragePool.hpp>
 #include <openssl/sha.h>
 
-namespace ClientDetailsProvider
+namespace AccountService
 {
     template <size_t MaxPositions, size_t BatchSize>
     class ClientStatesKeeper
     {
-        using MessagesQueue = moodycamel::BlockingReaderWriterCircularBuffer<
+        using MessageQueue = moodycamel::BlockingReaderWriterCircularBuffer<
             ObjectBatch<ClientRequest, BatchSize> *>;
         using ResponsesQueue = moodycamel::BlockingReaderWriterCircularBuffer<
             MessageContainer<ClientRequestResponse<MaxPositions>>>;
@@ -26,7 +26,6 @@ namespace ClientDetailsProvider
         ResponsesQueue &ResponsesSend;
         StoragePool<ObjectBatch<ClientRequest, BatchSize>> &MessagesPool;
         StoragePool<ClientRequestResponse<MaxPositions>> &ResponsesPool;
-        std::vector<uint32_t> GatewayFd; // GatewayFd[n] for gateway number n
 
         void ProcessMessage(void)
         {
@@ -40,13 +39,14 @@ namespace ClientDetailsProvider
 
                 for (size_t i = 0; i < curBatch->getSize(); ++i)
                 {
-                    const ClientRequest &curMessage = (*to_check)[i];
+                    const ClientRequest &curMessage = (*curBatch)[i];
 
                     uint16_t gatewayId = curMessage.GatewayId;
                     uint32_t clientId = curMessage.ClientId;
                     std::array<uint8_t, 32> &key = curMessage.Key;
 
-                    ClientState<MaxPositions> &curClient = States[clientId];
+                    ClientState<MaxPositions> curClient =
+                        States.GetClientState(clientId);
 
                     if (curMessage.RequestType == 'A')
                     {
@@ -98,6 +98,9 @@ namespace ClientDetailsProvider
                     {
                         curClient.SetConnected(-1);
                         // Might have to send ACK to gateways
+                        // TODO: Connection requests should also contain if the
+                        // client's already connected to avoid having to send
+                        // acks
                     }
                     else
                     {
@@ -110,8 +113,16 @@ namespace ClientDetailsProvider
         }
 
     public:
-        ClientDetailsProvider(MessageQueue &incomingMessages)
-            : IncomingMessages(incomingMessages)
+        ClientStatesKeeper(
+            ClientStates<MaxPositions> &states, MessageQueue &incomingMessages,
+            ResponsesQueue &responsesSend,
+            StoragePool<ObjectBatch<ClientRequest, BatchSize>> &messagesPool,
+            StoragePool<ClientRequestResponse<MaxPositions>> &responsesPool)
+            : States(states)
+            , IncomingMessages(incomingMessages)
+            , ResponsesSend(responsesSend)
+            , MessagesPool(messagesPool)
+            , ResponsesPool(responsesPool)
         {}
 
         void StartLoop(void)
@@ -122,4 +133,4 @@ namespace ClientDetailsProvider
             }
         }
     };
-} // namespace ClientDetailsProvider
+} // namespace AccountService

@@ -3,8 +3,9 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <openssl/sha.h>
 
-namespace ClientDetailsProvider
+namespace AccountService
 {
     template <size_t MaxPositions>
     struct alignas(64) ClientState
@@ -24,31 +25,25 @@ namespace ClientDetailsProvider
         sha256(const std::array<uint8_t, 32> &in) noexcept
         {
             std::array<uint8_t, 32> out;
-            SHA256(in.data(), len, out.data());
+            SHA256(in.data(), 32, out.data());
             return out;
         }
 
     public:
         ClientState(void)
             : ClientId(0)
-            , Confirmed(0)
-            , Attempt(0)
             , Authorized(0)
             , Connected(0)
         {}
 
         ClientState(uint32_t clientId, int64_t confirmed)
             : ClientId(clientId)
-            , Confirmed(confirmed)
-            , Attempt(0)
             , Authorized(0)
             , Connected(0)
         {}
 
         ClientState(uint32_t clientId, int64_t confirmed, int64_t attempt)
             : ClientId(clientId)
-            , Confirmed(confirmed)
-            , Attempt(attempt)
             , Authorized(0)
             , Connected(0)
         {}
@@ -163,4 +158,4 @@ namespace ClientDetailsProvider
             return Connected;
         }
     };
-} // namespace ClientDetailsProvider
+} // namespace AccountService

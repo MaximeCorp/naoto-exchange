@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-namespace ClientDetailsProvider
+namespace AccountService
 {
 #pragma pack(push, 1)
     struct ClientUpdate
@@ -16,4 +16,4 @@ namespace ClientDetailsProvider
         // twice
     };
 #pragma pack(pop)
-} // namespace ClientDetailsProvider
+} // namespace AccountService

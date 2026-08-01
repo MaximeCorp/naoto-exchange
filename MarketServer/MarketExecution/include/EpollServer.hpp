@@ -224,7 +224,7 @@ namespace MarketExecution
             , Pool(pool)
             , Orders(orders)
         {
-            Buffers.resize(FileDescriptorsOps::findMaxFd());
+            Buffers.resize(FileDescriptorsOps::getMaxFd());
             initSocket();
         }
 

@@ -5,7 +5,7 @@
 #include <array>
 #include <variant>
 
-namespace ClientDetailsProvider
+namespace AccountService
 {
     template <typename DerivedConsumer, typename T>
     concept HasHandle = requires(DerivedConsumer d, T *item) {
@@ -147,4 +147,4 @@ namespace ClientDetailsProvider
             }
         }
     };
-} // namespace ClientDetailsProvider
+} // namespace AccountService

@@ -6,7 +6,7 @@
 #include <optional>
 #include <sys/resource.h>
 
-namespace ClientDetailsProvider
+namespace AccountService
 {
     // Not thread safe
     class FileDescriptorsOps
@@ -83,4 +83,4 @@ namespace ClientDetailsProvider
             return MaxFd.has_value() ? MaxFd.value() : findMaxFd();
         }
     };
-} // namespace ClientDetailsProvider
+} // namespace AccountService
