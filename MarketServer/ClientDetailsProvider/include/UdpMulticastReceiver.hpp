@@ -75,8 +75,7 @@ namespace AccountService
             , Mempool(rte_pktmbuf_pool_create(
                   poolName, poolSize,
                   std::min<size_t>(poolSize, RTE_MEMPOOL_CACHE_MAX_SIZE), 0,
-                  RTE_PKTMBUF_HEADROOM + MTU + sizeof(rte_ether_hdr),
-                  rte_lcore_to_socket_id(lcoreId)))
+                  RTE_MBUF_DEFAULT_BUF_SIZE, rte_lcore_to_socket_id(lcoreId)))
             , NextToRead(0)
             , DstIp(dstIp)
             , DstPort(dstPort)
@@ -97,15 +96,28 @@ namespace AccountService
 
             if (ret != 0)
             {
-                rte_exit(EXIT_FAILURE,
-                         "Failed to add multicast MAC filter: %d\n", ret);
+                std::cerr << "Explicit multicast MAC filter unsupported (err "
+                          << ret << "), trying allmulticast\n";
+                ret = rte_eth_allmulticast_enable(PortId);
+                if (ret != 0)
+                {
+                    std::cerr << "Allmulticast unsupported (err " << ret
+                              << "), falling back to promiscuous mode\n";
+                    ret = rte_eth_promiscuous_enable(PortId);
+                    if (ret != 0)
+                    {
+                        rte_exit(EXIT_FAILURE,
+                                 "Failed to enable promiscuous mode: %d\n",
+                                 ret);
+                    }
+                }
             }
         }
 
         void Receive(void) noexcept
         {
             uint16_t nbRx =
-                rte_eth_rx_burst(PortId, QueueId, Packets, MaxPackets);
+                rte_eth_rx_burst(PortId, QueueId, Packets.data(), MaxPackets);
 
             for (uint16_t i = 0; i < nbRx; ++i)
             {

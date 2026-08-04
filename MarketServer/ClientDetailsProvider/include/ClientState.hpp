@@ -10,7 +10,6 @@ namespace AccountService
     template <size_t MaxPositions>
     struct alignas(64) ClientState
     {
-    private:
         uint32_t ClientId;
         std::array<uint8_t, 32> Key;
         std::array<uint16_t, MaxPositions> AssetId;
@@ -29,7 +28,6 @@ namespace AccountService
             return out;
         }
 
-    public:
         ClientState(void)
             : ClientId(0)
             , Authorized(0)
@@ -48,7 +46,8 @@ namespace AccountService
             , Connected(0)
         {}
 
-        [[nodiscard]] bool CheckKey(std::array<uint8_t, 32> &key) const noexcept
+        [[nodiscard]] bool
+        CheckKey(const std::array<uint8_t, 32> &key) const noexcept
         {
             std::array<uint8_t, 32> keyHash = sha256(key);
 

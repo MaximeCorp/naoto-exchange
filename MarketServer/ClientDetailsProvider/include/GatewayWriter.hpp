@@ -44,7 +44,8 @@ namespace AccountService
         void DrainResendBuffers(void) noexcept // Call before SendMessage if
                                                // order of messages matters
         {
-            if constexpr (std::is_same_v<T, ClientRequestResponse>)
+            if constexpr (std::is_same_v<T,
+                                         ClientRequestResponse<MaxPositions>>)
             {
                 while (ResponsesResendSize)
                 {
@@ -79,7 +80,7 @@ namespace AccountService
                                                          // memory dependancy
                                                          // allows it
 
-            std::cout << "(int32_t)curVal is " << (int32_t)curVal << "\n";
+            std::cout << "curVal is " << (int32_t)curVal << "\n";
 
             int32_t curFd = FdGen::Fd(curVal);
 
@@ -103,11 +104,12 @@ namespace AccountService
             {
                 if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
                 {
-                    if constexpr (std::is_same_v<T, ClientRequestResponse>)
+                    if constexpr (std::is_same_v<
+                                      T, ClientRequestResponse<MaxPositions>>)
                     {
                         ResponsesResend[ResponsesResendSize].GatewayId = idx;
                         ResponsesResend[ResponsesResendSize++].Message =
-                            curMessage;
+                            (T *)curMessage;
                     }
                     /*
                     else if constexpr (std::is_same_v<T, ClientUpdate>)
@@ -132,10 +134,12 @@ namespace AccountService
                 // fd
                 // For later : push to the array / vector of
                 // messages to send again
-                if constexpr (std::is_same_v<T, ClientRequestResponse>)
+                if constexpr (std::is_same_v<
+                                  T, ClientRequestResponse<MaxPositions>>)
                 {
                     ResponsesResend[ResponsesResendSize].GatewayId = idx;
-                    ResponsesResend[ResponsesResendSize++].Message = curMessage;
+                    ResponsesResend[ResponsesResendSize++].Message =
+                        (T *)curMessage;
                 }
                 /*
                 else if constexpr (std::is_same_v<T, ClientUpdate>)
@@ -149,9 +153,10 @@ namespace AccountService
             }
 
             // Release the message if no sending error
-            if constexpr (std::is_same_v<T, ClientRequestResponse>)
+            if constexpr (std::is_same_v<T,
+                                         ClientRequestResponse<MaxPositions>>)
             {
-                bool released = ResponsesPool.release(curMessage);
+                bool released = ResponsesPool.release((T *)curMessage);
 
                 if (!released) [[unlikely]]
                 {
@@ -177,7 +182,7 @@ namespace AccountService
         {
             for (size_t i = 0; i < BatchesSize; ++i)
             {
-                const MessageContainer<ClientRequestResponse<MaxPositions>>
+                MessageContainer<ClientRequestResponse<MaxPositions>>
                     curResponse;
 
                 if (!Responses.try_dequeue(curResponse)) [[unlikely]]

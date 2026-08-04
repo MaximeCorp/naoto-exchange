@@ -41,15 +41,23 @@ namespace AccountService
                 {
                     const ClientRequest &curMessage = (*curBatch)[i];
 
+                    // Might do that later to avoid unnecessary memory accesses
                     uint16_t gatewayId = curMessage.GatewayId;
                     uint32_t clientId = curMessage.ClientId;
-                    std::array<uint8_t, 32> &key = curMessage.Key;
+                    const std::array<uint8_t, 32> &key = curMessage.Key;
 
                     ClientState<MaxPositions> curClient =
                         States.GetClientState(clientId);
 
                     if (curMessage.RequestType == 'A')
                     {
+                        std::cout
+                            << "Received a client connection request from "
+                               "gateway "
+                            << curMessage.GatewayId
+                            << "\nRequest details:\n- client id: "
+                            << curMessage.ClientId << "\n\n";
+
                         if (curClient.GetAuthorized() != gatewayId
                             || curClient.GetConnected() != -1)
                         {
@@ -60,6 +68,18 @@ namespace AccountService
                             curResponse->Status = 'R';
                             curResponse->ClientId = clientId;
                             curResponse->ClientFd = curMessage.ClientFd;
+
+                            MessageContainer<
+                                ClientRequestResponse<MaxPositions>>
+                                toPush;
+
+                            toPush.GatewayId = gatewayId;
+                            toPush.Message = curResponse;
+
+                            ResponsesSend.wait_enqueue(toPush);
+
+                            std::cout << "Refused: unauthorized gateway\n\n";
+
                             continue;
                         }
 
@@ -72,6 +92,18 @@ namespace AccountService
                             curResponse->Status = 'C';
                             curResponse->ClientId = clientId;
                             curResponse->ClientFd = curMessage.ClientFd;
+
+                            MessageContainer<
+                                ClientRequestResponse<MaxPositions>>
+                                toPush;
+
+                            toPush.GatewayId = gatewayId;
+                            toPush.Message = curResponse;
+
+                            ResponsesSend.wait_enqueue(toPush);
+
+                            std::cout << "Refused: wrong credentials\n\n";
+
                             continue;
                         }
 
@@ -92,6 +124,8 @@ namespace AccountService
                         toPush.GatewayId = gatewayId;
                         toPush.Message = curResponse;
 
+                        std::cout << "Accepted\n\n";
+
                         ResponsesSend.wait_enqueue(toPush);
                     }
                     else if (curMessage.RequestType == 'D')
@@ -108,7 +142,12 @@ namespace AccountService
                     }
                 }
 
-                MessagesPool.release(curBatch);
+                if (!MessagesPool.release(curBatch)) [[unlikely]]
+                {
+                    std::cerr << "Failed releasing to messages pool in process "
+                                 "message\n";
+                    std::terminate();
+                }
             }
         }
 

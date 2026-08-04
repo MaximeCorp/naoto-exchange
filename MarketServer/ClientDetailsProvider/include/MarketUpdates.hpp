@@ -75,7 +75,7 @@ namespace AccountService
             }
         }
 
-        void StartEmittersLoop(void) noexcept
+        void StartReceiversLoop(void) noexcept
         {
             ReportReceiver->StartLoop();
 

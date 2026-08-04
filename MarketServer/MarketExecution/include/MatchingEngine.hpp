@@ -1,9 +1,9 @@
 #pragma once
 
 #include <BidAsk.hpp>
-#include <EpollServer.hpp>
 #include <MarketUpdates.hpp>
 #include <OrderBookUpdate.hpp>
+#include <OrderIngressServer.hpp>
 #include <OrderStateReport.hpp>
 #include <ReaderWriterCircularBuffer.hpp>
 #include <cstdlib>
@@ -35,7 +35,7 @@ namespace MarketExecution
         StoragePool<OrderStateReport> OrderStatesPool;
         StoragePool<OrderBookUpdate> OrderBookUpdatesPool;
         BidAsk<FHMSize, SkipListMaxLevel, BatchSize, OrderMapSize> OrderBook;
-        EpollServer<Order, BatchSize> Server;
+        OrderIngressServer<BatchSize> Server;
         MarketUpdates<BatchSize> MarketUpdatesSender;
 
         std::shared_ptr<etcd::KeepAlive> KeepAlive;
@@ -135,7 +135,7 @@ namespace MarketExecution
                         OrderMapSize>::MarketExecutionLoop,
                 &OrderBook);
             std::thread serverThread(
-                &EpollServer<Order, BatchSize>::startServer, &Server);
+                &OrderIngressServer<BatchSize>::startServer, &Server);
 
             setAffinity(matchingThread, 5);
             setAffinity(serverThread, 6);

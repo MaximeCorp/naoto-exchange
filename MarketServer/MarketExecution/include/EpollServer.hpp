@@ -6,6 +6,7 @@
 #include <ReaderWriterCircularBuffer.hpp>
 #include <StoragePool.hpp>
 #include <atomic>
+#include <concepts>
 #include <cstdlib>
 #include <fcntl.h>
 #include <iostream>
@@ -13,15 +14,46 @@
 #include <sys/epoll.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <variant>
 #include <vector>
 
 namespace MarketExecution
 {
-    template <typename T, size_t BatchSize>
+    template <typename DerivedServer>
+    concept HasAcceptHandle = requires(DerivedServer server, uint32_t fd) {
+        { server.AcceptHandle(fd) } -> std::same_as<void>;
+    };
+
+    template <typename DerivedServer>
+    concept HasCloseHandle = requires(DerivedServer server, uint32_t fd) {
+        { server.CloseHandle(fd) } -> std::same_as<void>;
+    };
+
+    template <typename DerivedServer, typename InitMessage>
+    concept HasFirstMessageHandle =
+        requires(DerivedServer server, InitMessage *message, uint32_t fd) {
+            { server.FirstMessageHandle(message, fd) } -> std::same_as<void>;
+        };
+
+    template <typename DerivedServer, typename T, size_t BatchSize>
+    concept HasBatchHandleServer = requires(
+        DerivedServer server, ObjectBatch<T, BatchSize> *t, uint32_t fd) {
+        { server.BatchHandle(t, fd) } -> std::same_as<void>;
+    };
+
+    template <typename DerivedServer, typename T, size_t BatchSize,
+              typename InitMessage = std::monostate>
     class EpollServer
     {
         using ObjectQueue = moodycamel::BlockingReaderWriterCircularBuffer<
             ObjectBatch<T, BatchSize> *>;
+        using FirstMessageBuffer =
+            std::conditional_t<!std::is_same_v<std::monostate, InitMessage>,
+                               std::vector<bool>, std::monostate>;
+
+        static_assert(sizeof(T) >= sizeof(InitMessage),
+                      "Epoll server: The first message can't be contained "
+                      "because it's bigger than normal messages\n");
 
     private:
         int ListenFd;
@@ -32,6 +64,7 @@ namespace MarketExecution
         const int MaxPending;
 
         std::vector<ObjectBuffer<T>> Buffers;
+        [[no_unique_address]] FirstMessageBuffer FirstMessage;
         StoragePool<ObjectBatch<T, BatchSize>> &Pool;
         alignas(64) ObjectQueue &Orders;
 
@@ -63,116 +96,191 @@ namespace MarketExecution
                 close(clientFd);
             }
 
+            if constexpr (HasFirstMessageHandle<DerivedServer, InitMessage>)
+            {
+                std::cout
+                    << "New connection, setting first message to true\n\n";
+                FirstMessage[clientFd] = true;
+            }
+
+            if constexpr (HasAcceptHandle<DerivedServer>)
+            {
+                static_cast<DerivedServer *>(this)->AcceptHandle(clientFd);
+            }
+
             Buffers[clientFd] = {};
         }
 
         inline void removeClient(const int clientFd) noexcept
         {
+            if constexpr (HasCloseHandle<DerivedServer>)
+            {
+                static_cast<DerivedServer *>(this)->CloseHandle(clientFd);
+            }
+
             epoll_ctl(EpollFd, EPOLL_CTL_DEL, clientFd, nullptr);
 
             close(clientFd);
 
             Buffers[clientFd].clearBuffer();
 
-            std::cout << "Closed connection on FD: " << clientFd << std::endl;
+            std::cout << "Closed connection on FD: " << clientFd << "\n";
         }
 
-        void readMessage(struct epoll_event &event, const int curFd) noexcept
+        void readMessage(const uint32_t curFd) noexcept
         {
-            if (event.events & (EPOLLHUP | EPOLLERR | EPOLLRDHUP))
+            ssize_t nread;
+            ObjectBuffer<T> &buffer = Buffers[curFd];
+
+            if constexpr (HasFirstMessageHandle<DerivedServer, InitMessage>)
             {
-                removeClient(curFd);
-                return;
-            }
-
-            if (event.events & EPOLLIN)
-            {
-                ObjectBatch<T, BatchSize> *batch = nullptr;
-                ObjectBuffer<T> &buffer = Buffers[curFd];
-
-                ssize_t nread;
-
-                while (true)
+                if (FirstMessage[curFd]) [[unlikely]]
                 {
-                    batch = Pool.acquire();
+                    std::cout << "Processing first message\n\n";
 
-                    if (!batch) [[unlikely]]
+                    InitMessage firstMessage;
+                    while (buffer.BufferSize < sizeof(InitMessage))
                     {
-                        // Send error message to client (don't forget to give
-                        // context: which order was refused)
-                        break;
+                        nread = read(curFd, &firstMessage,
+                                     sizeof(InitMessage) - buffer.BufferSize);
+
+                        if (nread > 0)
+                        {
+                            buffer.addBytes(&firstMessage, nread);
+                            std::cout << "addBytes was ok\n\n";
+                        }
+                        else if (nread == 0)
+                        {
+                            removeClient(curFd);
+                            return;
+                        }
+                        else
+                        {
+                            if (errno != EAGAIN && errno != EWOULDBLOCK
+                                && errno != EINTR)
+                            {
+                                removeClient(curFd);
+                                return;
+                            }
+                            break;
+                        }
                     }
 
-                    if (buffer.BufferSize > 0) [[likely]]
+                    if (buffer.BufferSize >= sizeof(InitMessage))
                     {
-                        std::memcpy(batch->Data.data(), buffer.Buffer.data(),
-                                    buffer.BufferSize);
-                    }
-
-                    nread = read(
-                        curFd, (char *)(batch->Data.data()) + buffer.BufferSize,
-                        sizeof(Order) * BatchSize - buffer.BufferSize);
-
-                    std::cout << "received " << nread << " size of object is "
-                              << sizeof(T) << "\n";
-
-                    if (nread <= 0) [[unlikely]]
-                    {
-                        batch->setSize(0);
-                        Orders.try_enqueue(batch);
-                        break;
-                    }
-
-                    batch->setFd(curFd);
-
-                    auto [batchSize, bufferSize] = std::div(
-                        (int)(nread + buffer.BufferSize), sizeof(Order));
-
-                    batch->setSize(batchSize);
-
-                    buffer.clearBuffer();
-                    buffer.addBytes(
-                        batch->Data.data() + sizeof(Order) * batchSize,
-                        bufferSize); // Double check if sizeof(Order) *
-                                     // batchSize is right
-
-                    if (!Orders.try_enqueue(batch)) [[unlikely]]
-                    {
-                        // handle
+                        buffer.readBytes(&firstMessage, sizeof(InitMessage));
+                        std::cout << "readBytes was ok\n\n";
+                        static_cast<DerivedServer *>(this)->FirstMessageHandle(
+                            &firstMessage, curFd);
+                        FirstMessage[curFd] = false;
+                        std::cout << "First message handle was ok\n\n";
                     }
                     else
                     {
-                        std::cout << "push succesful, batch of size "
-                                  << batchSize << "\n\n";
+                        // No normal messages processing before full first
+                        // message
+                        return;
                     }
-
-                    if (batchSize <= 0)
-                    {
-                        std::cout << "cleared\n";
-                    }
-
-                    buffer.BufferSize *= batchSize <= 0;
-
-                    batch = nullptr;
                 }
+            }
 
-                if (batch != nullptr)
+            std::cout << "Processing normal message\n\n";
+
+            ObjectBatch<T, BatchSize> *batch = nullptr;
+
+            while (true)
+            {
+                batch = Pool.acquire();
+
+                if (!batch) [[unlikely]]
                 {
-                    // Pool.releaseCritical(batch);
+                    // TODO: Handle drained pool
+                    // Send error message to client (don't forget to give
+                    // context: which order was refused)
+                    break;
                 }
 
-                if (nread == 0)
+                if (buffer.BufferSize > 0) [[likely]]
+                {
+                    std::memcpy(batch->Data.data(), buffer.Buffer.data(),
+                                buffer.BufferSize);
+                }
+
+                nread = read(curFd,
+                             (char *)(batch->Data.data()) + buffer.BufferSize,
+                             sizeof(Order) * BatchSize - buffer.BufferSize);
+
+                std::cout << "received " << nread << " size of object is "
+                          << sizeof(T) << "\n";
+
+                if (nread <= 0) [[unlikely]]
+                {
+                    batch->setSize(0);
+                    Orders.try_enqueue(batch);
+                    break;
+                }
+
+                batch->setFd(curFd);
+
+                auto [batchSize, bufferSize] = std::div(
+                    (int)(nread + buffer.BufferSize), (int)sizeof(Order));
+
+                batch->setSize(batchSize);
+
+                buffer.clearBuffer();
+                buffer.addBytes(batch->Data.data() + sizeof(Order) * batchSize,
+                                bufferSize); // Double check if sizeof(Order) *
+                                             // batchSize is right
+
+                if constexpr (HasBatchHandleServer<DerivedServer, T, BatchSize>)
+                {
+                    static_cast<DerivedServer *>(this)->BatchHandle(batch,
+                                                                    curFd);
+                }
+
+                if (!Orders.try_enqueue(batch)) [[unlikely]]
+                {
+                    // handle
+                }
+                else
+                {
+                    std::cout << "push succesful, batch of size " << batchSize
+                              << "\n\n";
+                }
+
+                // TODO: Check if this is necessary / useful
+                // buffer.BufferSize *= batchSize <= 0;
+
+                batch = nullptr;
+            }
+
+            // TODO: Think about if it's necessary to free acquired batches
+
+            if (nread == 0)
+            {
+                removeClient(curFd);
+            }
+            else if (nread < 0)
+            {
+                if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)
                 {
                     removeClient(curFd);
+                    return;
                 }
-                else if (nread == -1)
-                {
-                    if (errno != EAGAIN && errno != EWOULDBLOCK)
-                    {
-                        perror("read error");
-                        removeClient(curFd);
-                    }
-                }
+            }
+        }
+
+        void readEvent(struct epoll_event &event, const int curFd) noexcept
+        {
+            if (event.events & EPOLLIN)
+            {
+                readMessage(curFd);
+                return;
+            }
+
+            if (event.events & (EPOLLHUP | EPOLLERR | EPOLLRDHUP))
+            {
+                removeClient(curFd);
             }
         }
 
@@ -199,7 +307,7 @@ namespace MarketExecution
             }
         }
 
-        void initSocket(void); // Not in hot path
+        void initSocket(void) noexcept; // Not in hot path
 
     public:
         EpollServer(const int port, const int maxEvents, const int maxPending,
@@ -212,6 +320,11 @@ namespace MarketExecution
             , Orders(orders)
         {
             Buffers.resize(nb_fds);
+            if constexpr (HasFirstMessageHandle<DerivedServer, InitMessage>)
+            {
+                FirstMessage.resize(nb_fds);
+            }
+
             initSocket();
         }
 
@@ -225,6 +338,11 @@ namespace MarketExecution
             , Orders(orders)
         {
             Buffers.resize(FileDescriptorsOps::getMaxFd());
+            if constexpr (HasFirstMessageHandle<DerivedServer, InitMessage>)
+            {
+                FirstMessage.resize(FileDescriptorsOps::getMaxFd());
+            }
+
             initSocket();
         }
 
@@ -254,7 +372,7 @@ namespace MarketExecution
                     }
                     else
                     {
-                        readMessage(events[i], curFd);
+                        readEvent(events[i], curFd);
                     }
                 }
             }

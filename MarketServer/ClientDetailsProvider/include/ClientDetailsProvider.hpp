@@ -1,11 +1,12 @@
 #pragma once
 
+#include <ClientDetailsProviderServer.hpp>
 #include <ClientRequest.hpp>
 #include <ClientRequestResponse.hpp>
+#include <ClientState.hpp>
 #include <ClientStates.hpp>
 #include <ClientStatesKeeper.hpp>
 #include <ClientStatesWriter.hpp>
-#include <EpollServer.hpp>
 #include <GatewayWriter.hpp>
 #include <MarketUpdates.hpp>
 #include <OrderStateReport.hpp>
@@ -34,9 +35,8 @@ namespace AccountService
         RequestQueue Requests;
         ReportQueue Reports;
         ResponseQueue Responses;
-        // TODO: Add the FdGen update in epoll server
         std::array<FdGen, MaxGateways> GatewayFd;
-        EpollServer<ClientRequest, BatchSize> Server;
+        ClientDetailsProviderServer<BatchSize, MaxGateways> Server;
         ClientStatesKeeper<MaxPositions, BatchSize> Keeper;
         GatewayWriter<MaxPositions, BatchSize, MaxGateways, 128> MessageWriter;
         ClientStatesWriter<MaxPositions, BatchSize> Writer;
@@ -79,7 +79,34 @@ namespace AccountService
             , Requests(requestQueueSize)
             , Reports(reportQueueSize)
             , Responses(responseQueueSize)
-            , Server(serverPort, maxEvents, maxPending, RequestPool, Requests)
+            , Server(serverPort, maxEvents, maxPending, RequestPool, Requests,
+                     GatewayFd)
+            , Keeper(States, Requests, Responses, RequestPool, ResponsePool)
+            , MessageWriter(Responses, ResponsePool, GatewayFd)
+            , Writer(States, Reports, ReportPool)
+            , ReportReceiver(argc, argv, Reports, ReportPool, portId,
+                             nbRxQueueSlots, dpdkPoolSize, dstIp, dstPort)
+        {}
+
+        ClientDetailsProvider(int argc, char **argv, size_t maxClients,
+                              size_t requestPoolSize, size_t reportPoolSize,
+                              size_t responsePoolSize, size_t requestQueueSize,
+                              size_t reportQueueSize, size_t responseQueueSize,
+                              int serverPort, int maxEvents, int maxPending,
+                              const uint16_t portId,
+                              const uint16_t nbRxQueueSlots,
+                              const size_t dpdkPoolSize, const uint32_t dstIp,
+                              const uint16_t dstPort,
+                              std::vector<ClientState<MaxPositions>> &clients)
+            : States(maxClients, clients)
+            , RequestPool(requestPoolSize)
+            , ReportPool(reportPoolSize)
+            , ResponsePool(responsePoolSize)
+            , Requests(requestQueueSize)
+            , Reports(reportQueueSize)
+            , Responses(responseQueueSize)
+            , Server(serverPort, maxEvents, maxPending, RequestPool, Requests,
+                     GatewayFd)
             , Keeper(States, Requests, Responses, RequestPool, ResponsePool)
             , MessageWriter(Responses, ResponsePool, GatewayFd)
             , Writer(States, Reports, ReportPool)
@@ -95,7 +122,9 @@ namespace AccountService
                       "ClientDetailsProvider (the DPDK main lcore)");
 
             std::thread serverThread(
-                &EpollServer<ClientRequest, BatchSize>::startServer, &Server);
+                &ClientDetailsProviderServer<BatchSize,
+                                             MaxGateways>::startServer,
+                &Server);
 
             std::thread keeperThread(
                 &ClientStatesKeeper<MaxPositions, BatchSize>::StartLoop,

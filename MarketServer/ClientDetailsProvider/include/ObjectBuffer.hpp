@@ -6,10 +6,9 @@
 namespace AccountService
 {
     template <typename T>
-    class ObjectBuffer
+    struct ObjectBuffer
     {
-    public:
-        std::array<char, sizeof(T)> Buffer;
+        std::array<uint8_t, sizeof(T)> Buffer;
         size_t BufferSize;
 
         ObjectBuffer(void)
@@ -23,7 +22,7 @@ namespace AccountService
         }
 
         // Size should be modulo sizeof(Order)
-        void addBytes(T *ptr, size_t size) noexcept
+        void addBytes(void *ptr, size_t size) noexcept
         {
             if (BufferSize + size > sizeof(T)) [[unlikely]]
             {
@@ -33,6 +32,16 @@ namespace AccountService
 
             std::memcpy(Buffer.data() + BufferSize, ptr, size);
             BufferSize += size;
+        }
+
+        // Caller's responsability to check buffer size
+        void readBytes(void *ptr, size_t size) noexcept
+        {
+            std::memcpy(ptr, Buffer.data(), size);
+
+            BufferSize -= size;
+
+            std::memmove(Buffer.data(), Buffer.data() + size, BufferSize);
         }
     };
 } // namespace AccountService

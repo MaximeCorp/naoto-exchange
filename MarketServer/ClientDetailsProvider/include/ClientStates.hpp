@@ -31,6 +31,22 @@ namespace AccountService
             , Complete(maxClients, 0)
         {}
 
+        ClientStates(size_t maxClients,
+                     std::vector<ClientState<MaxPositions>> &states)
+            : States1(maxClients)
+            , States2(maxClients)
+            , States3(maxClients)
+            , Deltas(maxClients)
+            , Complete(maxClients, 0)
+        {
+            for (size_t i = 0; i < states.size(); ++i)
+            {
+                States1[i] = states[i];
+                States2[i] = states[i];
+                States3[i] = states[i];
+            }
+        }
+
         // Consumer methods
         [[nodiscard]] uint8_t
         GetComplete(const uint32_t clientId) const noexcept

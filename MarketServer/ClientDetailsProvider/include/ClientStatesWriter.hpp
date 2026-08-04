@@ -48,6 +48,8 @@ namespace AccountService
             {
                 OrderStateReport *report = reportBatch[i];
 
+                std::cout << "Received market update\n";
+
                 States.SetClientAssets(report->ClientId, report->BoughtDelta, 0,
                                        report->BoughtAssetId);
                 States.SetClientAssets(report->ClientId, report->SoldDelta,
