@@ -254,6 +254,7 @@ namespace MarketExecution
 
             if (curPacket == 0) [[unlikely]]
             {
+                std::cout << "No packets to send\n\n";
                 return;
             }
 

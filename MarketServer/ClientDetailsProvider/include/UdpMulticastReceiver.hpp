@@ -123,6 +123,8 @@ namespace AccountService
             {
                 rte_mbuf *pkt = Packets[i];
 
+                std::cout << "Processing a market update packet\n\n";
+
                 uint32_t dataLen = rte_pktmbuf_pkt_len(pkt);
 
                 if (pkt->nb_segs > 1
@@ -131,6 +133,8 @@ namespace AccountService
                     || (pkt->ol_flags & RTE_MBUF_F_RX_L4_CKSUM_MASK)
                         == RTE_MBUF_F_RX_L4_CKSUM_BAD)
                 {
+                    std::cout << "Something wrong with checksum or number of "
+                                 "packet per mbuf\n\n";
                     rte_pktmbuf_free(pkt);
                     continue;
                 }
@@ -140,6 +144,7 @@ namespace AccountService
 
                 if (dataLen < headerSize)
                 {
+                    std::cout << "Data shorter than headers\n\n";
                     rte_pktmbuf_free(pkt);
                     continue;
                 }
@@ -150,6 +155,7 @@ namespace AccountService
 
                 if (eth->ether_type != rte_cpu_to_be_16(RTE_ETHER_TYPE_IPV4))
                 {
+                    std::cout << "Not ipv4\n\n";
                     rte_pktmbuf_free(pkt);
                     continue;
                 }
@@ -157,9 +163,18 @@ namespace AccountService
                 rte_ipv4_hdr *ip =
                     (rte_ipv4_hdr *)(data + sizeof(rte_ether_hdr));
 
-                if (ip->next_proto_id != IPPROTO_UDP
-                    || ip->dst_addr != rte_cpu_to_be_32(DstIp))
+                if (ip->next_proto_id != IPPROTO_UDP)
                 {
+                    std::cout << "Not UDP, proto=" << (int)ip->next_proto_id
+                              << "\n\n";
+                    rte_pktmbuf_free(pkt);
+                    continue;
+                }
+                if (ip->dst_addr != rte_cpu_to_be_32(DstIp))
+                {
+                    std::cout << "Wrong dst ip: got " << std::hex
+                              << rte_be_to_cpu_32(ip->dst_addr) << " expected "
+                              << DstIp << std::dec << "\n\n";
                     rte_pktmbuf_free(pkt);
                     continue;
                 }
@@ -169,6 +184,7 @@ namespace AccountService
 
                 if (udp->dst_port != rte_cpu_to_be_16(DstPort))
                 {
+                    std::cout << "Wrong dst port\n\n";
                     continue;
                 }
 
@@ -194,6 +210,7 @@ namespace AccountService
 
                     if (added)
                     {
+                        std::cout << "Added market update to ring buffer\n\n";
                         // FIXME: Forgot what I wanted to do here
                     }
                     else
@@ -212,9 +229,16 @@ namespace AccountService
                     {
                         // TODO: Free without spsc (save pointer locally)
                     }
+                    else
+                    {
+                        std::cout << "pushing a market update to client states "
+                                     "writer\n\n";
+                    }
 
                     ++NextToRead;
                 }
+
+                std::cout << "Drained ring buffer\n\n";
 
                 rte_pktmbuf_free(pkt);
             }

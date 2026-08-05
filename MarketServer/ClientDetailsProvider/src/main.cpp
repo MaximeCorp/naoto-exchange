@@ -26,6 +26,10 @@ int main(int argc, char **argv)
         client1.Attempt[i] = i * 10;
     }
 
+    client1.AssetId[0] = 0;
+    client1.Confirmed[0] = 100000;
+    client1.Attempt[0] = 100;
+
     client1.Authorized = 1;
     client1.Connected = -1;
 
@@ -39,6 +43,10 @@ int main(int argc, char **argv)
         client2.Confirmed[i] = i * 100 + 2;
         client2.Attempt[i] = i * 10 + 77;
     }
+
+    client2.AssetId[0] = 0;
+    client2.Confirmed[0] = 100000;
+    client2.Attempt[0] = 100;
 
     client2.Authorized = 1;
     client2.Connected = -1;
@@ -65,7 +73,7 @@ int main(int argc, char **argv)
 
     ClientDetailsProvider<126, 16, 128, 32> test(
         argc, argv, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 8082, 16, 16, 0,
-        256, 1024, RTE_IPV4(10, 0, 0, 20), 30000, clients);
+        256, 1024, RTE_IPV4(239, 1, 1, 1), 30001, clients);
 
     test.StartClientDetailsProvider();
 }

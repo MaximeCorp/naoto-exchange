@@ -79,6 +79,7 @@ namespace MarketExecution
                 }
                 else if (assignedQueues + mainLcoreComing == 1)
                 {
+                    std::cout << "Constructing order state emitter\n\n";
                     StatusEmitter.emplace(
                         incomingOrderStates, orderStatesPool, portId,
                         nbTxQueueSlots, assignedQueues, lcoreId, "status_pool",

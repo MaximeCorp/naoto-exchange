@@ -44,6 +44,7 @@ namespace MarketExecution
                     size_t size) noexcept
             requires(BatchSize > 0)
         {
+            std::cout << "Order status about to be sent\n\n";
             UdpMulticastEmitter<OrderStatusEmitter, OrderStateReport,
                                 BatchSize>::Send(reports, size);
         }
@@ -61,6 +62,7 @@ namespace MarketExecution
     template <size_t BatchSize = 0>
     static int StartOrderStatusLoop(void *arg) noexcept
     {
+        std::cout << "Starting the order emitting loop\n";
         OrderStatusEmitter<BatchSize> *emitter =
             static_cast<OrderStatusEmitter<BatchSize> *>(arg);
 

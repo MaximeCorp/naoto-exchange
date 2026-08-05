@@ -136,16 +136,18 @@ namespace MarketExecution
 
                     OrderStateReport *orderReport = OrderReportsPool.acquire();
                     orderReport->FillReport(tradedAmount,
-                                            -tradedAmount * BestAskPrice,
+                                            -static_cast<int64_t>(tradedAmount)
+                                                * BestAskPrice,
                                             order.getClientId(), order.getId(),
                                             0, MarketAssetId, 0);
                     OutgoingOrders.try_enqueue(orderReport);
 
                     OrderStateReport *offerReport = OrderReportsPool.acquire();
-                    offerReport->FillReport(
-                        tradedAmount * BestAskPrice, -tradedAmount,
-                        bestOffer->GetClientId(), bestOffer->GetId(), 0, 0,
-                        MarketAssetId);
+                    offerReport->FillReport(tradedAmount * BestAskPrice,
+                                            -static_cast<int64_t>(tradedAmount),
+                                            bestOffer->GetClientId(),
+                                            bestOffer->GetId(), 0, 0,
+                                            MarketAssetId);
                     OutgoingOrders.try_enqueue(offerReport);
 
                     OrderBookUpdate *curOrderBookUpdate =
@@ -223,13 +225,15 @@ namespace MarketExecution
 
                     OrderStateReport *orderReport = OrderReportsPool.acquire();
                     orderReport->FillReport(tradedAmount * BestBidPrice,
-                                            -tradedAmount, order.getClientId(),
-                                            order.getId(), 0, 0, MarketAssetId);
+                                            -static_cast<int64_t>(tradedAmount),
+                                            order.getClientId(), order.getId(),
+                                            0, 0, MarketAssetId);
                     OutgoingOrders.try_enqueue(orderReport);
 
                     OrderStateReport *offerReport = OrderReportsPool.acquire();
                     offerReport->FillReport(
-                        tradedAmount, -tradedAmount * BestBidPrice,
+                        tradedAmount,
+                        -static_cast<int64_t>(tradedAmount) * BestBidPrice,
                         bestOffer->GetClientId(), bestOffer->GetId(), 0,
                         MarketAssetId, 0);
                     OutgoingOrders.try_enqueue(offerReport);
