@@ -91,9 +91,10 @@ namespace Gateways
                     }
                 }
             }
+        }
 
-        public:
-            MarketMatching();
-            ~MarketMatching();
-        };
-    } // namespace Gateways
+    public:
+        MarketMatching();
+        ~MarketMatching();
+    };
+} // namespace Gateways

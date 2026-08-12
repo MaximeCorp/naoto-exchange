@@ -30,10 +30,12 @@ namespace Gateways
 
         StoragePool<ObjectBatch<Order, BatchSize>> &OrdersPool;
         std::array<FdGen, MaxAsset> MatchingEngines;
+        FdGen &CdpFd;
         OrderQueue &Orders;
         std::shared_ptr<etcd::KeepAlive> KeepAlive;
-        std::unique_ptr<etcd::SyncClient> etcdClient;
-        std::unique_ptr<etcd::Watcher> etcdWatcher;
+        std::unique_ptr<etcd::SyncClient> EtcdClient;
+        std::unique_ptr<etcd::Watcher> EtcdMEWatcher;
+        std::unique_ptr<etcd::Watcher> EtcdCDPWatcher;
 
         [[nodiscard]] int32_t
         connectMatchingEngines(const std::string &engine_addr)
@@ -117,7 +119,7 @@ namespace Gateways
             return fd;
         }
 
-        void etcdOnResponse(etcd::Response &resp) noexcept
+        void etcdOnMEResponse(etcd::Response &resp) noexcept
         {
             if (resp.error_code() != 0)
             {
@@ -142,7 +144,7 @@ namespace Gateways
                         << "\n";
 
                     int32_t oldFd =
-                        FdGen::Fd(curSlot.load(std::memory_order_relaxed));
+                        FdGen::Fd(curSlot.load(std::memory_order_acquire));
 
                     curSlot.SwitchFd(newFd);
 
@@ -161,7 +163,7 @@ namespace Gateways
                     FdGen &curSlot = MatchingEngines[symbol_id];
 
                     int32_t oldFd =
-                        FdGen::Fd(curSlot.load(std::memory_order_relaxed));
+                        FdGen::Fd(curSlot.load(std::memory_order_acquire));
 
                     curSlot.SwitchFd(-1);
 
@@ -173,23 +175,74 @@ namespace Gateways
             }
         }
 
-        void etcdClientSetUp(void)
+        void etcdOnCDPResponse(etcd::Response &resp) noexcept
+        {
+            if (resp.error_code() != 0)
+            {
+                return;
+            }
+
+            for (auto &ev : resp.events())
+            {
+                if (ev.event_type() == etcd::Event::EventType::PUT)
+                {
+                    auto val = nlohmann::json::parse(ev.kv().as_string());
+                    const std::string cdp_addr = val["addr"];
+
+                    int32_t newFd = connectMatchingEngines(
+                        cdp_addr); // Arbitrary port value for now
+
+                    std::cout
+                        << "new client details provider found:  " << cdp_addr
+                        << "\n";
+
+                    int32_t oldFd =
+                        FdGen::Fd(CdpFd.load(std::memory_order_acquire));
+
+                    CdpFd.SwitchFd(newFd);
+
+                    if (oldFd != -1)
+                    {
+                        close(oldFd);
+                    }
+                }
+                else if (ev.event_type() == etcd::Event::EventType::DELETE_)
+                {
+                    std::string key = ev.kv().key();
+                    uint32_t symbol_id = std::stoi(
+                        key.substr(key.rfind('/')
+                                   + 1)); // This needs to be changed after POC
+
+                    int32_t oldFd =
+                        FdGen::Fd(CdpFd.load(std::memory_order_acquire));
+
+                    CdpFd.SwitchFd(-1);
+
+                    if (oldFd != -1)
+                    {
+                        close(oldFd);
+                    }
+                }
+            }
+        }
+
+        void EtcdClientSetUp(void)
         {
             const char *etcd_addr =
                 std::getenv("ETCD_ADDR") ?: "http://localhost:2379";
             const char *machine_id = std::getenv("MACHINE_ID") ?: "0";
             const char *listen = std::getenv("LISTEN_ADDR") ?: "localhost:8000";
 
-            etcdClient = std::make_unique<etcd::SyncClient>(etcd_addr);
+            EtcdClient = std::make_unique<etcd::SyncClient>(etcd_addr);
 
-            KeepAlive = etcdClient->leasekeepalive(10);
+            KeepAlive = EtcdClient->leasekeepalive(10);
             int64_t lid = KeepAlive->Lease();
 
             std::cerr << "Got lease ID: " << lid << "\n";
 
             std::string key = std::string("/socket-gateways/") + machine_id;
 
-            etcdClient->set(
+            EtcdClient->set(
                 key,
                 nlohmann::json({ { "ip", listen }, { "status", "active" } })
                     .dump(),
@@ -204,8 +257,8 @@ namespace Gateways
                 std::cerr << "KeepAlive active\n";
             }
 
-            auto existing = etcdClient->ls("/matching-engines/");
-            for (auto &kv : existing.values())
+            auto existingME = EtcdClient->ls("/matching-engines/");
+            for (auto &kv : existingME.values())
             {
                 auto val = nlohmann::json::parse(kv.as_string());
                 const std::string curAddr = val["addr"];
@@ -219,12 +272,35 @@ namespace Gateways
                 }
             }
 
-            int64_t revision = existing.index();
+            int64_t revisionME = existingME.index();
+
+            auto existingCDP = EtcdClient->ls("/client-details-provider/");
+            for (auto &kv : existingCDP.values())
+            {
+                auto val = nlohmann::json::parse(kv.as_string());
+                const std::string curAddr = val["addr"];
+
+                std::cout << "Found client details provider\n";
+
+                // Rename connectMatchingEngines to make it generic
+                int32_t fd = connectMatchingEngines(curAddr);
+                if (fd != -1)
+                {
+                    CdpFd.SwitchFd(fd);
+                }
+            }
+
+            int64_t revisionCDP = existingCDP.index();
 
             std::string engine_addr;
-            etcdWatcher = std::make_unique<etcd::Watcher>(
-                *etcdClient, "/matching-engines/", revision + 1,
-                [this](etcd::Response resp) { this->etcdOnResponse(resp); },
+            EtcdMEWatcher = std::make_unique<etcd::Watcher>(
+                *EtcdClient, "/matching-engines/", revisionME + 1,
+                [this](etcd::Response resp) { this->etcdOnMEResponse(resp); },
+                true);
+
+            EtcdCDPWatcher = std::make_unique<etcd::Watcher>(
+                *EtcdClient, "/client-details-provider/", revisionCDP + 1,
+                [this](etcd::Response resp) { this->etcdOnCDPResponse(resp); },
                 true);
         }
 
@@ -280,6 +356,33 @@ namespace Gateways
             }
         }
 
+        [[nodiscard]] bool CanSpend(const uint32_t fd, const int64_t amount,
+                                    const uint16_t assetId) noexcept
+        {
+            int64_t confirmed;
+            int64_t attempt;
+
+            bool found =
+                clientStates.GetClientFunds(fd, assetId, &confirmed, &attempt);
+
+            if (!found) [[unlikely]]
+            {
+                // Think about how to handle missing assetId
+                // Should evict an asset that has attempt = 0
+                std::cerr << "Requested asset id not in the client state\n\n";
+
+                return false;
+            }
+
+            if (amount > confirmed - attempt) [[unlikely]]
+            {
+                std::cerr << "Trade rejected: not enough funds\n\n";
+                return false;
+            }
+
+            return true;
+        }
+
         void consumeOrder(void) noexcept
         {
             ObjectBatch<Order, BatchSize> *curBatch = nullptr;
@@ -295,10 +398,11 @@ namespace Gateways
 
                     curOrder.log();
 
-                    if (clientStates.can_spend(curBatch->getFd(),
-                                               curOrder.getAmount(),
-                                               curOrder.getAsset())) [[likely]]
+                    if (CanSpend(curBatch->getFd(), curOrder.getAmount(),
+                                 curOrder.getAsset())) [[likely]]
                     {
+                        /*
+                        CanSpend won't return true if Asset Id isn't valid
                         if (curOrder.getAsset() >= (int32_t)MaxAsset)
                             [[unlikely]]
                         {
@@ -306,6 +410,7 @@ namespace Gateways
                             // Handle order rejection
                             continue;
                         }
+                        */
 
                         SendOrder(curOrder);
                     }
@@ -324,20 +429,21 @@ namespace Gateways
 
     public:
         RiskService(StoragePool<ObjectBatch<Order, BatchSize>> &ordersPool,
-                    OrderQueue &orders,
+                    OrderQueue &orders, FdGen &cdpFd,
                     ClientStates<MaxPositions> &clientStates)
             : clientStates(clientStates)
             , OrdersPool(ordersPool)
+            , CdpFd(cdpFd)
             , Orders(orders)
         {
-            etcdClientSetUp();
+            EtcdClientSetUp();
         }
 
         ~RiskService()
         {
-            if (etcdWatcher)
+            if (EtcdMEWatcher)
             {
-                etcdWatcher->Cancel();
+                EtcdMEWatcher->Cancel();
             }
             if (KeepAlive)
             {

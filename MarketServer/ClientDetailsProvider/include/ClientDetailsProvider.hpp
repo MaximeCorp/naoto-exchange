@@ -12,6 +12,9 @@
 #include <OrderStateReport.hpp>
 #include <ReaderWriterCircularBuffer.hpp>
 #include <StoragePool.hpp>
+#include <etcd/KeepAlive.hpp>
+#include <etcd/SyncClient.hpp>
+#include <nlohmann/json.hpp>
 #include <thread>
 
 namespace AccountService
@@ -42,6 +45,9 @@ namespace AccountService
         ClientStatesWriter<MaxPositions, BatchSize> Writer;
         MarketUpdates<UdpReceiveBufferSize, BatchSize> ReportReceiver;
 
+        std::shared_ptr<etcd::KeepAlive> KeepAlive;
+        std::unique_ptr<etcd::SyncClient> EtcdClient;
+
         void setAffinity(std::thread &t, const int core_id)
         {
             cpu_set_t cpuset;
@@ -60,6 +66,26 @@ namespace AccountService
                 std::cout << "Thread successfully pinned to CPU " << core_id
                           << std::endl;
             }
+        }
+
+        void EtcdClientSetUp(void)
+        {
+            const char *etcd_addr =
+                std::getenv("ETCD_ADDR") ?: "localhost:2379";
+            const char *listen = std::getenv("LISTEN_ADDR") ?: "127.0.0.1:8082";
+
+            EtcdClient = std::make_unique<etcd::SyncClient>(etcd_addr);
+
+            KeepAlive = EtcdClient->leasekeepalive(10);
+            int64_t lid = KeepAlive->Lease();
+
+            std::string key = std::string("/client-details-provider/0");
+
+            EtcdClient->set(
+                key,
+                nlohmann::json({ { "addr", listen }, { "status", "active" } })
+                    .dump(),
+                lid);
         }
 
     public:
@@ -114,12 +140,22 @@ namespace AccountService
                              nbRxQueueSlots, dpdkPoolSize, dstIp, dstPort)
         {}
 
+        ~ClientDetailsProvider()
+        {
+            if (KeepAlive)
+            {
+                KeepAlive->Cancel();
+            }
+        }
+
         void StartClientDetailsProvider(void) noexcept
         {
             assert(rte_lcore_id() == rte_get_main_lcore()
                    && "StartClientDetailsProvider must run on the thread that "
                       "constructed "
                       "ClientDetailsProvider (the DPDK main lcore)");
+
+            EtcdClientSetUp();
 
             std::thread serverThread(
                 &ClientDetailsProviderServer<BatchSize,

@@ -4,8 +4,10 @@
 
 namespace Gateways
 {
-    template <typename T, size_t BatchSize>
-    void EpollServer<T, BatchSize>::initSocket()
+    template <typename DerivedServer, typename T, size_t BatchSize,
+              typename InitMessage>
+    void
+    EpollServer<DerivedServer, T, BatchSize, InitMessage>::initSocket() noexcept
     {
         struct sockaddr_in server_addr;
 

@@ -18,11 +18,14 @@ namespace Gateways
 
         const size_t Capacity;
         FreeQueue Free;
+        std::vector<T *> LocalReuseBuffer;
+        size_t LocalReuseSize;
 
     public:
         StoragePool(size_t poolSize)
             : Capacity(poolSize)
             , Free(poolSize)
+            , LocalReuseSize(0)
         {
             if (poolSize == 0)
             {
@@ -33,7 +36,9 @@ namespace Gateways
             std::cout << "Initializing Order Pool with capacity: " << Capacity
                       << " orders.\n";
 
-            OrderStorage.reserve(Capacity);
+            OrderStorage.resize(Capacity);
+
+            LocalReuseBuffer.resize(Capacity);
 
             for (size_t i = 0; i < Capacity; ++i)
             {
@@ -44,18 +49,50 @@ namespace Gateways
                     throw std::runtime_error(
                         "Failed to populate initial free list.");
                 }
+                LocalReuseBuffer[i] = nullptr;
             }
             std::cout << "Pool ready. All " << Capacity
                       << " objects are available.\n";
         }
 
+        [[nodiscard]] size_t getCapacity() const noexcept
+        {
+            return Capacity;
+        }
+
+        // Producer methods
+
         [[nodiscard]] T *acquire() noexcept
         {
+            if (LocalReuseSize)
+            {
+                return LocalReuseBuffer[--LocalReuseSize];
+            }
+
             T *res = nullptr;
 
             Free.try_dequeue(res);
             return res;
         }
+
+        [[nodiscard]] bool localRelease(T *element) noexcept
+        {
+            bool released = LocalReuseSize < Capacity;
+
+            if (released)
+            {
+                LocalReuseBuffer[LocalReuseSize++] = element;
+            }
+
+            return released;
+        }
+
+        [[nodiscard]] bool getAvailable() const noexcept
+        {
+            return LocalReuseSize > 0 || Free.peek() != nullptr;
+        }
+
+        // Consumer methods
 
         [[nodiscard]] bool release(T *element) noexcept
         {
@@ -72,15 +109,6 @@ namespace Gateways
                              element);
                 std::terminate();
             }
-        }
-
-        [[nodiscard]] size_t getCapacity() const noexcept
-        {
-            return Capacity;
-        }
-        [[nodiscard]] bool getAvailable() const noexcept
-        {
-            return Free.peek() != nullptr;
         }
     };
 } // namespace Gateways

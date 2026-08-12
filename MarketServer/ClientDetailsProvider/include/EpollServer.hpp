@@ -141,13 +141,13 @@ namespace AccountService
                     InitMessage firstMessage;
                     while (buffer.BufferSize < sizeof(InitMessage))
                     {
-                        nread = read(curFd, &firstMessage,
-                                     sizeof(InitMessage) - buffer.BufferSize);
+                        nread =
+                            recv(curFd, &firstMessage,
+                                 sizeof(InitMessage) - buffer.BufferSize, 0);
 
                         if (nread > 0)
                         {
                             buffer.addBytes(&firstMessage, nread);
-                            std::cout << "addBytes was ok\n\n";
                         }
                         else if (nread == 0)
                         {
@@ -169,7 +169,7 @@ namespace AccountService
                     if (buffer.BufferSize >= sizeof(InitMessage))
                     {
                         buffer.readBytes(&firstMessage, sizeof(InitMessage));
-                        std::cout << "readBytes was ok\n\n";
+                        std::cout << " ok\n\n";
                         static_cast<DerivedServer *>(this)->FirstMessageHandle(
                             &firstMessage, curFd);
                         FirstMessage[curFd] = false;
@@ -206,12 +206,9 @@ namespace AccountService
                                 buffer.BufferSize);
                 }
 
-                nread = read(curFd,
+                nread = recv(curFd,
                              (char *)(batch->Data.data()) + buffer.BufferSize,
-                             sizeof(Order) * BatchSize - buffer.BufferSize);
-
-                std::cout << "received " << nread << " size of object is "
-                          << sizeof(T) << "\n";
+                             sizeof(T) * BatchSize - buffer.BufferSize, 0);
 
                 if (nread <= 0) [[unlikely]]
                 {
@@ -222,14 +219,14 @@ namespace AccountService
 
                 batch->setFd(curFd);
 
-                auto [batchSize, bufferSize] = std::div(
-                    (int)(nread + buffer.BufferSize), (int)sizeof(Order));
+                auto [batchSize, bufferSize] =
+                    std::div((int)(nread + buffer.BufferSize), (int)sizeof(T));
 
                 batch->setSize(batchSize);
 
                 buffer.clearBuffer();
-                buffer.addBytes(batch->Data.data() + sizeof(Order) * batchSize,
-                                bufferSize); // Double check if sizeof(Order) *
+                buffer.addBytes(batch->Data.data() + sizeof(T) * batchSize,
+                                bufferSize); // Double check if sizeof(T) *
                                              // batchSize is right
 
                 if constexpr (HasBatchHandleServer<DerivedServer, T, BatchSize>)
@@ -244,14 +241,10 @@ namespace AccountService
                 }
                 else
                 {
-                    std::cout << "push succesful, batch of size " << batchSize
-                              << "\n\n";
+                    // std::cout << "push succesful, batch of size " <<
+                    // batchSize
+                    //         << "\n\n";
                 }
-
-                // TODO: Check if this is necessary / useful
-                // buffer.BufferSize *= batchSize <= 0;
-
-                batch = nullptr;
             }
 
             // TODO: Think about if it's necessary to free acquired batches

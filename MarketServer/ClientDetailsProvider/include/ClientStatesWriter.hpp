@@ -34,6 +34,15 @@ namespace AccountService
 
         void Handle(OrderStateReport *report) noexcept
         {
+            std::cout << "Received market update\n";
+
+            std::cout << "Client Id: " << report->ClientId << "\n";
+            std::cout << "Bought Asset Id: " << report->BoughtAssetId << "\n";
+            std::cout << "Bought Asset Delta: " << report->BoughtDelta << "\n";
+            std::cout << "Sold Asset Id: " << report->SoldAssetId << "\n";
+            std::cout << "Sold Asset Delta: " << report->SoldDelta << "\n";
+            std::cout << "Sequence Id: " << report->SequenceId << "\n";
+
             States.SetClientAssets(report->ClientId, report->BoughtDelta, 0,
                                    report->BoughtAssetId);
             States.SetClientAssets(report->ClientId, report->SoldDelta,
@@ -44,11 +53,21 @@ namespace AccountService
         void Handle(std::array<OrderStateReport *, BatchSize> &reportBatch,
                     size_t batchSize) noexcept
         {
+            std::cout << "Received market update batch of size " << batchSize
+                      << "\n";
+
             for (size_t i = 0; i < batchSize; ++i)
             {
                 OrderStateReport *report = reportBatch[i];
 
-                std::cout << "Received market update\n";
+                std::cout << "Client Id: " << report->ClientId << "\n";
+                std::cout << "Bought Asset Id: " << report->BoughtAssetId
+                          << "\n";
+                std::cout << "Bought Asset Delta: " << report->BoughtDelta
+                          << "\n";
+                std::cout << "Sold Asset Id: " << report->SoldAssetId << "\n";
+                std::cout << "Sold Asset Delta: " << report->SoldDelta << "\n";
+                std::cout << "Sequence Id: " << report->SequenceId << "\n";
 
                 States.SetClientAssets(report->ClientId, report->BoughtDelta, 0,
                                        report->BoughtAssetId);

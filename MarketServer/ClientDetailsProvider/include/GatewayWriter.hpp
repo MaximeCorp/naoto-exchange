@@ -97,7 +97,7 @@ namespace AccountService
 
             ssize_t sent = send(curFd, curMessage, sizeof(T), MSG_NOSIGNAL);
 
-            std::cerr << "Sending order to fd " << curFd
+            std::cerr << "Sending message to gateway " << idx
                       << ", size=" << sizeof(T) << ", sent=" << sent << "\n";
 
             if (sent < 0) [[unlikely]]

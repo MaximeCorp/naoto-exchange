@@ -21,7 +21,7 @@ namespace Gateways
             ObjectBatch<Order, BatchSize> *>;
 
     private:
-        int ClientStatesUpdatesFd;
+        FdGen ClientStatesUpdatesFd;
         EpollServer<Order, BatchSize> Server;
         ClientStates<MaxPositions> ClientsInfo;
         RiskService<BatchSize, MaxAsset, MaxPositions> Risk;
@@ -84,11 +84,12 @@ namespace Gateways
                       const std::string &marketUpdatesIp,
                       const int marketUpdatesPort, const size_t nb_fds)
             : ClientStatesUpdatesFd(connectClientStatesUpdateService(
-                clientStatesUpdatesIp, clientStatesUpdatesPort))
+                  clientStatesUpdatesIp, clientStatesUpdatesPort))
             , Server(port, maxEvents, maxPending, OrdersPool, IncomingOrders,
                      ClientStatesUpdatesFd, nb_fds)
             , ClientsInfo(nb_fds)
-            , Risk(OrdersPool, IncomingOrders, ClientsInfo)
+            , Risk(OrdersPool, IncomingOrders, ClientStatesUpdatesFd,
+                   ClientsInfo)
             , ClientsInfoInjector(ClientsInfo, ClientStatesUpdatesFd,
                                   marketUpdatesIp, marketUpdatesPort)
             , OrdersPool(max_clients)

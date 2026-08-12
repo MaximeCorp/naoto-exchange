@@ -7,7 +7,7 @@
 namespace Gateways
 {
     template <typename T, size_t BatchSize>
-    class ObjectBatch
+    struct ObjectBatch
     {
     public:
         alignas(64) std::array<T, BatchSize> Data;

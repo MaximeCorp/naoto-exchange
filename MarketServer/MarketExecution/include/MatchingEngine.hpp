@@ -39,7 +39,7 @@ namespace MarketExecution
         MarketUpdates<BatchSize> MarketUpdatesSender;
 
         std::shared_ptr<etcd::KeepAlive> KeepAlive;
-        std::unique_ptr<etcd::SyncClient> etcdClient;
+        std::unique_ptr<etcd::SyncClient> EtcdClient;
 
         void setAffinity(std::thread &t, const int core_id)
         {
@@ -61,21 +61,21 @@ namespace MarketExecution
             }
         }
 
-        void etcdClientSetUp(void)
+        void EtcdClientSetUp(void)
         {
             const char *etcd_addr =
                 std::getenv("ETCD_ADDR") ?: "localhost:2379";
             const char *symbol = std::getenv("SYMBOL") ?: "0";
             const char *listen = std::getenv("LISTEN_ADDR") ?: "127.0.0.1:8080";
 
-            etcdClient = std::make_unique<etcd::SyncClient>(etcd_addr);
+            EtcdClient = std::make_unique<etcd::SyncClient>(etcd_addr);
 
-            KeepAlive = etcdClient->leasekeepalive(10);
+            KeepAlive = EtcdClient->leasekeepalive(10);
             int64_t lid = KeepAlive->Lease();
 
             std::string key = std::string("/matching-engines/") + symbol;
 
-            etcdClient->set(key,
+            EtcdClient->set(key,
                             nlohmann::json({ { "addr", listen },
                                              { "asset_id", std::atoi(symbol) },
                                              { "status", "active" } })
@@ -128,7 +128,7 @@ namespace MarketExecution
                       "constructed "
                       "MatchingEngine (the DPDK main lcore)");
 
-            etcdClientSetUp();
+            EtcdClientSetUp();
 
             std::thread matchingThread(
                 &BidAsk<FHMSize, SkipListMaxLevel, BatchSize,

@@ -1,123 +1,183 @@
 #pragma once
 
+#include <ClientDelta.hpp>
+#include <ClientRequestResponse.hpp>
 #include <ClientState.hpp>
+#include <ReaderWriterCircularBuffer.hpp>
 #include <atomic>
-#include <cstddef>
-#include <cstdint>
-#include <cstring>
-#include <iostream>
 #include <vector>
 
 namespace Gateways
 {
     template <size_t MaxPositions>
-    class ClientStates
+    class ClientStates // Data coherence not guaranteed, pls update the right
+                       // buffers yourself when using flush
     {
     private:
-        // Id = 0 means slot not used
-
         alignas(64) std::vector<ClientState<MaxPositions>> States1;
         alignas(64) std::vector<ClientState<MaxPositions>> States2;
+        alignas(64) std::vector<ClientState<MaxPositions>> States3;
 
-        // Fd is connected
         alignas(
-            64) std::vector<char> Connected; // Always access with atomic_ref
-        // Determine which buffer to read/write (granular double buffer)
-        alignas(64) std::vector<char> Complete; // Always access with atomic_ref
+            64) std::vector<std::array<ClientDelta<MaxPositions>, 3>> Deltas;
+
+        alignas(64) std::vector<uint8_t> Complete;
 
     public:
-        ClientStates(const size_t size)
+        ClientStates(size_t maxClients)
+            : States1(maxClients)
+            , States2(maxClients)
+            , States3(maxClients)
+            , Deltas(maxClients)
+            , Complete(maxClients, 0)
+        {}
+
+        ClientStates(size_t maxClients,
+                     std::vector<ClientState<MaxPositions>> &states)
+            : States1(maxClients)
+            , States2(maxClients)
+            , States3(maxClients)
+            , Deltas(maxClients)
+            , Complete(maxClients, 0)
         {
-            States1.resize(size);
-            States2.resize(size);
-
-            std::cout << "Creating a Client States array of size " << size
-                      << "\n";
-        }
-
-        [[nodiscard]] int32_t get_client_id(const uint32_t fd) noexcept
-        {
-            return std::atomic_ref<char>(Complete[fd])
-                       .load(std::memory_order_acquire)
-                ? States1[fd].GetClientId()
-                : States2[fd].GetClientId();
-        }
-        [[nodiscard]] int64_t get_confirmed(const uint32_t fd,
-                                            const uint16_t assetId) noexcept
-        {
-            return std::atomic_ref<char>(Complete[fd])
-                       .load(std::memory_order_acquire)
-                ? States1[fd].GetAssetConfirmed(assetId)
-                : States2[fd].GetAssetConfirmed(assetId);
-        }
-        [[nodiscard]] int64_t get_attempt(const uint32_t fd,
-                                          const uint16_t assetId) noexcept
-        {
-            return std::atomic_ref<char>(Complete[fd])
-                       .load(std::memory_order_acquire)
-                ? States1[fd].GetAssetAttempt(assetId)
-                : States2[fd].GetAssetAttempt(assetId);
-        }
-        void add_client(const uint32_t fd,
-                        const ClientState<MaxPositions> *clientState) noexcept
-        {
-            ClientState<MaxPositions> *curClient =
-                std::atomic_ref<char>(Complete[fd])
-                    .load(std::memory_order_acquire)
-                ? &States2[fd]
-                : &States1[fd];
-
-            std::memcpy(clientState, curClient,
-                        sizeof(ClientState<MaxPositions>));
-
-            std::atomic_ref<char>(Connected[fd])
-                .store(true, std::memory_order_release);
-        }
-
-        void remove_client(const std::uint32_t fd) noexcept
-        {
-            std::atomic_ref<char>(Connected[fd])
-                .store(0, std::memory_order_release);
-        }
-
-        [[nodiscard]] bool
-        can_spend(const std::uint32_t fd, const std::int64_t amount,
-                  const uint16_t assetId) // Not correct yet (needs the addition
-                                          // of local attempt for risk service)
-        {
-            const ClientState<MaxPositions> &curClient =
-                std::atomic_ref<char>(Complete[fd])
-                    .load(std::memory_order_acquire)
-                ? States1[fd]
-                : States2[fd];
-
-            size_t assetIdx = 0;
-
-            while (curClient.GetAssetIdAt(assetIdx) != assetId
-                   && assetIdx < MaxPositions)
+            for (size_t i = 0; i < states.size(); ++i)
             {
-                ++assetIdx;
+                States1[i] = states[i];
+                States2[i] = states[i];
+                States3[i] = states[i];
+            }
+        }
+
+        // Consumer methods
+        [[nodiscard]] uint8_t
+        GetComplete(const uint32_t clientId) const noexcept
+        {
+            return std::atomic_ref(Complete[clientId])
+                .load(std::memory_order_acquire);
+        }
+
+        [[nodiscard]] ClientState<MaxPositions>
+        GetClientState(const uint32_t clientId) const noexcept
+        {
+            uint8_t complete = std::atomic_ref(Complete[clientId])
+                                   .load(std::memory_order_acquire);
+            return complete == 0 ? States1[clientId]
+                : complete == 1  ? States2[clientId]
+                                 : States3[clientId];
+        }
+
+        [[nodiscard]] bool GetClientFunds(const uint32_t clientId,
+                                          const uint16_t assetId,
+                                          int64_t *confirmed,
+                                          int64_t *attempt) const noexcept
+        {
+            ClientState<MaxPositions> curState = GetClientState(clientId);
+
+            for (size_t i = 0; i < MaxPositions; ++i)
+            {
+                if (curState.AssetId[i] == assetId)
+                {
+                    *confirmed = curState.Confirmed[i];
+                    *attempt = curState.Attempt[i];
+
+                    return true;
+                }
             }
 
-            std::cout << "checking client at fd " << fd << "\n";
+            return false;
+        }
 
-            if (assetIdx >= MaxPositions) [[unlikely]]
+        // Producer methods
+        void SetClientState(const ClientRequestResponse *response) noexcept
+        {
+            const uint32_t clientFd = response->ClientFd;
+
+            uint8_t complete = std::atomic_ref(Complete[clientFd])
+                                   .load(std::memory_order_relaxed);
+
+            ClientState<MaxPositions> &ref = complete == 0
+                ? States1[clientFd]
+                : (complete == 1 ? States2[clientFd] : States3[clientFd]);
+
+            for (size_t i = 0; i < MaxPositions; ++i)
             {
-                return false;
+                Deltas[clientFd][complete].Confirmed[i] =
+                    clientState.Confirmed[i] - ref.Confirmed[i];
+                Deltas[clientFd][complete].Attempt[i] =
+                    clientState.Attempt[i] - ref.Attempt[i];
             }
 
-            int64_t curConfirmed = curClient.GetConfirmedAt(assetIdx);
-            int64_t curAttempt = curClient.GetAttemptAt(assetIdx);
+            ClientState<MaxPositions> *state = complete == 0
+                ? &States2[clientFd]
+                : (complete == 1 ? &States3[clientFd] : &States1[clientFd]);
 
-            if (amount <= 0 || amount > curConfirmed - curAttempt) [[unlikely]]
+            state->ClientId = response->ClientId;
+        }
+
+        void SetClientAssets(const uint32_t clientId, const int64_t confirmed,
+                             const int64_t attempt, uint16_t assetId) noexcept
+        {
+            uint8_t complete = std::atomic_ref(Complete[clientId])
+                                   .load(std::memory_order_relaxed);
+
+            ClientState<MaxPositions> &toChange = complete == 0
+                ? States2[clientId]
+                : (complete == 1 ? States3[clientId] : States1[clientId]);
+
+            for (size_t i = 0; i < MaxPositions; ++i)
             {
-                return false;
+                if (toChange.AssetId[i] == assetId)
+                {
+                    Deltas[clientId][complete].Confirmed[i] += confirmed;
+                    Deltas[clientId][complete].Attempt[i] += attempt;
+                }
+            }
+        }
+
+        void FlushTripleBuffer(const uint32_t clientFd) noexcept
+        {
+            uint8_t complete = std::atomic_ref(Complete[clientFd])
+                                   .load(std::memory_order_relaxed);
+
+            std::array<ClientDelta<MaxPositions>, 3> &curDelta =
+                Deltas[clientFd];
+
+            ClientState<MaxPositions> *state = complete == 0
+                ? &States2[clientFd]
+                : (complete == 1 ? &States3[clientFd] : &States1[clientFd]);
+
+            const uint32_t clientId = state->ClientId;
+
+            for (size_t i = 0; i < MaxPositions; ++i)
+            {
+                state->Confirmed[i] += curDelta[complete].Confirmed[i];
+                state->Attempt[i] += curDelta[complete].Attempt[i];
             }
 
-            return true;
+            complete = complete == 2 ? 0 : complete + 1;
+
+            std::atomic_ref(Complete[clientFd])
+                .store(complete, std::memory_order_release);
+
+            // Assumption: the client details will always contain MaxPositions
+            // assets (even if some aren't used)
+
+            state = complete == 0
+                ? &States2[clientFd]
+                : (complete == 1 ? &States3[clientFd] : &States1[clientFd]);
+
+            for (size_t i = 0; i < MaxPositions; ++i)
+            {
+                curDelta[complete].Confirmed[i] = 0;
+                curDelta[complete].Attempt[i] = 0;
+                state->Confirmed[i] += curDelta[0].Confirmed[i];
+                state->Confirmed[i] += curDelta[1].Confirmed[i];
+                state->Confirmed[i] += curDelta[2].Confirmed[i];
+                state->Attempt[i] += curDelta[0].Attempt[i];
+                state->Attempt[i] += curDelta[1].Attempt[i];
+                state->Attempt[i] += curDelta[2].Attempt[i];
+                state->ClientId = clientId;
+            }
         }
     };
-
-    template <size_t MaxPositions>
-    [[nodiscard]] ClientStates<MaxPositions> make_fd_array(void);
 } // namespace Gateways
