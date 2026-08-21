@@ -65,7 +65,7 @@ namespace MarketExecution
         {
             const char *etcd_addr =
                 std::getenv("ETCD_ADDR") ?: "localhost:2379";
-            const char *symbol = std::getenv("SYMBOL") ?: "0";
+            const char *symbol = std::getenv("SYMBOL") ?: "1";
             const char *listen = std::getenv("LISTEN_ADDR") ?: "127.0.0.1:8080";
 
             EtcdClient = std::make_unique<etcd::SyncClient>(etcd_addr);

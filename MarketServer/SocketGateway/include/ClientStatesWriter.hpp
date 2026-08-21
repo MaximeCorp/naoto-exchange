@@ -4,7 +4,9 @@
 #include <ClientStates.hpp>
 #include <Consumer.hpp>
 #include <FlatHashMap.hpp>
+#include <GatewayRequest.hpp>
 #include <OrderStateReport.hpp>
+#include <StoragePool.hpp>
 #include <absl/container/flat_hash_set.h>
 #include <array>
 
@@ -13,44 +15,62 @@ namespace Gateways
     template <size_t MaxClients, size_t MaxPositions, size_t BatchSize,
               size_t BufferSize>
     class ClientStatesWriter
-        : public Consumer<ClientStatesWriter<MaxPositions, BatchSize>,
+        : public Consumer<ClientStatesWriter<MaxClients, MaxPositions,
+                                             BatchSize, BufferSize>,
                           OrderStateReport, BatchSize>
         , public Consumer<
-              ClientStatesWriter<MaxPositions, BatchSize>,
+              ClientStatesWriter<MaxClients, MaxPositions, BatchSize,
+                                 BufferSize>,
               ObjectBatch<ClientRequestResponse<MaxPositions>, BatchSize>>
 
     {
-        using ReportBase = Consumer<ClientStatesWriter<MaxPositions, BatchSize>,
-                                    OrderStateReport, BatchSize>;
+        using ReportBase = Consumer<
+            ClientStatesWriter<MaxClients, MaxPositions, BatchSize, BufferSize>,
+            OrderStateReport, BatchSize>;
         using ReportQueue =
             moodycamel::BlockingReaderWriterCircularBuffer<OrderStateReport *>;
 
         using ResponseBatch =
             ObjectBatch<ClientRequestResponse<MaxPositions>, BatchSize>;
-        using ResponseBase =
-            Consumer<ClientStatesWriter<MaxPositions, BatchSize>, ResponseBatch,
-                     BatchSize>,
-              BatchSize > ;
+        using ResponseBase = Consumer<
+            ClientStatesWriter<MaxClients, MaxPositions, BatchSize, BufferSize>,
+            ObjectBatch<ClientRequestResponse<MaxPositions>, BatchSize>>;
         using ResponseQueue =
             moodycamel::BlockingReaderWriterCircularBuffer<ResponseBatch *>;
 
+        using DisconnectQueue =
+            moodycamel::BlockingReaderWriterCircularBuffer<uint32_t>;
+        using GwReqQueue =
+            moodycamel::BlockingReaderWriterCircularBuffer<GatewayRequest *>;
+
     private:
+        const uint16_t GatewayId;
         ClientStates<MaxPositions> &States;
         FlatHashMap<uint32_t, uint32_t, MaxClients> ClientsFd;
         absl::flat_hash_set<uint32_t> Touched;
         std::array<OrderStateReport, BufferSize> UpdatesBuffer;
         uint64_t LastSeq;
+        DisconnectQueue &IncomingDisconnects;
+        StoragePool<GatewayRequest> &GwReqPool;
+        GwReqQueue &OutgoingReq;
 
     public:
         ClientStatesWriter(ClientStates<MaxPositions> &states,
                            ReportQueue &incomingReports,
                            StoragePool<OrderStateReport> &reportPool,
                            ResponseQueue &incomingResponses,
-                           StoragePool<ResponseBatch> &responsePool)
-            : ReportBase(incomingReports reportPool)
+                           StoragePool<ResponseBatch> &responsePool,
+                           DisconnectQueue &incomingDisconnects,
+                           GwReqQueue &outgoingReq,
+                           StoragePool<GatewayRequest> &gwReqPool)
+            : ReportBase(incomingReports, reportPool)
             , ResponseBase(incomingResponses, responsePool)
+            , GatewayId(std::stoi(std::getenv("MACHINE_ID") ?: "0"))
             , States(states)
             , LastSeq(0)
+            , IncomingDisconnects(incomingDisconnects)
+            , GwReqPool(gwReqPool)
+            , OutgoingReq(outgoingReq)
         {
             Touched.reserve(BatchSize);
 
@@ -70,7 +90,7 @@ namespace Gateways
             std::cout << "Bought Asset Delta: " << report->BoughtDelta << "\n";
             std::cout << "Sold Asset Id: " << report->SoldAssetId << "\n";
             std::cout << "Sold Asset Delta: " << report->SoldDelta << "\n";
-            std::cout << "Sequence Id: " << report->SequenceId << "\n";
+            std::cout << "Sequence Id: " << report->SequenceId << "\n\n";
 
             LastSeq = report->SequenceId;
 
@@ -82,6 +102,7 @@ namespace Gateways
 
             if (!found)
             {
+                std::cout << "Not a client of this gateway, discarding.\n\n";
                 return;
             }
 
@@ -109,7 +130,7 @@ namespace Gateways
                           << "\n";
                 std::cout << "Sold Asset Id: " << report->SoldAssetId << "\n";
                 std::cout << "Sold Asset Delta: " << report->SoldDelta << "\n";
-                std::cout << "Sequence Id: " << report->SequenceId << "\n";
+                std::cout << "Sequence Id: " << report->SequenceId << "\n\n";
 
                 LastSeq = report->SequenceId;
 
@@ -121,6 +142,8 @@ namespace Gateways
 
                 if (!found)
                 {
+                    std::cout
+                        << "Not a client of this gateway, discarding.\n\n";
                     continue;
                 }
 
@@ -150,56 +173,111 @@ namespace Gateways
             Touched.clear();
         }
 
-        void Handle(ClientRequestResponse *response) noexcept
+        void Handle(ResponseBatch *responseBatch) noexcept
         {
-            if (UpdatesBuffer[response->SequenceId & (BufferSize - 1)]
-                != response->SequenceId) [[unlikely]]
+            for (size_t i = 0; i < responseBatch->Size; ++i)
             {
-                // Resend the request
-                std::cerr << "Response sequence id is stale.\n\n";
-                return;
-            }
-
-            // Iterate buffer to apply missed delta
-            uint64_t seqId = response->SequenceId + 1;
-
-            while (seqId <= LastSeq)
-            {
-                OrderStateReport &curReport =
-                    UpdatesBuffer[seqId++ & (BufferSize - 1)];
-
-                if (curReport.ClientId == response->ClientId)
+                ClientRequestResponse<MaxPositions> &response =
+                    (*responseBatch)[i];
+                if (UpdatesBuffer[response.SequenceId & (BufferSize - 1)]
+                            .SequenceId
+                        != response.SequenceId
+                    && response.SequenceId != LastSeq) [[unlikely]]
                 {
-                    for (size_t i = 0; i < MaxPositions; ++i)
+                    // Resend the request
+                    GatewayRequest *gwRequest = GwReqPool.acquire();
+
+                    if (!gwRequest) [[unlikely]]
                     {
-                        if (response->AssetId[i] == curReport.BoughtAssetId)
+                        // TODO : Handle failure to get user details
+                        std::cout << "Couldn't acquire while trying to "
+                                     "process a cdp response.\n\n";
+                    }
+
+                    gwRequest->RequestType = 'A';
+                    gwRequest->ClientId = response.ClientId;
+                    gwRequest->ClientFd = response.ClientFd;
+                    gwRequest->Key.fill('R');
+                    gwRequest->GatewayId = GatewayId;
+
+                    bool enqueued = OutgoingReq.try_enqueue(gwRequest);
+
+                    if (!enqueued) [[unlikely]]
+                    {
+                        // TODO : Handle failure again
+                        std::cout << "Couldn't push while trying to "
+                                     "process a cdp response.\n\n";
+                    }
+
+                    std::cerr << "Response sequence id is stale: "
+                              << response.SequenceId << ".\n\n";
+
+                    response.log();
+                    return;
+                }
+
+                // Iterate buffer to apply missed delta
+                uint64_t seqId = response.SequenceId + 1;
+
+                while (seqId <= LastSeq)
+                {
+                    OrderStateReport &curReport =
+                        UpdatesBuffer[seqId++ & (BufferSize - 1)];
+
+                    if (curReport.ClientId == response.ClientId)
+                    {
+                        for (size_t i = 0; i < MaxPositions; ++i)
                         {
-                            response->Confirmed[i] += curReport.BoughtDelta;
-                        }
-                        else if (response->AssetId[i] == curReport.SoldAssetId)
-                        {
-                            response->Confirmed += curReport.SoldDelta;
-                            response->Attempt[i] += curReport.SoldDelta;
+                            // TODO: See what needs to be changed to make local
+                            // attempt for risk check (attempt deltas need to be
+                            // sometimes ignored)
+                            if (response.AssetId[i] == curReport.BoughtAssetId)
+                            {
+                                response.Confirmed[i] += curReport.BoughtDelta;
+                            }
+                            else if (response.AssetId[i]
+                                     == curReport.SoldAssetId)
+                            {
+                                response.Confirmed[i] += curReport.SoldDelta;
+                                response.Attempt[i] += curReport.SoldDelta;
+                            }
                         }
                     }
                 }
-            }
 
-            States.SetClientState(response);
-            States.FlushTripleBuffer(response->ClientFd);
+                std::cout << "Got a connection confirmation:\n"
+                          << "- Client Id: " << response.ClientId << "\n\n";
+
+                response.log();
+
+                uint32_t curClientId = States.GetClientId(response.ClientFd);
+
+                if (curClientId != response.ClientId)
+                {
+                    ClientsFd.DeleteNode(curClientId);
+                    ClientsFd.AddNode(response.ClientId, response.ClientFd);
+                }
+
+                States.SetClientState(&response);
+                States.FlushTripleBuffer(response.ClientFd);
+
+                ClientsFd.AddNode(response.ClientId, response.ClientFd);
+            }
         }
 
-        void Handle(std::array<responseBatch *, BatchSize> &responseBatch,
+        void Handle(std::array<ResponseBatch *, BatchSize> &responseBatch,
                     size_t batchSize) noexcept
         {
             for (size_t i = 0; i < batchSize; ++i)
             {
+                // TODO : this seems broken but likely won't be used
                 ResponseBatch *response = responseBatch[i];
 
                 for (size_t j = 0; j < response->Size; ++j)
                 {
                     if (UpdatesBuffer[response->SequenceId & (BufferSize - 1)]
-                        != response->SequenceId) [[unlikely]]
+                            != response->SequenceId
+                        && response.SequenceId != LastSeq) [[unlikely]]
                     {
                         // Resend the request
                         std::cerr << "Response sequence id is stale.\n\n";
@@ -234,6 +312,21 @@ namespace Gateways
                         }
                     }
 
+                    std::cout << "Got a connection confirmation:\n"
+                              << "- Client Id: " << response->ClientId
+                              << "\n\n";
+
+                    response->log();
+
+                    uint32_t curClientId =
+                        States.GetClientId(response.ClientFd);
+
+                    if (curClientId != response.clientId)
+                    {
+                        ClientsFd.DeleteNode(States.GetClient);
+                        ClientsFd.AddNode(response.ClientId, response.ClientFd);
+                    }
+
                     States.SetClientState(response);
                 }
             }
@@ -255,11 +348,24 @@ namespace Gateways
             Touched.clear();
         }
 
+        void TryConsumeDisconnects(void) noexcept
+        {
+            uint32_t fd;
+
+            if (IncomingDisconnects.try_dequeue(fd))
+            {
+                States.SetAuthStatus(fd, 0);
+                States.FlushTripleBuffer(fd);
+            }
+        }
+
         void StartLoop(void) noexcept
         {
             while (true)
             {
-                Base::TryConsume();
+                ReportBase::TryConsume();
+                ResponseBase::TryConsume();
+                TryConsumeDisconnects();
             }
         }
     };

@@ -6,9 +6,8 @@
 namespace Gateways
 {
     template <typename T>
-    class ObjectBuffer
+    struct ObjectBuffer
     {
-    public:
         std::array<char, sizeof(T)> Buffer;
         size_t BufferSize;
 
@@ -19,7 +18,6 @@ namespace Gateways
         void clearBuffer(void) noexcept
         {
             BufferSize = 0;
-            std::cout << "cleared\n";
         }
 
         // Size should be modulo sizeof(Order)
@@ -33,6 +31,16 @@ namespace Gateways
 
             std::memcpy(Buffer.data() + BufferSize, ptr, size);
             BufferSize += size;
+        }
+
+        // Caller's responsability to check buffer size
+        void readBytes(void *ptr, size_t size) noexcept
+        {
+            std::memcpy(ptr, Buffer.data(), size);
+
+            BufferSize -= size;
+
+            std::memmove(Buffer.data(), Buffer.data() + size, BufferSize);
         }
     };
 } // namespace Gateways

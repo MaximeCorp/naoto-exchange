@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <iostream>
+
 namespace MarketExecution
 {
 #pragma pack(push, 1)
@@ -58,7 +59,7 @@ namespace MarketExecution
         void setAsset(std::int32_t asset) noexcept;
         void setTimestamp(std::int64_t timestamp) noexcept;
 
-        void log() noexcept;
+        void log() const noexcept;
     };
 #pragma pack(pop)
 

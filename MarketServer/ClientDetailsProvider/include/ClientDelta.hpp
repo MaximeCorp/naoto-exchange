@@ -12,5 +12,11 @@ namespace AccountService
         // when switching assets
         std::array<int64_t, MaxPositions> Confirmed;
         std::array<int64_t, MaxPositions> Attempt;
+
+        ClientDelta(void)
+        {
+            Confirmed.fill(0);
+            Attempt.fill(0);
+        }
     };
 } // namespace AccountService

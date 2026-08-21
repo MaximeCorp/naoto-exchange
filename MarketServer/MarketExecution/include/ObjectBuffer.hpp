@@ -32,5 +32,15 @@ namespace MarketExecution
             std::memcpy(Buffer.data() + BufferSize, ptr, size);
             BufferSize += size;
         }
+
+        // Caller's responsability to check buffer size
+        void readBytes(void *ptr, size_t size) noexcept
+        {
+            std::memcpy(ptr, Buffer.data(), size);
+
+            BufferSize -= size;
+
+            std::memmove(Buffer.data(), Buffer.data() + size, BufferSize);
+        }
     };
 } // namespace MarketExecution

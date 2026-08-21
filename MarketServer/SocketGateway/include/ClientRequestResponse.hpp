@@ -3,6 +3,8 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <iomanip>
+#include <iostream>
 
 namespace Gateways
 {
@@ -28,6 +30,23 @@ namespace Gateways
             AssetId.fill(0);
             Confirmed.fill(0);
             Attempt.fill(0);
+        }
+
+        void log() const noexcept
+        {
+            std::cout << "ClientRequestResponse { Status='" << Status
+                      << "', SequenceId=" << SequenceId
+                      << ", ClientId=" << ClientId << ", ClientFd=" << ClientFd
+                      << " }\n";
+            std::cout << std::setw(10) << "AssetId" << std::setw(15)
+                      << "Confirmed" << std::setw(15) << "Attempt" << '\n';
+
+            for (size_t i = 0; i < MaxPositions; ++i)
+            {
+                std::cout << std::setw(10) << AssetId[i] << std::setw(15)
+                          << Confirmed[i] << std::setw(15) << Attempt[i]
+                          << '\n';
+            }
         }
     };
 #pragma pack(pop)

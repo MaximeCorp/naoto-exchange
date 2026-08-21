@@ -154,7 +154,7 @@ namespace MarketExecution
                         OrderBookUpdatesPool.acquire();
                     curOrderBookUpdate->FillUpdate(bestLevel->GetTotalAmount(),
                                                    BestAskPrice, MarketAssetId,
-                                                   ORDER_BOOK_UPDATE_BUY);
+                                                   ORDER_BOOK_UPDATE_SELL);
                     OutgoingBook.try_enqueue(curOrderBookUpdate);
 
                     std::cout << "Orders after matching\n:";
@@ -242,7 +242,7 @@ namespace MarketExecution
                         OrderBookUpdatesPool.acquire();
                     curOrderBookUpdate->FillUpdate(bestLevel->GetTotalAmount(),
                                                    BestBidPrice, MarketAssetId,
-                                                   ORDER_BOOK_UPDATE_SELL);
+                                                   ORDER_BOOK_UPDATE_BUY);
                     OutgoingBook.try_enqueue(curOrderBookUpdate);
 
                     std::cout << "Orders after matching\n:";
@@ -264,6 +264,7 @@ namespace MarketExecution
         void ExecuteMarketableOrder(
             Order &order) noexcept // assumption: the order IS marketable
         {
+            std::cout << "Executing marketable order.\n\n";
             if (order.getSide() == OrderSide::BUY)
             {
                 FillBuyOrder(order);

@@ -60,7 +60,7 @@ namespace MarketExecution
         Price = -1;
     }
 
-    void Order::log() noexcept
+    void Order::log() const noexcept
     {
         std::string side = Side == OrderSide::BUY ? "BUY" : "SELL";
         std::string type = Type == OrderType::LIMIT ? "LIMIT" : "MARKET";

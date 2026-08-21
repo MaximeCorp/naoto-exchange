@@ -19,6 +19,7 @@ namespace AccountService
 
         alignas(
             64) std::vector<std::array<ClientDelta<MaxPositions>, 3>> Deltas;
+        alignas(64) std::vector<std::array<uint64_t, 3>> SequenceIds;
 
         alignas(64) std::vector<uint8_t> Complete;
 
@@ -28,8 +29,17 @@ namespace AccountService
             , States2(maxClients)
             , States3(maxClients)
             , Deltas(maxClients)
+            , SequenceIds(maxClients)
             , Complete(maxClients, 0)
-        {}
+        {
+            for (size_t i = 0; i < maxClients; ++i)
+            {
+                for (size_t j = 0; j < 3; ++j)
+                {
+                    SequenceIds[i][j] = 3334;
+                }
+            }
+        }
 
         ClientStates(size_t maxClients,
                      std::vector<ClientState<MaxPositions>> &states)
@@ -37,8 +47,17 @@ namespace AccountService
             , States2(maxClients)
             , States3(maxClients)
             , Deltas(maxClients)
+            , SequenceIds(maxClients)
             , Complete(maxClients, 0)
         {
+            for (size_t i = 0; i < maxClients; ++i)
+            {
+                for (size_t j = 0; j < 3; ++j)
+                {
+                    SequenceIds[i][j] = 3334;
+                }
+            }
+
             for (size_t i = 0; i < states.size(); ++i)
             {
                 States1[i] = states[i];
@@ -66,8 +85,8 @@ namespace AccountService
         }
 
         // Producer methods
-        void
-        SetClientState(const ClientState<MaxPositions> &clientState) noexcept
+        void SetClientState(const ClientState<MaxPositions> &clientState,
+                            uint64_t sequenceId) noexcept
         {
             const uint32_t clientId = clientState.ClientId;
 
@@ -79,11 +98,19 @@ namespace AccountService
                 : (complete == 1 ? States3[clientId] : States1[clientId]);
             toChange = clientState;
 
+            uint64_t &curSeqId = complete == 0
+                ? SequenceIds[1][clientId]
+                : (complete == 1 ? SequenceIds[2][clientId]
+                                 : SequenceIds[0][clientId]);
+
+            curSeqId = sequenceId;
+
             // TODO: Should update deltas if this function is ever used
         }
 
         void SetClientAssets(const uint32_t clientId, const int64_t confirmed,
-                             const int64_t attempt, uint16_t assetId) noexcept
+                             const int64_t attempt, uint16_t assetId,
+                             uint64_t sequenceId) noexcept
         {
             uint8_t complete = std::atomic_ref(Complete[clientId])
                                    .load(std::memory_order_relaxed);
@@ -100,6 +127,13 @@ namespace AccountService
                     Deltas[clientId][complete].Attempt[i] += attempt;
                 }
             }
+
+            uint64_t &curSeqId = complete == 0
+                ? SequenceIds[1][clientId]
+                : (complete == 1 ? SequenceIds[2][clientId]
+                                 : SequenceIds[0][clientId]);
+
+            curSeqId = sequenceId;
         }
 
         void FlushTripleBuffer(const uint32_t clientId) noexcept
@@ -120,6 +154,11 @@ namespace AccountService
                 state->Attempt[i] += curDelta[complete].Attempt[i];
             }
 
+            uint64_t curSeqId = complete == 0
+                ? SequenceIds[1][clientId]
+                : (complete == 1 ? SequenceIds[2][clientId]
+                                 : SequenceIds[0][clientId]);
+
             complete = complete == 2 ? 0 : complete + 1;
 
             std::atomic_ref(Complete[clientId])
@@ -127,6 +166,11 @@ namespace AccountService
 
             // Assumption: the client details will always contain MaxPositions
             // assets (even if some aren't used)
+
+            uint64_t &newSeqId = complete == 0
+                ? SequenceIds[1][clientId]
+                : (complete == 1 ? SequenceIds[2][clientId]
+                                 : SequenceIds[0][clientId]);
 
             state = complete == 0
                 ? &States2[clientId]
@@ -143,6 +187,8 @@ namespace AccountService
                 state->Attempt[i] += curDelta[1].Attempt[i];
                 state->Attempt[i] += curDelta[2].Attempt[i];
             }
+
+            newSeqId = curSeqId;
         }
     };
 } // namespace AccountService

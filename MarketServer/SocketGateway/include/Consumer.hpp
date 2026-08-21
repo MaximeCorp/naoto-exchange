@@ -23,7 +23,8 @@ namespace Gateways
         ((BatchSize == 0 && HasHandle<DerivedConsumer, T>)
          || (BatchSize > 0 && HasBatchHandle<DerivedConsumer, T, BatchSize>));
 
-    template <typename DerivedConsumer, typename T, size_t BatchSize = 0>
+    template <typename DerivedConsumer, typename T, size_t BatchSize = 0,
+              size_t Tag = 0>
     class Consumer
     {
         using TQueue = moodycamel::BlockingReaderWriterCircularBuffer<T *>;
@@ -134,6 +135,63 @@ namespace Gateways
                 T *curElement = nullptr;
 
                 Incoming.wait_dequeue(curElement);
+
+                static_cast<DerivedConsumer *>(this)->Handle(curElement);
+
+                bool released = FreeElement(curElement);
+
+                if (!released) [[unlikely]]
+                {
+                    std::cerr << "Failed to release a mempool element\n";
+                    std::terminate();
+                }
+            }
+        }
+
+        void ConsumeTimed(const uint16_t delayMs) noexcept
+        {
+            static_assert(ValidConsumerHandler<DerivedConsumer, T, BatchSize>,
+                          "DerivedConsumer must provide a matching Handle()");
+            if constexpr (BatchSize > 0)
+            {
+                T *curElement = nullptr;
+                size_t curSize = 0;
+
+                while (curSize < BatchSize)
+                {
+                    if (!Incoming.wait_dequeue_timed(
+                            curElement, std::chrono::milliseconds(delayMs)))
+                        [[unlikely]]
+                    {
+                        break;
+                    }
+
+                    Buffer[curSize++] = curElement;
+                }
+
+                static_cast<DerivedConsumer *>(this)->Handle(Buffer, curSize);
+
+                for (size_t i = 0; i < curSize; ++i)
+                {
+                    bool released = FreeElement(Buffer[i]);
+
+                    if (!released) [[unlikely]]
+                    {
+                        std::cerr << "Failed to release a mempool element\n";
+                        std::terminate();
+                    }
+                }
+            }
+            else
+            {
+                T *curElement = nullptr;
+
+                if (!Incoming.wait_dequeue_timed(
+                        curElement, std::chrono::milliseconds(delayMs)))
+                    [[unlikely]]
+                {
+                    return;
+                }
 
                 static_cast<DerivedConsumer *>(this)->Handle(curElement);
 

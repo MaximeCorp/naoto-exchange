@@ -6,6 +6,7 @@
 
 namespace Gateways
 {
+    // TODO : delete if useless
 #pragma pack(push, 1)
     template <size_t BatchSize>
     class ClientStatesUpdates

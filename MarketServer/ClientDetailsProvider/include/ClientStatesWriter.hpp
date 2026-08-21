@@ -44,9 +44,10 @@ namespace AccountService
             std::cout << "Sequence Id: " << report->SequenceId << "\n";
 
             States.SetClientAssets(report->ClientId, report->BoughtDelta, 0,
-                                   report->BoughtAssetId);
+                                   report->BoughtAssetId, report->SequenceId);
             States.SetClientAssets(report->ClientId, report->SoldDelta,
-                                   report->SoldDelta, report->SoldAssetId);
+                                   report->SoldDelta, report->SoldAssetId,
+                                   report->SequenceId);
             States.FlushTripleBuffer(report->ClientId);
         }
 
@@ -70,9 +71,11 @@ namespace AccountService
                 std::cout << "Sequence Id: " << report->SequenceId << "\n";
 
                 States.SetClientAssets(report->ClientId, report->BoughtDelta, 0,
-                                       report->BoughtAssetId);
+                                       report->BoughtAssetId,
+                                       report->SequenceId);
                 States.SetClientAssets(report->ClientId, report->SoldDelta,
-                                       report->SoldDelta, report->SoldAssetId);
+                                       report->SoldDelta, report->SoldAssetId,
+                                       report->SequenceId);
             }
 
             for (size_t i = 0; i < batchSize; ++i)

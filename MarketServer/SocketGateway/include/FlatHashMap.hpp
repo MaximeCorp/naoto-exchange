@@ -6,7 +6,7 @@
 #include <immintrin.h>
 #include <iostream>
 
-namespace MarketExecution
+namespace Gateways
 {
     template <std::integral K, typename V,
               size_t Size> // CRITICAL: Size MUST be a power of 2
@@ -149,7 +149,7 @@ namespace MarketExecution
 
         void AddNode(K key, V val) noexcept
         {
-            if (GetVal(key)) [[unlikely]]
+            if (GetVal(key, val)) [[unlikely]]
             {
                 return;
             }
@@ -293,7 +293,7 @@ namespace MarketExecution
                 cur_idx = next_idx;
             }
 
-            PaddingSafeWrite(cur_idx, EMPTY_MARKER, 0, nullptr);
+            PaddingSafeWrite(cur_idx, EMPTY_MARKER, {}, {});
         }
 
         void DebugDump(void) noexcept
@@ -331,4 +331,4 @@ namespace MarketExecution
             std::cout << "=== " << count << " entries total ===\n";
         }
     };
-} // namespace MarketExecution
+} // namespace Gateways

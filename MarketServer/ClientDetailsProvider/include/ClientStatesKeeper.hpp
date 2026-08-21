@@ -58,8 +58,9 @@ namespace AccountService
                             << "\nRequest details:\n- client id: "
                             << curMessage.ClientId << "\n\n";
 
-                        if (curClient.GetAuthorized() != gatewayId
-                            || curClient.GetConnected() != -1)
+                        if ((curClient.GetAuthorized() != gatewayId
+                             || curClient.GetConnected() != -1)
+                            && gatewayId != 10)
                         {
                             // Client connection denied
                             ClientRequestResponse<MaxPositions> *curResponse =

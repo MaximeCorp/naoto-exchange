@@ -143,9 +143,13 @@ namespace Gateways
                             recv(curFd, &firstMessage,
                                  sizeof(InitMessage) - buffer.BufferSize, 0);
 
+                        std::cout << "Read " << nread
+                                  << " bytes at epoll server (binary size = "
+                                  << sizeof(InitMessage) << ")\n\n";
+
                         if (nread > 0)
                         {
-                            buffer.addBytes(&firstMessage, nread);
+                            buffer.addBytes((T *)&firstMessage, nread);
                         }
                         else if (nread == 0)
                         {
@@ -204,19 +208,26 @@ namespace Gateways
                              (char *)(batch->Data.data()) + buffer.BufferSize,
                              sizeof(Order) * BatchSize - buffer.BufferSize, 0);
 
+                std::cout << "Read " << nread
+                          << " bytes at epoll server (binary size = "
+                          << sizeof(T) << ")\n\n";
+
                 if (nread <= 0) [[unlikely]]
                 {
-                    batch->setSize(0);
-                    Orders.try_enqueue(batch);
+                    if (Pool.localRelease(batch)) [[unlikely]]
+                    {
+                        // TODO : handle this
+                    }
+
                     break;
                 }
 
-                batch->setFd(curFd);
+                batch->Fd = curFd;
 
                 auto [batchSize, bufferSize] = std::div(
                     (int)(nread + buffer.BufferSize), (int)sizeof(Order));
 
-                batch->setSize(batchSize);
+                batch->Size = batchSize;
 
                 buffer.clearBuffer();
                 buffer.addBytes(batch->Data.data() + sizeof(Order) * batchSize,
@@ -231,13 +242,11 @@ namespace Gateways
 
                 if (!Orders.try_enqueue(batch)) [[unlikely]]
                 {
-                    // handle
-                }
-                else
-                {
-                    // std::cout << "push succesful, batch of size " <<
-                    // batchSize
-                    //<< "\n\n";
+                    // TODO : think about what to do in this case
+                    if (Pool.localRelease(batch)) [[unlikely]]
+                    {
+                        // TODO : handle this
+                    }
                 }
             }
 

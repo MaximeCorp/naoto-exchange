@@ -1,9 +1,14 @@
 #pragma once
 
+#include <CdpRequestSender.hpp>
+#include <ClientAccountReceiver.hpp>
+#include <ClientRequestResponse.hpp>
 #include <ClientStates.hpp>
-#include <ClientStatesInjector.hpp>
-#include <EpollServer.hpp>
+#include <ClientStatesWriter.hpp>
 #include <FileDescriptorsOps.hpp>
+#include <GatewayRequest.hpp>
+#include <GatewayServer.hpp>
+#include <MarketUpdates.hpp>
 #include <ObjectBatch.hpp>
 #include <Order.hpp>
 #include <ReaderWriterCircularBuffer.hpp>
@@ -14,21 +19,47 @@
 
 namespace Gateways
 {
-    template <size_t BatchSize, size_t MaxAsset, size_t MaxPositions>
+    template <size_t BatchSize, size_t MaxAsset, size_t MaxPositions,
+              size_t MaxClients, size_t UpdatesBufferSize,
+              size_t ReceiveRingBufferSize>
     class SocketGateway
     {
         using OrdersQueue = moodycamel::BlockingReaderWriterCircularBuffer<
             ObjectBatch<Order, BatchSize> *>;
+        using DisconnectsQueue =
+            moodycamel::BlockingReaderWriterCircularBuffer<uint32_t>;
+        using ReportQueue =
+            moodycamel::BlockingReaderWriterCircularBuffer<OrderStateReport *>;
+        using ResponseBatch =
+            ObjectBatch<ClientRequestResponse<MaxPositions>, BatchSize>;
+
+        using ResponseQueue =
+            moodycamel::BlockingReaderWriterCircularBuffer<ResponseBatch *>;
+        using RequestQueue =
+            moodycamel::BlockingReaderWriterCircularBuffer<GatewayRequest *>;
 
     private:
-        FdGen ClientStatesUpdatesFd;
-        EpollServer<Order, BatchSize> Server;
-        ClientStates<MaxPositions> ClientsInfo;
-        RiskService<BatchSize, MaxAsset, MaxPositions> Risk;
-        ClientStatesInjector<MaxPositions> ClientsInfoInjector;
-
         StoragePool<ObjectBatch<Order, BatchSize>> OrdersPool;
+        StoragePool<OrderStateReport> ReportsPool;
+        StoragePool<ResponseBatch> ResponsesPool;
+        StoragePool<GatewayRequest> ServerRequestsPool;
+        StoragePool<GatewayRequest> WriterRequestsPool;
         OrdersQueue IncomingOrders;
+        DisconnectsQueue IncomingDisconnects;
+        ReportQueue IncomingReports;
+        ResponseQueue IncomingResponses;
+        RequestQueue ServerIncomingRequests;
+        RequestQueue WriterIncomingRequests;
+        ClientStates<MaxPositions> States;
+        FdGen ClientStatesUpdatesFd;
+        GatewayServer<BatchSize, MaxPositions> Server;
+        RiskService<BatchSize, MaxAsset, MaxPositions, MaxClients> Risk;
+        ClientStatesWriter<MaxClients, MaxPositions, BatchSize,
+                           UpdatesBufferSize>
+            StatesWriter;
+        MarketUpdates<ReceiveRingBufferSize, BatchSize> UpdatesReceiver;
+        ClientAccountReceiver<BatchSize, MaxPositions> AccountReceiver;
+        CdpRequestSender RequestSender;
 
         void setAffinity(std::thread &t, const int core_id)
         {
@@ -50,79 +81,69 @@ namespace Gateways
             }
         }
 
-        [[nodiscard]] int
-        connectClientStatesUpdateService(const std::string &ip, const int port)
-        {
-            int res = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
-
-            int one = 1;
-            setsockopt(ClientStatesUpdatesFd, IPPROTO_TCP, TCP_NODELAY, &one,
-                       sizeof(one));
-
-            struct sockaddr_in addr;
-            std::memset(&addr, 0, sizeof(addr));
-            addr.sin_family = AF_INET;
-            addr.sin_port = htons(port);
-            addr.sin_addr.s_addr = inet_addr(ip.c_str());
-
-            if (connect(ClientStatesUpdatesFd, (struct sockaddr *)&addr,
-                        sizeof(addr))
-                < 0)
-            {
-                if (errno != EINPROGRESS)
-                    std::cerr << "Bro you didn't connect to risk service.\n";
-            }
-
-            return res;
-        }
-
     public:
-        SocketGateway(const size_t max_clients, const size_t queue_size,
-                      const int port, const int maxEvents, const int maxPending,
-                      const std::string &clientStatesUpdatesIp,
-                      const int clientStatesUpdatesPort,
-                      const std::string &marketUpdatesIp,
-                      const int marketUpdatesPort, const size_t nb_fds)
-            : ClientStatesUpdatesFd(connectClientStatesUpdateService(
-                  clientStatesUpdatesIp, clientStatesUpdatesPort))
+        SocketGateway(int argc, char **argv, const uint16_t portId,
+                      const uint16_t nbRxQueueSlots, const size_t poolSize,
+                      const uint32_t dstIp, const uint16_t dstPort,
+                      const size_t max_clients, const size_t queue_size,
+                      const int port, const int maxEvents, const int maxPending)
+            : OrdersPool(poolSize)
+            , ReportsPool(poolSize)
+            , ResponsesPool(poolSize)
+            , ServerRequestsPool(poolSize)
+            , WriterRequestsPool(poolSize)
+            , IncomingOrders(queue_size)
+            , IncomingDisconnects(queue_size)
+            , IncomingReports(queue_size)
+            , IncomingResponses(queue_size)
+            , ServerIncomingRequests(queue_size)
+            , WriterIncomingRequests(queue_size)
+            , States(max_clients)
             , Server(port, maxEvents, maxPending, OrdersPool, IncomingOrders,
-                     ClientStatesUpdatesFd, nb_fds)
-            , ClientsInfo(nb_fds)
-            , Risk(OrdersPool, IncomingOrders, ClientStatesUpdatesFd,
-                   ClientsInfo)
-            , ClientsInfoInjector(ClientsInfo, ClientStatesUpdatesFd,
-                                  marketUpdatesIp, marketUpdatesPort)
-            , OrdersPool(max_clients)
-            , IncomingOrders(queue_size)
-        {}
-
-        SocketGateway(const size_t max_clients, const size_t queue_size,
-                      const int port, const int maxEvents, const int maxPending,
-                      const std::string &clientStatesUpdatesIp,
-                      const int clientStatesUpdatesPort)
-            : Server(port, maxEvents, maxPending, OrdersPool, IncomingOrders)
-            , ClientsInfo(FileDescriptorsOps::getMaxFd())
-            , Risk(OrdersPool, IncomingOrders, ClientsInfo)
-            , OrdersPool(max_clients)
-            , IncomingOrders(queue_size)
+                     States, ClientStatesUpdatesFd, IncomingDisconnects,
+                     ServerRequestsPool, ServerIncomingRequests)
+            , Risk(OrdersPool, IncomingOrders, ClientStatesUpdatesFd, States)
+            , StatesWriter(States, IncomingReports, ReportsPool,
+                           IncomingResponses, ResponsesPool,
+                           IncomingDisconnects, WriterIncomingRequests,
+                           WriterRequestsPool)
+            , UpdatesReceiver(argc, argv, IncomingReports, ReportsPool, portId,
+                              nbRxQueueSlots, poolSize, dstIp, dstPort)
+            , AccountReceiver(ClientStatesUpdatesFd, IncomingResponses,
+                              ResponsesPool)
+            , RequestSender(ServerIncomingRequests, WriterIncomingRequests,
+                            ServerRequestsPool, WriterRequestsPool,
+                            ClientStatesUpdatesFd)
         {
-            connectClientStatesUpdateService(clientStatesUpdatesIp,
-                                             clientStatesUpdatesPort);
-        }
-
-        ~SocketGateway(void)
-        {
-            close(ClientStatesUpdatesFd);
+            FileDescriptorsOps::setMaxFd(max_clients);
         }
 
         void StartGateway(void)
         {
             std::thread riskThread(
-                &RiskService<BatchSize, MaxAsset, MaxPositions>::startLoop,
+                &RiskService<BatchSize, MaxAsset, MaxPositions,
+                             MaxClients>::startLoop,
                 &Risk);
             std::thread serverThread(
-                &EpollServer<Order, BatchSize>::startServer, &Server);
+                &GatewayServer<BatchSize, MaxPositions>::startServer, &Server);
+            std::thread StatesWriterThread(
+                &ClientStatesWriter<MaxClients, MaxPositions, BatchSize,
+                                    UpdatesBufferSize>::StartLoop,
+                &StatesWriter);
 
+            std::thread UpdatesReceiverThread(
+                &MarketUpdates<ReceiveRingBufferSize,
+                               BatchSize>::StartReceiversLoop,
+                &UpdatesReceiver);
+
+            std::thread AccountReceiverThread(
+                &ClientAccountReceiver<BatchSize, MaxPositions>::StartLoop,
+                &AccountReceiver);
+
+            std::thread RequestSenderThread(&CdpRequestSender::StartLoop,
+                                            &RequestSender);
+
+            // TODO: Set affinity and thread names
             setAffinity(riskThread, 2); // Hard coded for local tests
             setAffinity(serverThread, 4);
 

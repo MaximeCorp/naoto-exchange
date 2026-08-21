@@ -1,8 +1,11 @@
 #pragma once
 
+#include <BytesBuffer.hpp>
 #include <ClientStates.hpp>
 #include <FdGen.hpp>
+#include <GatewayConnection.hpp>
 #include <Order.hpp>
+#include <OrderConfirmation.hpp>
 #include <ReaderWriterCircularBuffer.hpp>
 #include <StoragePool.hpp>
 #include <arpa/inet.h>
@@ -18,7 +21,8 @@
 
 namespace Gateways
 {
-    template <size_t BatchSize, size_t MaxAsset, size_t MaxPositions>
+    template <size_t BatchSize, size_t MaxAsset, size_t MaxPositions,
+              size_t MaxClients>
     class RiskService
     {
         using OrderQueue = moodycamel::BlockingReaderWriterCircularBuffer<
@@ -30,6 +34,13 @@ namespace Gateways
 
         StoragePool<ObjectBatch<Order, BatchSize>> &OrdersPool;
         std::array<FdGen, MaxAsset> MatchingEngines;
+        std::array<BytesBuffer<BatchSize * sizeof(Order)>, MaxAsset>
+            OrderBuffer;
+        size_t OrderOffset;
+
+        std::array<BytesBuffer<BatchSize * sizeof(OrderConfirmation)>,
+                   MaxClients>
+            ConfirmationBuffer;
         FdGen &CdpFd;
         OrderQueue &Orders;
         std::shared_ptr<etcd::KeepAlive> KeepAlive;
@@ -177,6 +188,8 @@ namespace Gateways
 
         void etcdOnCDPResponse(etcd::Response &resp) noexcept
         {
+            const char *machine_id = std::getenv("MACHINE_ID") ?: "0";
+
             if (resp.error_code() != 0)
             {
                 return;
@@ -191,6 +204,32 @@ namespace Gateways
 
                     int32_t newFd = connectMatchingEngines(
                         cdp_addr); // Arbitrary port value for now
+
+                    GatewayConnection cdpConnect;
+                    cdpConnect.GatewayId = std::stoi(machine_id);
+
+                    size_t totalSent = 0;
+
+                    while (totalSent < sizeof(GatewayConnection))
+                    {
+                        ssize_t sent =
+                            send(newFd, (uint8_t *)(&cdpConnect) + totalSent,
+                                 sizeof(GatewayConnection) - totalSent,
+                                 MSG_NOSIGNAL);
+
+                        if (sent <= 0)
+                        {
+                            if (errno == EINTR)
+                            {
+                                continue;
+                            }
+                            std::cerr
+                                << "Failed sending first message to cdp\n\n";
+                            return;
+                        }
+
+                        totalSent += sent;
+                    }
 
                     std::cout
                         << "new client details provider found:  " << cdp_addr
@@ -209,9 +248,6 @@ namespace Gateways
                 else if (ev.event_type() == etcd::Event::EventType::DELETE_)
                 {
                     std::string key = ev.kv().key();
-                    uint32_t symbol_id = std::stoi(
-                        key.substr(key.rfind('/')
-                                   + 1)); // This needs to be changed after POC
 
                     int32_t oldFd =
                         FdGen::Fd(CdpFd.load(std::memory_order_acquire));
@@ -274,6 +310,9 @@ namespace Gateways
 
             int64_t revisionME = existingME.index();
 
+            GatewayConnection cdpConnect;
+            cdpConnect.GatewayId = std::stoi(machine_id);
+
             auto existingCDP = EtcdClient->ls("/client-details-provider/");
             for (auto &kv : existingCDP.values())
             {
@@ -284,6 +323,28 @@ namespace Gateways
 
                 // Rename connectMatchingEngines to make it generic
                 int32_t fd = connectMatchingEngines(curAddr);
+
+                size_t totalSent = 0;
+
+                while (totalSent < sizeof(GatewayConnection))
+                {
+                    ssize_t sent = send(
+                        fd, (uint8_t *)(&cdpConnect) + totalSent,
+                        sizeof(GatewayConnection) - totalSent, MSG_NOSIGNAL);
+
+                    if (sent <= 0)
+                    {
+                        if (errno == EINTR)
+                        {
+                            continue;
+                        }
+                        std::cerr << "Failed sending first message to cdp\n\n";
+                        return;
+                    }
+
+                    totalSent += sent;
+                }
+
                 if (fd != -1)
                 {
                     CdpFd.SwitchFd(fd);
@@ -304,24 +365,66 @@ namespace Gateways
                 true);
         }
 
-        void SendOrder(const Order &curOrder) noexcept
+        template <typename T>
+        [[nodiscard]] bool
+        DrainBuffer(BytesBuffer<BatchSize * sizeof(T)> &buffer,
+                    const uint32_t fd) noexcept
         {
-            FdGen &curSlot = MatchingEngines[curOrder.getAsset()];
-            uint64_t curVal =
-                curSlot.load(std::memory_order_relaxed); // Relaxed because
-                                                         // memory dependancy
-                                                         // allows it
+            size_t totalSent = 0;
 
-            std::cout << "(int32_t)curVal is " << (int32_t)curVal << "\n";
-
-            int32_t curFd = FdGen::Fd(curVal);
-
-            if (curFd == -1) [[unlikely]]
+            if constexpr (std::is_same_v<T, Order>)
             {
-                std::cout << "no matching engine at asset id "
-                          << curOrder.getAsset() << "\n";
-                return;
+                totalSent = OrderOffset;
             }
+
+            const uint8_t *data = buffer.GetData();
+
+            const size_t bufferSize = buffer.GetSize();
+
+            while (totalSent < bufferSize)
+            {
+                ssize_t sent = send(fd, data + totalSent,
+                                    bufferSize - totalSent, MSG_NOSIGNAL);
+
+                totalSent += sent;
+
+                if (sent <= 0) [[unlikely]]
+                {
+                    if (errno == EINTR)
+                    {
+                        continue;
+                    }
+
+                    if constexpr (std::is_same_v<T, Order>)
+                    {
+                        auto [sentOrders, sentBytes] =
+                            std::div((int)(totalSent), (int)sizeof(Order));
+
+                        buffer.Shift(sentOrders * sizeof(Order));
+                        OrderOffset = sentBytes;
+                    }
+                    else if constexpr (std::is_same_v<T, OrderConfirmation>)
+                    {
+                        buffer.Shift(totalSent);
+                    }
+
+                    return false;
+                }
+            }
+
+            buffer.Clear();
+
+            if constexpr (std::is_same_v<T, Order>)
+            {
+                OrderOffset = 0;
+            }
+
+            return true;
+        }
+
+        void SendOrder(const Order &curOrder, const uint64_t curVal) noexcept
+        {
+            int32_t curFd = FdGen::Fd(curVal);
 
             // edge case: if fd gets closed then recycled by and the
             // new fd is for client, then information leak, handle
@@ -345,6 +448,8 @@ namespace Gateways
             }
             // edge case: send < sizeof(Order)
 
+            FdGen &curSlot = MatchingEngines[curOrder.getAsset()];
+
             uint64_t newVal = curSlot.load(std::memory_order_acquire);
 
             if (newVal != curVal) [[unlikely]]
@@ -356,14 +461,60 @@ namespace Gateways
             }
         }
 
-        [[nodiscard]] bool CanSpend(const uint32_t fd, const int64_t amount,
-                                    const uint16_t assetId) noexcept
+        void SendOrderConfirmation(const OrderConfirmation *confirmation,
+                                   const uint32_t fd) noexcept
         {
-            int64_t confirmed;
-            int64_t attempt;
+            size_t totalSent = 0;
 
-            bool found =
-                clientStates.GetClientFunds(fd, assetId, &confirmed, &attempt);
+            while (totalSent < sizeof(OrderConfirmation))
+            {
+                ssize_t sent =
+                    send(fd, (uint8_t *)(confirmation) + totalSent,
+                         sizeof(OrderConfirmation) - totalSent, MSG_NOSIGNAL);
+
+                if (sent <= 0) [[unlikely]]
+                {
+                    if (errno == EINTR)
+                    {
+                        continue;
+                    }
+                    // TODO: figure out what to do in this situation
+                    // Might ignore and use SoupBinTCP for client to recover
+                    // missed messages
+                    return;
+                }
+
+                totalSent += sent;
+            }
+        }
+
+        // TODO: Make it return OrderConfirmationStatus
+        [[nodiscard]] OrderConfirmationStatus
+        ValidOrder(const uint32_t fd, const Order &order,
+                   const uint8_t auth) noexcept
+        {
+            if (!auth) [[unlikely]]
+            {
+                std::cerr
+                    << "Order refused: Client was not authentificated yet\n\n";
+
+                return OrderConfirmationStatus::UserNotConnected;
+            }
+
+            ClientState<MaxPositions> curState =
+                clientStates.GetClientState(fd);
+
+            std::cout << "Risk check going on:\n";
+            curState.log();
+
+            uint16_t assetId =
+                order.Type == OrderType::MARKET && order.Side == BUY
+                ? 0
+                : order.AssetId;
+
+            size_t assetIdx;
+
+            bool found = curState.GetAssetIdx(assetId, assetIdx);
 
             if (!found) [[unlikely]]
             {
@@ -371,48 +522,140 @@ namespace Gateways
                 // Should evict an asset that has attempt = 0
                 std::cerr << "Requested asset id not in the client state\n\n";
 
-                return false;
+                return assetId > MaxAsset
+                    ? OrderConfirmationStatus::UnknownSymbol
+                    : OrderConfirmationStatus::MaxPositions;
             }
+
+            int64_t confirmed = curState.GetConfirmedAt(assetIdx);
+            int64_t attempt = curState.GetAttemptAt(assetIdx);
+
+            // The maximum needed amount when selling is the amount since it's
+            // exactly what we'll spend
+            // For buy, LIMIT order allows us to calculate exactly how much will
+            // be spent and MARKET orders have a maximum price, giving us an
+            // upper bound which we will use to freeze money
+
+            int64_t amount = order.Side == OrderSide::SELL
+                ? order.Amount
+                : order.Amount * order.Price;
+
+            std::cout << "Trying to use " << amount << " of asset " << assetId
+                      << ", " << confirmed - attempt << " available.\n\n";
 
             if (amount > confirmed - attempt) [[unlikely]]
             {
                 std::cerr << "Trade rejected: not enough funds\n\n";
-                return false;
+                return OrderConfirmationStatus::InsufficientFunds;
             }
 
-            return true;
+            return OrderConfirmationStatus::Accepted;
         }
 
         void consumeOrder(void) noexcept
         {
             ObjectBatch<Order, BatchSize> *curBatch = nullptr;
 
+            // TODO : find a way to clear confirmation resend buffer when new
+            // connection comes
             if (Orders.try_dequeue(curBatch)) [[likely]]
             {
-                std::cout << "Received order batch of size "
-                          << curBatch->getSize() << " at risk service\n";
+                std::cout << "Received order batch of size " << curBatch->Size
+                          << " at risk service\n\n";
 
-                for (size_t i = 0; i < curBatch->getSize(); ++i)
+                const uint32_t curFd = curBatch->Fd;
+
+                for (size_t i = 0; i < curBatch->Size; ++i)
                 {
+                    std::cout << "Risk checking an order\n";
+
                     const Order &curOrder = (*curBatch)[i];
 
                     curOrder.log();
 
-                    if (CanSpend(curBatch->getFd(), curOrder.getAmount(),
-                                 curOrder.getAsset())) [[likely]]
+                    FdGen &curSlot = MatchingEngines[curOrder.getAsset()];
+                    uint64_t curVal = curSlot.load(std::memory_order_acquire);
+
+                    OrderConfirmation curConfirmation;
+
+                    if (FdGen::Fd(curVal) == -1) [[unlikely]]
                     {
-                        /*
-                        CanSpend won't return true if Asset Id isn't valid
-                        if (curOrder.getAsset() >= (int32_t)MaxAsset)
-                            [[unlikely]]
+                        std::cout << "no matching engine at asset id "
+                                  << curOrder.getAsset() << "\n";
+                        curConfirmation.Status =
+                            OrderConfirmationStatus::TechnicalFailure;
+                    }
+                    else
+                    {
+                        curConfirmation.Status =
+                            ValidOrder(curFd, curOrder, curBatch->Auth);
+                    }
+
+                    // TODO: Add other fields like order id and client id
+
+                    if (curConfirmation.Status
+                        == OrderConfirmationStatus::Accepted) [[likely]]
+                    {
+                        std::cout
+                            << "Order Accepted, sending to matching engine\n\n";
+
+                        bool drained = DrainBuffer<Order>(
+                            OrderBuffer[curOrder.Asset], curFd);
+
+                        if (!drained) [[unlikely]]
                         {
-                            std::cout << "refused because of max asset\n";
-                            // Handle order rejection
+                            std::cout << "Failed draining orders resend buffer "
+                                         "before sending order\n\n";
+
+                            if (!OrderBuffer[curOrder.Asset].CanAdd(
+                                    sizeof(Order))) [[unlikely]]
+                            {
+                                // Something must be wrong with the connection
+                                continue;
+                            }
+
+                            OrderBuffer[curOrder.Asset].Add(
+                                (uint8_t *)&curOrder, sizeof(Order));
                             continue;
                         }
-                        */
 
-                        SendOrder(curOrder);
+                        drained = DrainBuffer<OrderConfirmation>(
+                            ConfirmationBuffer[curFd], curFd);
+
+                        if (!drained) [[unlikely]]
+                        {
+                            if (ConfirmationBuffer[curFd].CanAdd(
+                                    sizeof(OrderConfirmation))) [[unlikely]]
+                            {
+                                ConfirmationBuffer[curFd].Add(
+                                    (uint8_t *)&curConfirmation,
+                                    sizeof(OrderConfirmation));
+                            }
+                        }
+
+                        SendOrder(curOrder, curVal);
+
+                        if (OrderBuffer[curOrder.Asset].GetSize() == 0)
+                        {
+                            SendOrderConfirmation(&curConfirmation, curFd);
+                        }
+                    }
+                    else
+                    {
+                        std::cout << "Order Rejected\n\n";
+
+                        bool drained = DrainBuffer<OrderConfirmation>(
+                            ConfirmationBuffer[curFd], curFd);
+
+                        if (!drained) [[unlikely]]
+                        {
+                            ConfirmationBuffer[curFd].Add(
+                                (uint8_t *)&curConfirmation,
+                                sizeof(OrderConfirmation));
+                            continue;
+                        }
+
+                        SendOrderConfirmation(&curConfirmation, curFd);
                     }
                 }
 
@@ -420,10 +663,6 @@ namespace Gateways
                 {
                     perror("Failed mempool release.\n");
                 }
-            }
-            else
-            {
-                // Write error message to client fd
             }
         }
 
@@ -433,6 +672,7 @@ namespace Gateways
                     ClientStates<MaxPositions> &clientStates)
             : clientStates(clientStates)
             , OrdersPool(ordersPool)
+            , OrderOffset(0)
             , CdpFd(cdpFd)
             , Orders(orders)
         {
@@ -457,8 +697,6 @@ namespace Gateways
             {
                 consumeOrder();
             }
-
-            KeepAlive->Cancel();
         }
     };
 } // namespace Gateways

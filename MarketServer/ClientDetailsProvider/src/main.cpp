@@ -21,16 +21,12 @@ int main(int argc, char **argv)
 
     for (size_t i = 0; i < 16; ++i)
     {
-        client1.AssetId[i] = i + 1;
-        client1.Confirmed[i] = i * 100;
-        client1.Attempt[i] = i * 10;
+        client1.AssetId[i] = i;
+        client1.Confirmed[i] = 1000000;
+        client1.Attempt[i] = 1000;
     }
 
-    client1.AssetId[0] = 0;
-    client1.Confirmed[0] = 100000;
-    client1.Attempt[0] = 100;
-
-    client1.Authorized = 1;
+    client1.Authorized = 0;
     client1.Connected = -1;
 
     ClientState<16> client2;
@@ -39,16 +35,12 @@ int main(int argc, char **argv)
 
     for (size_t i = 0; i < 16; ++i)
     {
-        client2.AssetId[i] = i + 4;
-        client2.Confirmed[i] = i * 100 + 2;
-        client2.Attempt[i] = i * 10 + 77;
+        client2.AssetId[i] = i;
+        client2.Confirmed[i] = 999999;
+        client2.Attempt[i] = 900;
     }
 
-    client2.AssetId[0] = 0;
-    client2.Confirmed[0] = 100000;
-    client2.Attempt[0] = 100;
-
-    client2.Authorized = 1;
+    client2.Authorized = 0;
     client2.Connected = -1;
 
     ClientState<16> client3;
@@ -57,12 +49,12 @@ int main(int argc, char **argv)
 
     for (size_t i = 0; i < 16; ++i)
     {
-        client3.AssetId[i] = i * 4 + 9;
-        client3.Confirmed[i] = i * 101 + 8;
-        client3.Attempt[i] = i * 2 + 16;
+        client3.AssetId[i] = i;
+        client3.Confirmed[i] = 200000000;
+        client3.Attempt[i] = 500;
     }
 
-    client3.Authorized = 1;
+    client3.Authorized = 0;
     client3.Connected = -1;
 
     std::vector<ClientState<16>> clients;

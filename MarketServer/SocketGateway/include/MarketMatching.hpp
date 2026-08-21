@@ -11,6 +11,7 @@
 
 namespace Gateways
 {
+    // TODO : delete if useless
     enum SendStatus
     {
         SENT,

@@ -1,95 +1,109 @@
 #pragma once
 
 #include <ClientRequest.hpp>
+#include <ClientStates.hpp>
 #include <EpollServer.hpp>
 #include <FdGen.hpp>
 #include <GatewayRequest.hpp>
+#include <ReaderWriterCircularBuffer.hpp>
 #include <atomic>
 #include <string>
 
 namespace Gateways
 {
-    template <size_t BatchSize>
-    class Gateway : public EpollServer<Gateway, Order, BatchSize, ClientRequest>
+    template <size_t BatchSize, size_t MaxPositions>
+    class GatewayServer
+        : public EpollServer<GatewayServer<BatchSize, MaxPositions>, Order,
+                             BatchSize, ClientRequest>
     {
-        using Base = EpollServer < Gateway, Order, BatchSize, ClientRequest;
+        using Base = EpollServer<GatewayServer<BatchSize, MaxPositions>, Order,
+                                 BatchSize, ClientRequest>;
+        using DisconnectQueue =
+            moodycamel::BlockingReaderWriterCircularBuffer<uint32_t>;
+        using GatewayRequestQueue =
+            moodycamel::BlockingReaderWriterCircularBuffer<GatewayRequest *>;
+        using OrderQueue = moodycamel::BlockingReaderWriterCircularBuffer<
+            ObjectBatch<Order, BatchSize> *>;
 
     private:
         FdGen &CdpFd;
         uint16_t GatewayId;
-
-        void SendRequest(GatewayRequest *curRequest) noexcept
-        {
-            uint64_t curVal =
-                CdpFd.load(std::memory_order_relaxed); // Relaxed because
-                                                       // memory dependancy
-                                                       // allows it
-
-            int32_t curFd = FdGen::Fd(curVal);
-
-            if (curFd == -1) [[unlikely]]
-            {
-                std::cerr << "Failed fetching user details from cdp: not "
-                             "connected\n\n";
-                return;
-            }
-
-            // edge case: if fd gets closed then recycled by and the
-            // new fd is for client, then information leak, handle
-            // this by closing fd after making sure the sender has
-            // seen the new fd
-
-            ssize_t sent =
-                send(curFd, curRequest, sizeof(GatewayRequest), MSG_NOSIGNAL);
-
-            std::cerr << "Sending request to fd " << curFd
-                      << ", size=" << sizeof(GatewayRequest)
-                      << ", sent=" << sent << "\n";
-
-            // TODO: modify the logic here to call send as many times as
-            // necessary, apply same modifications to risk check sendOrder
-
-            if (sent < 0) [[unlikely]]
-            {
-                if (errno == EPIPE || errno == ECONNRESET)
-                {
-                    // handle order rejection
-                }
-                // reject order
-                return;
-            }
-            // edge case: send < sizeof(Order)
-
-            uint64_t newVal = CdpFd.load(std::memory_order_acquire);
-
-            if (newVal != curVal) [[unlikely]]
-            {
-                // Means the send was potentially sent to the wrong
-                // fd
-                // For later : push to the array / vector of
-                // messages to send again
-            }
-        }
+        ClientStates<MaxPositions> &States;
+        DisconnectQueue &OutgoingDisconnects;
+        StoragePool<GatewayRequest> &GwReqPool;
+        GatewayRequestQueue &OutgoingRequests;
 
     public:
-        EpollServer(const int port, const int maxEvents, const int maxPending,
-                    StoragePool<ObjectBatch<T, BatchSize>> &pool,
-                    ObjectQueue &orders, FdGen &cdpFd)
+        GatewayServer(const int port, const int maxEvents, const int maxPending,
+                      StoragePool<ObjectBatch<Order, BatchSize>> &pool,
+                      OrderQueue &orders, ClientStates<MaxPositions> &states,
+                      FdGen &cdpFd, DisconnectQueue &outgoingDisconnects,
+                      StoragePool<GatewayRequest> &gwReqPool,
+                      GatewayRequestQueue &outgoingRequests)
             : Base(port, maxEvents, maxPending, pool, orders)
             , CdpFd(cdpFd)
             , GatewayId(std::stoul(std::getenv("GATEWAY_ID") ?: "0"))
+            , States(states)
+            , OutgoingDisconnects(outgoingDisconnects)
+            , GwReqPool(gwReqPool)
+            , OutgoingRequests(outgoingRequests)
         {}
 
         void FirstMessageHandle(ClientRequest *message, uint32_t fd) noexcept
         {
-            GatewayRequest finalRequest;
+            GatewayRequest *finalRequest = GwReqPool.acquire();
 
-            std::memcpy(&finalRequest, curRequest, sizeof(ClientRequest));
+            if (!finalRequest) [[unlikely]]
+            {
+                // Handle
+                std::cout << "While handling first message: couldn't acquire "
+                             "from pool.\n\n";
+            }
 
-            finalRequest.ClientFd = fd;
-            finalRequest.GatewayId = GatewayId;
+            std::memcpy(finalRequest, message, sizeof(ClientRequest));
 
-            sendRequest(&finalRequest);
+            finalRequest->ClientFd = fd;
+            finalRequest->GatewayId = GatewayId;
+
+            bool enqueued = OutgoingRequests.try_enqueue(finalRequest);
+
+            if (!enqueued) [[unlikely]]
+            {
+                std::cout
+                    << "Failed pushing the message to cdp request sender.\n\n";
+
+                // TODO : handle failure here
+                if (!GwReqPool.localRelease(finalRequest)) [[unlikely]]
+                {
+                    // TODO : here too
+                }
+            }
+            else
+            {
+                std::cout << "Successfully push to cdp request sender.\n\n";
+            }
+        }
+
+        void BatchHandle(ObjectBatch<Order, BatchSize> *batch,
+                         uint32_t fd) noexcept
+        {
+            std::cout << "Checking auth from gateway\nClient state:\n\n";
+
+            States.GetClientState(fd).log();
+
+            batch->Fd = fd;
+            batch->Auth = States.GetClientAuth(fd);
+        }
+
+        void CloseHandle(uint32_t fd) noexcept
+        {
+            bool enqueued = OutgoingDisconnects.try_enqueue(fd);
+
+            if (!enqueued) [[unlikely]]
+            {
+                std::cerr << "Epoll server: couldn't push the disconnect event "
+                             "when handling a closed connection.\n\n";
+            }
         }
     };
 } // namespace Gateways

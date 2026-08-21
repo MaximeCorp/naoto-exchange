@@ -3,44 +3,33 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <iomanip>
+#include <iostream>
 
 namespace Gateways
 {
     template <size_t MaxPositions>
-    class alignas(64) ClientState
+    struct alignas(64) ClientState
     {
-    private:
         uint32_t ClientId;
         std::array<uint16_t, MaxPositions> AssetId;
         std::array<int64_t, MaxPositions> Confirmed;
         std::array<int64_t, MaxPositions> Attempt;
+        uint8_t Auth;
 
-    public:
-        ClientState(void)
-        {}
-
-        ClientState(uint32_t clientId)
-            : ClientId(clientId)
-        {}
-
-        void SetClientId(uint32_t clientId) noexcept
+        [[nodiscard]] bool GetAssetIdx(const uint16_t assetId,
+                                       size_t &idx) const noexcept
         {
-            ClientId = clientId;
-        }
+            for (size_t i = 0; i < MaxPositions; ++i)
+            {
+                if (AssetId[i] == assetId)
+                {
+                    idx = i;
+                    return true;
+                }
+            }
 
-        void SetConfirmed(int64_t confirmed) noexcept
-        {
-            Confirmed = confirmed;
-        }
-
-        void SetAttempt(int64_t attempt) noexcept
-        {
-            Attempt = attempt;
-        }
-
-        [[nodiscard]] uint32_t GetClientId() const noexcept
-        {
-            return ClientId;
+            return false;
         }
 
         [[nodiscard]] int64_t
@@ -96,6 +85,21 @@ namespace Gateways
                                              // index or terminate
         {
             return Attempt[idx];
+        }
+
+        void log() const noexcept
+        {
+            std::cout << "ClientState { ClientId=" << ClientId
+                      << ", Auth=" << static_cast<int>(Auth) << " }\n";
+            std::cout << std::setw(10) << "AssetId" << std::setw(15)
+                      << "Confirmed" << std::setw(15) << "Attempt" << '\n';
+
+            for (size_t i = 0; i < MaxPositions; ++i)
+            {
+                std::cout << std::setw(10) << AssetId[i] << std::setw(15)
+                          << Confirmed[i] << std::setw(15) << Attempt[i]
+                          << '\n';
+            }
         }
     };
 } // namespace Gateways

@@ -74,7 +74,10 @@ namespace Gateways
 
             if (nread <= 0) [[unlikely]]
             {
-                ResponsePool.localRelease(curBatch);
+                if (!ResponsePool.localRelease(curBatch)) [[unlikely]]
+                {
+                    // TODO : Handle this case
+                }
 
                 if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK)
                 {
@@ -89,7 +92,7 @@ namespace Gateways
                 std::div((int)(nread + Buffer.BufferSize),
                          (int)sizeof(ClientRequestResponse<MaxPositions>));
 
-            curBatch->setSize(batchSize);
+            curBatch->Size = batchSize;
 
             Buffer.clearBuffer();
             Buffer.addBytes(curBatch->Data.data()
@@ -99,8 +102,18 @@ namespace Gateways
 
             if (!OutgoingResponses.try_enqueue(curBatch)) [[unlikely]]
             {
-                ResponsePool.localRelease(curBatch);
-                // handle
+                std::cout << "Failed enqueing a batch of " << curBatch->Size
+                          << " cdp response(s).\n\n";
+                if (!ResponsePool.localRelease(curBatch)) [[unlikely]]
+                {
+                    // even worse
+                }
+                // TODO : handle
+            }
+            else
+            {
+                std::cout << "Successfully pushed a batch of " << curBatch->Size
+                          << " responses.\n\n";
             }
         }
 

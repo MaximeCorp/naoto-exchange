@@ -4,6 +4,8 @@
 
 namespace Gateways
 {
+
+    // TODO : delete if useless
     enum OperationType
     {
         ADDITION,

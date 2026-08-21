@@ -56,22 +56,43 @@ namespace Gateways
                 .load(std::memory_order_acquire);
         }
 
-        [[nodiscard]] ClientState<MaxPositions>
-        GetClientState(const uint32_t clientId) const noexcept
+        [[nodiscard]] uint32_t GetClientId(const uint32_t clientFd) noexcept
         {
-            uint8_t complete = std::atomic_ref(Complete[clientId])
+            uint8_t complete = std::atomic_ref(Complete[clientFd])
                                    .load(std::memory_order_acquire);
-            return complete == 0 ? States1[clientId]
-                : complete == 1  ? States2[clientId]
-                                 : States3[clientId];
+            return complete == 0 ? States1[clientFd].ClientId
+                : complete == 1  ? States2[clientFd].ClientId
+                                 : States3[clientFd].ClientId;
         }
 
-        [[nodiscard]] bool GetClientFunds(const uint32_t clientId,
+        [[nodiscard]] ClientState<MaxPositions>
+        GetClientState(const uint32_t clientFd) const noexcept
+        {
+            uint8_t complete = std::atomic_ref(Complete[clientFd])
+                                   .load(std::memory_order_acquire);
+            return complete == 0 ? States1[clientFd]
+                : complete == 1  ? States2[clientFd]
+                                 : States3[clientFd];
+        }
+
+        [[nodiscard]] uint8_t GetClientAuth(const uint32_t clientFd) noexcept
+        {
+            uint8_t complete = std::atomic_ref(Complete[clientFd])
+                                   .load(std::memory_order_acquire);
+            ClientState<MaxPositions> &curState = complete == 0
+                ? States1[clientFd]
+                : complete == 1 ? States2[clientFd]
+                                : States3[clientFd];
+
+            return curState.Auth;
+        }
+
+        [[nodiscard]] bool GetClientFunds(const uint32_t clientFd,
                                           const uint16_t assetId,
                                           int64_t *confirmed,
                                           int64_t *attempt) const noexcept
         {
-            ClientState<MaxPositions> curState = GetClientState(clientId);
+            ClientState<MaxPositions> curState = GetClientState(clientFd);
 
             for (size_t i = 0; i < MaxPositions; ++i)
             {
@@ -87,8 +108,21 @@ namespace Gateways
             return false;
         }
 
+        void SetAuthStatus(const uint32_t clientFd, uint8_t auth) noexcept
+        {
+            uint8_t complete = std::atomic_ref(Complete[clientFd])
+                                   .load(std::memory_order_relaxed);
+
+            ClientState<MaxPositions> &state = complete == 0
+                ? States2[clientFd]
+                : (complete == 1 ? States3[clientFd] : States1[clientFd]);
+
+            state.Auth = !!auth;
+        }
+
         // Producer methods
-        void SetClientState(const ClientRequestResponse *response) noexcept
+        void SetClientState(
+            const ClientRequestResponse<MaxPositions> *response) noexcept
         {
             const uint32_t clientFd = response->ClientFd;
 
@@ -99,19 +133,21 @@ namespace Gateways
                 ? States1[clientFd]
                 : (complete == 1 ? States2[clientFd] : States3[clientFd]);
 
-            for (size_t i = 0; i < MaxPositions; ++i)
-            {
-                Deltas[clientFd][complete].Confirmed[i] =
-                    clientState.Confirmed[i] - ref.Confirmed[i];
-                Deltas[clientFd][complete].Attempt[i] =
-                    clientState.Attempt[i] - ref.Attempt[i];
-            }
-
             ClientState<MaxPositions> *state = complete == 0
                 ? &States2[clientFd]
                 : (complete == 1 ? &States3[clientFd] : &States1[clientFd]);
 
             state->ClientId = response->ClientId;
+            state->Auth = 1;
+
+            for (size_t i = 0; i < MaxPositions; ++i)
+            {
+                state->AssetId[i] = response->AssetId[i];
+                Deltas[clientFd][complete].Confirmed[i] =
+                    response->Confirmed[i] - ref.Confirmed[i];
+                Deltas[clientFd][complete].Attempt[i] =
+                    response->Attempt[i] - ref.Attempt[i];
+            }
         }
 
         void SetClientAssets(const uint32_t clientId, const int64_t confirmed,
@@ -123,6 +159,9 @@ namespace Gateways
             ClientState<MaxPositions> &toChange = complete == 0
                 ? States2[clientId]
                 : (complete == 1 ? States3[clientId] : States1[clientId]);
+
+            std::cout << "Updating funds of client " << toChange.ClientId
+                      << ".\n\n";
 
             for (size_t i = 0; i < MaxPositions; ++i)
             {
@@ -142,16 +181,17 @@ namespace Gateways
             std::array<ClientDelta<MaxPositions>, 3> &curDelta =
                 Deltas[clientFd];
 
-            ClientState<MaxPositions> *state = complete == 0
+            ClientState<MaxPositions> *curState = complete == 0
                 ? &States2[clientFd]
                 : (complete == 1 ? &States3[clientFd] : &States1[clientFd]);
 
-            const uint32_t clientId = state->ClientId;
+            const uint32_t clientId = curState->ClientId;
+            const uint8_t auth = curState->Auth;
 
             for (size_t i = 0; i < MaxPositions; ++i)
             {
-                state->Confirmed[i] += curDelta[complete].Confirmed[i];
-                state->Attempt[i] += curDelta[complete].Attempt[i];
+                curState->Confirmed[i] += curDelta[complete].Confirmed[i];
+                curState->Attempt[i] += curDelta[complete].Attempt[i];
             }
 
             complete = complete == 2 ? 0 : complete + 1;
@@ -162,7 +202,7 @@ namespace Gateways
             // Assumption: the client details will always contain MaxPositions
             // assets (even if some aren't used)
 
-            state = complete == 0
+            ClientState<MaxPositions> *newState = complete == 0
                 ? &States2[clientFd]
                 : (complete == 1 ? &States3[clientFd] : &States1[clientFd]);
 
@@ -170,14 +210,17 @@ namespace Gateways
             {
                 curDelta[complete].Confirmed[i] = 0;
                 curDelta[complete].Attempt[i] = 0;
-                state->Confirmed[i] += curDelta[0].Confirmed[i];
-                state->Confirmed[i] += curDelta[1].Confirmed[i];
-                state->Confirmed[i] += curDelta[2].Confirmed[i];
-                state->Attempt[i] += curDelta[0].Attempt[i];
-                state->Attempt[i] += curDelta[1].Attempt[i];
-                state->Attempt[i] += curDelta[2].Attempt[i];
-                state->ClientId = clientId;
+                newState->Confirmed[i] += curDelta[0].Confirmed[i];
+                newState->Confirmed[i] += curDelta[1].Confirmed[i];
+                newState->Confirmed[i] += curDelta[2].Confirmed[i];
+                newState->Attempt[i] += curDelta[0].Attempt[i];
+                newState->Attempt[i] += curDelta[1].Attempt[i];
+                newState->Attempt[i] += curDelta[2].Attempt[i];
+                newState->AssetId[i] = curState->AssetId[i];
             }
+
+            newState->ClientId = clientId;
+            newState->Auth = auth;
         }
     };
 } // namespace Gateways

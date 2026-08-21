@@ -18,7 +18,6 @@ namespace AccountService
         void clearBuffer(void) noexcept
         {
             BufferSize = 0;
-            std::cout << "cleared\n";
         }
 
         // Size should be modulo sizeof(Order)
