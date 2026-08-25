@@ -1,0 +1,3 @@
+[submodule "MarketServer/third_party/dpdk"]
+	path = MarketServer/third_party/dpdk
+	url = https://github.com/DPDK/dpdk.git
