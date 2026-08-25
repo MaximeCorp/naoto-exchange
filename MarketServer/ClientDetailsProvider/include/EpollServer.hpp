@@ -210,10 +210,22 @@ namespace AccountService
                              (char *)(batch->Data.data()) + buffer.BufferSize,
                              sizeof(T) * BatchSize - buffer.BufferSize, 0);
 
+                std::cout << "Read " << nread
+                          << " bytes at epoll server (binary size = "
+                          << sizeof(T) << ")\n\n";
+
                 if (nread <= 0) [[unlikely]]
                 {
-                    batch->setSize(0);
-                    Orders.try_enqueue(batch);
+                    if (Pool.localRelease(batch)) [[unlikely]]
+                    {
+                        // TODO : handle this
+                    }
+
+                    if (errno == EINTR)
+                    {
+                        continue;
+                    }
+
                     break;
                 }
 
@@ -237,13 +249,11 @@ namespace AccountService
 
                 if (!Orders.try_enqueue(batch)) [[unlikely]]
                 {
-                    // handle
-                }
-                else
-                {
-                    // std::cout << "push succesful, batch of size " <<
-                    // batchSize
-                    //         << "\n\n";
+                    // TODO : think about what to do in this case
+                    if (Pool.localRelease(batch)) [[unlikely]]
+                    {
+                        // TODO : handle this
+                    }
                 }
             }
 

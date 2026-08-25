@@ -23,10 +23,12 @@
 // All I/O happens off the render thread. Nothing in here touches ImGui.
 //
 
+#include <algorithm>
 #include <arpa/inet.h>
 #include <atomic>
 #include <chrono>
 #include <cstring>
+#include <mutex>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <stdexcept>
@@ -77,7 +79,7 @@ public:
         if (fd_ < 0)
         {
             state_.store(SessionState::Failed);
-            last_error_ = "socket() failed";
+            set_last_error("socket() failed");
             DASHBOARD_LOG("TradingSession", "socket() failed: %s",
                           strerror(errno));
             return;
@@ -92,7 +94,7 @@ public:
         if (inet_pton(AF_INET, host.c_str(), &addr.sin_addr) != 1)
         {
             state_.store(SessionState::Failed);
-            last_error_ = "invalid host: " + host;
+            set_last_error("invalid host: " + host);
             DASHBOARD_LOG("TradingSession", "invalid host: %s", host.c_str());
             ::close(fd_);
             fd_ = -1;
@@ -103,7 +105,7 @@ public:
             < 0)
         {
             state_.store(SessionState::Failed);
-            last_error_ = std::string("connect() failed: ") + strerror(errno);
+            set_last_error(std::string("connect() failed: ") + strerror(errno));
             DASHBOARD_LOG("TradingSession", "connect() failed: %s",
                           strerror(errno));
             ::close(fd_);
@@ -112,7 +114,8 @@ public:
         }
 
         DASHBOARD_LOG("TradingSession",
-                      "TCP connected (fd=%d), sending ClientRequest", fd_);
+                      "TCP connected (fd=%d), sending ClientRequest",
+                      fd_.load());
 
         Gateways::ClientRequest req{};
         req.RequestType = 'A';
@@ -129,7 +132,7 @@ public:
         if (!send_all(reinterpret_cast<const uint8_t *>(&req), sizeof(req)))
         {
             state_.store(SessionState::Failed);
-            last_error_ = "failed sending ClientRequest";
+            set_last_error("failed sending ClientRequest");
             DASHBOARD_LOG("TradingSession", "send() failed: %s",
                           strerror(errno));
             ::close(fd_);
@@ -176,20 +179,28 @@ public:
         }
 
         Gateways::Order order{};
-        order.Id = local_order_id;
+        order.Price = price;
+        order.Timestamp = static_cast<uint64_t>(now_ms());
+        order.OrderId = local_order_id;
+        order.ClientOrderId =
+            local_order_id; // see ASSUMPTION note in wire_formats.hpp
+        order.ClientId = client_id_;
+        order.Amount = amount;
+        order.AssetId = static_cast<uint16_t>(std::clamp(asset, 0, 65535));
         order.Type = type;
         order.Side = side;
-        order.Price = price;
-        order.ClientId = static_cast<int32_t>(client_id_);
-        order.Amount = amount;
-        order.Asset = asset;
-        order.Timestamp = now_ms();
+        order.Action = Gateways::OrderAction::EXECUTE;
 
         DASHBOARD_LOG("TradingSession",
-                      "sending Order id=%u client=%u asset=%d side=%d type=%d "
-                      "price=%lld amount=%u",
-                      local_order_id, client_id_, asset, static_cast<int>(side),
-                      static_cast<int>(type), (long long)price, amount);
+                      "sending Order orderId=%u client=%u asset=%u side=%d "
+                      "type=%d price=%lld amount=%u",
+                      local_order_id, client_id_, order.AssetId,
+                      static_cast<int>(side), static_cast<int>(type),
+                      (long long)price, amount);
+        DASHBOARD_LOG(
+            "TradingSession", "Order raw bytes (%zu): %s", sizeof(order),
+            hex_dump(reinterpret_cast<const uint8_t *>(&order), sizeof(order))
+                .c_str());
 
         bool ok =
             send_all(reinterpret_cast<const uint8_t *>(&order), sizeof(order));
@@ -199,9 +210,55 @@ public:
         return ok;
     }
 
+    // Cancels an existing order. Action::CANCEL repurposes Amount to
+    // carry the target OrderId, per wire_formats.hpp's Order struct
+    // comment. Whether Price/Type/Side matter for a cancel isn't
+    // confirmed either way; left at harmless defaults rather than
+    // whatever the order form happened to have, since a cancel isn't
+    // conceptually tied to the form's current side/price selection.
+    bool send_cancel_order(uint32_t local_order_id, uint32_t order_id_to_cancel,
+                           int32_t asset)
+    {
+        if (state_.load() != SessionState::Connected)
+        {
+            DASHBOARD_LOG(
+                "TradingSession",
+                "send_cancel_order() rejected locally: session not Connected");
+            return false;
+        }
+
+        Gateways::Order order{};
+        order.Price = 0;
+        order.Timestamp = static_cast<uint64_t>(now_ms());
+        order.OrderId = local_order_id;
+        order.ClientOrderId = local_order_id;
+        order.ClientId = client_id_;
+        order.Amount =
+            order_id_to_cancel; // target order id -- see struct comment
+        order.AssetId = static_cast<uint16_t>(std::clamp(asset, 0, 65535));
+        order.Type = Gateways::OrderType::LIMIT;
+        order.Side = Gateways::OrderSide::BUY;
+        order.Action = Gateways::OrderAction::CANCEL;
+
+        DASHBOARD_LOG("TradingSession",
+                      "sending CANCEL for order %u (client %u, asset %u)",
+                      order_id_to_cancel, client_id_, order.AssetId);
+        DASHBOARD_LOG(
+            "TradingSession", "Cancel Order raw bytes (%zu): %s", sizeof(order),
+            hex_dump(reinterpret_cast<const uint8_t *>(&order), sizeof(order))
+                .c_str());
+
+        bool ok =
+            send_all(reinterpret_cast<const uint8_t *>(&order), sizeof(order));
+        if (!ok)
+            DASHBOARD_LOG("TradingSession", "send(Cancel Order) failed: %s",
+                          strerror(errno));
+        return ok;
+    }
+
     void disconnect()
     {
-        if (state_.load() == SessionState::Connected && fd_ >= 0)
+        if (state_.load() == SessionState::Connected && fd_.load() >= 0)
         {
             Gateways::ClientRequest req{};
             req.RequestType = 'D';
@@ -210,12 +267,18 @@ public:
             send_all(reinterpret_cast<const uint8_t *>(&req), sizeof(req));
         }
         running_.store(false);
-        if (fd_ >= 0)
-        {
-            ::shutdown(fd_, SHUT_RDWR);
-            ::close(fd_);
-            fd_ = -1;
-        }
+        // Only shutdown() here -- NEVER close() from this thread. If
+        // read_loop() is still blocked inside recv() on this fd (very
+        // likely, since it blocks waiting for confirmations), closing
+        // the fd concurrently from another thread is undefined behavior
+        // at the POSIX level regardless of how fd_ itself is
+        // synchronized -- shutdown() is the documented-safe way to
+        // unblock a peer thread's blocking read. read_loop() is the
+        // sole owner of the actual close(), done right after its own
+        // recv() call returns (see bottom of read_loop()).
+        int fd_snapshot = fd_.load();
+        if (fd_snapshot >= 0)
+            ::shutdown(fd_snapshot, SHUT_RDWR);
         if (reader_thread_.joinable())
             reader_thread_.join();
         state_.store(SessionState::Disconnected);
@@ -225,8 +288,9 @@ public:
     {
         return state_.load();
     }
-    const std::string &last_error() const
+    std::string last_error() const
     {
+        std::lock_guard<std::mutex> lock(last_error_mutex_);
         return last_error_;
     }
     uint32_t client_id() const
@@ -273,7 +337,7 @@ private:
                     // Unexpected disconnect -- surface it via state, the
                     // render thread will see Failed and show it.
                     state_.store(SessionState::Failed);
-                    last_error_ = "connection closed by peer";
+                    set_last_error("connection closed by peer");
                     DASHBOARD_LOG("TradingSession",
                                   "connection closed by peer (client %u)",
                                   client_id_);
@@ -287,6 +351,19 @@ private:
                 Gateways::ToString(conf.Status));
             confirmations_.push(conf); // safe: render thread only drains
         }
+
+        // This thread is the sole owner of closing the fd, done only
+        // once its own recv() has actually returned -- see disconnect(),
+        // which deliberately only shutdown()s and never close()s.
+        int fd_snapshot = fd_.exchange(-1);
+        if (fd_snapshot >= 0)
+            ::close(fd_snapshot);
+    }
+
+    void set_last_error(std::string msg)
+    {
+        std::lock_guard<std::mutex> lock(last_error_mutex_);
+        last_error_ = std::move(msg);
     }
 
     static int64_t now_ms()
@@ -298,11 +375,15 @@ private:
     }
 
     MpscQueue<Gateways::OrderConfirmation> &confirmations_;
-    int fd_ = -1;
+    std::atomic<int> fd_ = -1;
     uint32_t client_id_ = 0;
     std::array<uint8_t, 32> key_{};
     std::atomic<SessionState> state_{ SessionState::Disconnected };
     std::atomic<bool> running_{ false };
     std::thread reader_thread_;
-    std::string last_error_;
+    mutable std::mutex last_error_mutex_;
+    std::string last_error_; // guarded by last_error_mutex_ -- written from
+                             // both connect() (its own detached thread)
+                             // and read_loop() (reader_thread_), read from
+                             // the render thread via last_error()
 };

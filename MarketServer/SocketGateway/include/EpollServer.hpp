@@ -206,7 +206,7 @@ namespace Gateways
 
                 nread = recv(curFd,
                              (char *)(batch->Data.data()) + buffer.BufferSize,
-                             sizeof(Order) * BatchSize - buffer.BufferSize, 0);
+                             sizeof(T) * BatchSize - buffer.BufferSize, 0);
 
                 std::cout << "Read " << nread
                           << " bytes at epoll server (binary size = "
@@ -219,19 +219,24 @@ namespace Gateways
                         // TODO : handle this
                     }
 
+                    if (errno == EINTR)
+                    {
+                        continue;
+                    }
+
                     break;
                 }
 
                 batch->Fd = curFd;
 
-                auto [batchSize, bufferSize] = std::div(
-                    (int)(nread + buffer.BufferSize), (int)sizeof(Order));
+                auto [batchSize, bufferSize] =
+                    std::div((int)(nread + buffer.BufferSize), (int)sizeof(T));
 
                 batch->Size = batchSize;
 
                 buffer.clearBuffer();
-                buffer.addBytes(batch->Data.data() + sizeof(Order) * batchSize,
-                                bufferSize); // Double check if sizeof(Order) *
+                buffer.addBytes(batch->Data.data() + sizeof(T) * batchSize,
+                                bufferSize); // Double check if sizeof(T) *
                                              // batchSize is right
 
                 if constexpr (HasBatchHandleServer<DerivedServer, T, BatchSize>)

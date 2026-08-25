@@ -10,7 +10,6 @@ namespace MarketExecution
 {
     template <std::integral K, typename V,
               size_t Size> // CRITICAL: Size MUST be a power of 2
-        requires std::is_pointer_v<V>
     class FlatHashMap
     {
     private:
@@ -80,7 +79,7 @@ namespace MarketExecution
             Tags.fill(EMPTY_MARKER);
         }
 
-        [[nodiscard]] V GetVal(const K &key) noexcept
+        [[nodiscard]] bool GetVal(const K &key, V &value) noexcept
         {
             const uint64_t h = hash_64(key);
             const uint8_t footprint = h >> 56;
@@ -125,12 +124,13 @@ namespace MarketExecution
                         if (FootPrints[index_to_check] == footprint
                             && Keys[index_to_check] == key)
                         {
-                            return Data[index_to_check];
+                            value = Data[index_to_check];
+                            return true;
                         }
                     }
                     else
                     {
-                        return nullptr;
+                        return false;
                     }
 
                     matches &= (matches - 1);
@@ -138,18 +138,18 @@ namespace MarketExecution
 
                 if (stops != 0)
                 {
-                    return nullptr;
+                    return false;
                 }
 
                 cur_dib += 16;
             }
 
-            return nullptr;
+            return false;
         }
 
         void AddNode(K key, V val) noexcept
         {
-            if (GetVal(key)) [[unlikely]]
+            if (GetVal(key, val)) [[unlikely]]
             {
                 return;
             }
@@ -293,7 +293,7 @@ namespace MarketExecution
                 cur_idx = next_idx;
             }
 
-            PaddingSafeWrite(cur_idx, EMPTY_MARKER, 0, nullptr);
+            PaddingSafeWrite(cur_idx, EMPTY_MARKER, {}, {});
         }
 
         void DebugDump(void) noexcept

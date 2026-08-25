@@ -56,7 +56,11 @@ namespace AccountService
                                "gateway "
                             << curMessage.GatewayId
                             << "\nRequest details:\n- client id: "
-                            << curMessage.ClientId << "\n\n";
+                            << curMessage.ClientId
+                            << "\n- gateway fd: " << curBatch->getFd()
+                            << "\n\n";
+
+                        // TODO : Remove the hardcoded gateway
 
                         if ((curClient.GetAuthorized() != gatewayId
                              || curClient.GetConnected() != -1)

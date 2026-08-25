@@ -109,7 +109,12 @@ namespace Gateways
             States.SetClientAssets(clientFd, report->BoughtDelta, 0,
                                    report->BoughtAssetId);
             States.SetClientAssets(clientFd, report->SoldDelta,
-                                   report->SoldDelta, report->SoldAssetId);
+                                   report->State == OrderState::ADD
+                                       ? 0 // Ignore add updates because
+                                           // they're already taken into
+                                           // account (local counter)
+                                       : report->SoldAttemptDelta,
+                                   report->SoldAssetId);
             States.FlushTripleBuffer(clientFd);
         }
 
@@ -149,8 +154,13 @@ namespace Gateways
 
                 States.SetClientAssets(clientFd, report->BoughtDelta, 0,
                                        report->BoughtAssetId);
-                States.SetClientAssets(clientFd, report->SoldDelta,
-                                       report->SoldDelta, report->SoldAssetId);
+                States.SetClientAssets(
+                    clientFd, report->SoldDelta,
+                    report->State == OrderState::ADD
+                        ? 0 // Ignore add updates because they're already taken
+                            // into account (local counter)
+                        : report->SoldAttemptDelta,
+                    report->SoldAssetId);
             }
 
             for (size_t i = 0; i < batchSize; ++i)

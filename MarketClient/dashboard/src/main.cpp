@@ -82,6 +82,20 @@ namespace config
     constexpr const char *kMcastLocalInterface = "veth1";
 } // namespace config
 
+// The multicast interface tends to change across test environments (a
+// different veth pair, a different box entirely) more often than
+// anything else in this file, and until now that meant editing
+// config::kMcastLocalInterface and recompiling every time. This lets it
+// be overridden at runtime instead: MCAST_IFACE=veth2 ./trading_dashboard
+// -- falls back to the compile-time default when the env var isn't set
+// or is empty.
+static std::string resolve_mcast_interface()
+{
+    if (const char *env = std::getenv("MCAST_IFACE"); env && *env)
+        return env;
+    return config::kMcastLocalInterface;
+}
+
 // "localhost" isn't something inet_pton() can resolve; etcd entries use
 // it (e.g. socket-gateways' "ip":"localhost:8000"). This is a minimal
 // stand-in for real DNS resolution (getaddrinfo) -- fine for a
@@ -97,6 +111,26 @@ static std::pair<std::string, uint16_t> parse_host_port(const std::string &addr)
     if (host == "localhost")
         host = "127.0.0.1";
     return { host, port };
+}
+
+// Same reasoning as resolve_mcast_interface() above -- if the group
+// address/port ALSO changed as part of whatever network reconfiguration
+// broke reception, this lets that be tested without recompiling too:
+// MCAST_ORDER_STATE_ADDR=239.1.1.1:30001 MCAST_ORDER_BOOK_ADDR=239.1.1.2:30002
+static std::pair<std::string, uint16_t>
+resolve_mcast_endpoint(const char *env_name, const char *default_group,
+                       uint16_t default_port)
+{
+    if (const char *env = std::getenv(env_name); env && *env)
+    {
+        auto [host, port] = parse_host_port(env);
+        if (port != 0)
+            return { host, port };
+        DASHBOARD_LOG("Multicast",
+                      "%s='%s' isn't a valid host:port, ignoring default",
+                      env_name, env);
+    }
+    return { default_group, default_port };
 }
 
 // "2m ago" / "14s ago" style relative time, for the notification history.
@@ -408,6 +442,10 @@ struct TradingPanel
     // connection state (pure market-data viewing), for debugging while
     // placing orders without switching to the separate Order Books page.
     int32_t watch_asset_id = 1;
+
+    // Cancel-order form state -- separate from the place-order fields
+    // above since a cancel isn't conceptually tied to price/side/type.
+    int32_t cancel_order_id = 0;
 
     // Floating popup toasts (ephemeral, ~4s lifetime) -- see
     // draw_toast_overlay().
@@ -847,6 +885,33 @@ static void draw_trading_panel(TradingPanel &panel, AppState &app_state,
         ImGui::PopStyleVar();
         ImGui::PopStyleColor(4);
         ImGui::EndChild();
+
+        ImGui::Dummy(ImVec2(0, 8));
+
+        // ---- Cancel order card ------------------------------------------
+        ImGui::TextUnformatted("Cancel Order");
+        ImGui::BeginChild("cancel_card", ImVec2(0, 145), true);
+        field_label("Order ID to cancel");
+        ImGui::InputInt("##cancel_order_id", &panel.cancel_order_id, 0, 0);
+        ImGui::Dummy(ImVec2(0, 6));
+        ImGui::PushStyleColor(ImGuiCol_Button, theme::kNegativeSoft);
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                              theme::rgba(250, 220, 218));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                              theme::rgba(247, 205, 202));
+        ImGui::PushStyleColor(ImGuiCol_Text, theme::kNegative);
+        if (ImGui::Button("Cancel Order", ImVec2(-1, 0)))
+        {
+            uint32_t local_id = panel.next_local_order_id++;
+            uint32_t target_order_id =
+                static_cast<uint32_t>(std::max(0, panel.cancel_order_id));
+            bool ok = panel.session->send_cancel_order(
+                local_id, target_order_id, panel.asset_id);
+            if (!ok)
+                panel.push_toast("Failed to send cancel (socket error)", true);
+        }
+        ImGui::PopStyleColor(4);
+        ImGui::EndChild();
     }
 
     ImGui::Dummy(ImVec2(0, 8));
@@ -1284,39 +1349,123 @@ static void draw_trade_feed_panel(const AppState &app_state,
     ImDrawList *draw_list = ImGui::GetWindowDrawList();
     for (auto &e : app_state.trade_feed)
     {
-        // Every report has one leg in the settlement currency (asset 0)
-        // and one leg in the actual traded asset -- pick whichever leg
-        // ISN'T asset 0 as "the trade", and read bought/sold off that
-        // leg's own sign. This is what turns "BoughtDelta=-13,
-        // SoldDelta=+13" (the wire format, written from the matching
-        // engine's fixed labeling, not this client's perspective) into
-        // a plain "Client 1 sold 13 of asset 1" -- the raw numbers
-        // stayed correct either way, this only changes how it reads.
-        uint16_t asset = e.bought_asset != 0 ? e.bought_asset : e.sold_asset;
-        int64_t delta = e.bought_asset != 0 ? e.bought_delta : e.sold_delta;
-        bool bought = delta >= 0;
-        int64_t amount = delta < 0 ? -delta : delta;
-        ImVec4 color = bought ? theme::kPositive : theme::kNegative;
-
         float dot_r = 4.0f;
         float line_h = ImGui::GetTextLineHeight();
         ImVec2 p = ImGui::GetCursorScreenPos();
-        draw_list->AddCircleFilled(ImVec2(p.x + dot_r, p.y + line_h * 0.5f),
-                                   dot_r, ImGui::GetColorU32(color));
-        ImGui::Dummy(ImVec2(dot_r * 2 + 10, 0));
-        ImGui::SameLine(0, 0);
 
-        ImGui::Text("Client %u", e.client_id);
-        ImGui::SameLine();
-        ImGui::TextColored(color, "%s", bought ? "bought" : "sold");
-        ImGui::SameLine();
-        ImGui::PushFont(fonts.mono);
-        ImGui::TextColored(color, "%lld", (long long)amount);
-        ImGui::PopFont();
-        ImGui::SameLine();
-        ImGui::TextDisabled("of asset %u", asset);
-        ImGui::SameLine();
-        ImGui::TextDisabled("#%u", e.trade_id);
+        // A report is no longer always a completed trade -- State says
+        // what actually happened, and that changes how this line should
+        // read, not just its color.
+        switch (e.state)
+        {
+        case MarketExecution::OrderState::FILL:
+        case MarketExecution::OrderState::PARTIAL_FILL: {
+            // Every report has one leg in the settlement currency (asset
+            // 0) and one leg in the actual traded asset -- pick whichever
+            // leg ISN'T asset 0 as "the trade", and read bought/sold off
+            // that leg's own sign. This is what turns "BoughtDelta=-13,
+            // SoldDelta=+13" (the wire format, written from the matching
+            // engine's fixed labeling, not this client's perspective)
+            // into a plain "Client 1 sold 13 of asset 1" -- the raw
+            // numbers stayed correct either way, this only changes how
+            // it reads.
+            uint16_t asset =
+                e.bought_asset != 0 ? e.bought_asset : e.sold_asset;
+            int64_t delta = e.bought_asset != 0 ? e.bought_delta : e.sold_delta;
+            bool bought = delta >= 0;
+            int64_t amount = delta < 0 ? -delta : delta;
+            ImVec4 color = bought ? theme::kPositive : theme::kNegative;
+
+            draw_list->AddCircleFilled(ImVec2(p.x + dot_r, p.y + line_h * 0.5f),
+                                       dot_r, ImGui::GetColorU32(color));
+            ImGui::Dummy(ImVec2(dot_r * 2 + 10, 0));
+            ImGui::SameLine(0, 0);
+            ImGui::Text("Client %u", e.client_id);
+            ImGui::SameLine();
+            ImGui::TextColored(color, "%s", bought ? "bought" : "sold");
+            ImGui::SameLine();
+            ImGui::PushFont(fonts.mono);
+            ImGui::TextColored(color, "%lld", (long long)amount);
+            ImGui::PopFont();
+            ImGui::SameLine();
+            ImGui::TextDisabled("of asset %u", asset);
+            if (e.state == MarketExecution::OrderState::PARTIAL_FILL)
+            {
+                ImGui::SameLine();
+                ImGui::TextDisabled("(partial)");
+            }
+            ImGui::SameLine();
+            ImGui::TextDisabled("#%u", e.trade_id);
+            break;
+        }
+        case MarketExecution::OrderState::ADD: {
+            // A new resting order, not a trade -- Confirmed balance
+            // hasn't moved, but SoldAttemptDelta reflects funds just
+            // reserved against it.
+            draw_list->AddCircleFilled(ImVec2(p.x + dot_r, p.y + line_h * 0.5f),
+                                       dot_r,
+                                       ImGui::GetColorU32(theme::kAccent));
+            ImGui::Dummy(ImVec2(dot_r * 2 + 10, 0));
+            ImGui::SameLine(0, 0);
+            ImGui::Text("Client %u", e.client_id);
+            ImGui::SameLine();
+            ImGui::TextColored(theme::kAccent, "placed an order");
+            if (e.sold_attempt_delta != 0)
+            {
+                ImGui::SameLine();
+                ImGui::PushFont(fonts.mono);
+                // Magnitude only -- "reserved"/"released" already say the
+                // direction, so showing the raw signed value too (e.g.
+                // "-700 released") reads as a confusing double-negative.
+                int64_t magnitude = e.sold_attempt_delta < 0
+                    ? -e.sold_attempt_delta
+                    : e.sold_attempt_delta;
+                ImGui::TextDisabled("(%lld of asset %u reserved)",
+                                    (long long)magnitude, e.sold_asset);
+                ImGui::PopFont();
+            }
+            ImGui::SameLine();
+            ImGui::TextDisabled("#%u", e.order_id);
+            break;
+        }
+        case MarketExecution::OrderState::CANCEL: {
+            draw_list->AddCircleFilled(ImVec2(p.x + dot_r, p.y + line_h * 0.5f),
+                                       dot_r,
+                                       ImGui::GetColorU32(theme::kTextFaint));
+            ImGui::Dummy(ImVec2(dot_r * 2 + 10, 0));
+            ImGui::SameLine(0, 0);
+            ImGui::Text("Client %u", e.client_id);
+            ImGui::SameLine();
+            ImGui::TextColored(theme::kTextFaint, "cancelled an order");
+            if (e.sold_attempt_delta != 0)
+            {
+                ImGui::SameLine();
+                ImGui::PushFont(fonts.mono);
+                int64_t magnitude = e.sold_attempt_delta < 0
+                    ? -e.sold_attempt_delta
+                    : e.sold_attempt_delta;
+                ImGui::TextDisabled("(%lld of asset %u released)",
+                                    (long long)magnitude, e.sold_asset);
+                ImGui::PopFont();
+            }
+            ImGui::SameLine();
+            ImGui::TextDisabled("#%u", e.order_id);
+            break;
+        }
+        case MarketExecution::OrderState::REJECT: {
+            draw_list->AddCircleFilled(ImVec2(p.x + dot_r, p.y + line_h * 0.5f),
+                                       dot_r,
+                                       ImGui::GetColorU32(theme::kNegative));
+            ImGui::Dummy(ImVec2(dot_r * 2 + 10, 0));
+            ImGui::SameLine(0, 0);
+            ImGui::Text("Client %u", e.client_id);
+            ImGui::SameLine();
+            ImGui::TextColored(theme::kNegative, "order rejected");
+            ImGui::SameLine();
+            ImGui::TextDisabled("#%u", e.order_id);
+            break;
+        }
+        }
     }
     if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 1.0f)
         ImGui::SetScrollHereY(1.0f);
@@ -1669,8 +1818,23 @@ int main()
     }).detach();
 
     MpscQueue<MarketExecution::OrderStateReport> trade_events;
+    std::string mcast_iface = resolve_mcast_interface();
+    auto [order_state_group, order_state_port] = resolve_mcast_endpoint(
+        "MCAST_ORDER_STATE_ADDR", config::kOrderStateMcastGroup,
+        config::kOrderStateMcastPort);
+    auto [order_book_group, order_book_port] = resolve_mcast_endpoint(
+        "MCAST_ORDER_BOOK_ADDR", config::kOrderBookMcastGroup,
+        config::kOrderBookMcastPort);
+    DASHBOARD_LOG(
+        "Multicast",
+        "interface='%s' (%s) | order-state=%s:%u | order-book=%s:%u",
+        mcast_iface.empty() ? "<kernel default>" : mcast_iface.c_str(),
+        std::getenv("MCAST_IFACE") ? "from MCAST_IFACE env var"
+                                   : "from config::kMcastLocalInterface",
+        order_state_group.c_str(), order_state_port, order_book_group.c_str(),
+        order_book_port);
     MulticastReceiver order_state_receiver(
-        config::kOrderStateMcastGroup, config::kOrderStateMcastPort,
+        order_state_group, order_state_port,
         [&trade_events](const uint8_t *data, size_t len) {
             // A single UDP packet can carry more than one OrderStateReport
             // back-to-back (e.g. both sides of a match, or several fills
@@ -1697,12 +1861,12 @@ int main()
                 trade_events.push(r);
             }
         },
-        config::kMcastLocalInterface);
+        mcast_iface);
     order_state_receiver.start();
 
     MpscQueue<MarketExecution::OrderBookUpdate> book_events;
     MulticastReceiver order_book_receiver(
-        config::kOrderBookMcastGroup, config::kOrderBookMcastPort,
+        order_book_group, order_book_port,
         [&book_events](const uint8_t *data, size_t len) {
             // Same batching tolerance as the order-state feed above --
             // not yet observed batched on this feed, but it's the same
@@ -1726,7 +1890,7 @@ int main()
                 book_events.push(u);
             }
         },
-        config::kMcastLocalInterface);
+        mcast_iface);
     order_book_receiver.start();
 
     // Two independent trading panels == two independent client sessions,
@@ -1754,9 +1918,11 @@ int main()
 
         for (auto &r : trade_events.drain_all())
         {
-            TradeFeedEntry entry{ r.SequenceId,  r.TradeId,       r.ClientId,
-                                  r.OrderId,     r.BoughtAssetId, r.SoldAssetId,
-                                  r.BoughtDelta, r.SoldDelta };
+            TradeFeedEntry entry{ r.SequenceId,       r.TradeId,
+                                  r.ClientId,         r.OrderId,
+                                  r.BoughtAssetId,    r.SoldAssetId,
+                                  r.BoughtDelta,      r.SoldDelta,
+                                  r.SoldAttemptDelta, r.State };
             app_state.push_trade(entry);
             app_state.apply_trade_to_balance(r); // optimistic local update
         }

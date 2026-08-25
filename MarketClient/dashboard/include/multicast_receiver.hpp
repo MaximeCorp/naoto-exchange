@@ -102,6 +102,22 @@ public:
         setsockopt(fd_, SOL_SOCKET, SO_REUSEPORT, &reuse, sizeof(reuse));
 #endif
 
+        // Force the socket to attach exclusively to the specified network
+        // interface. Requires root/CAP_NET_RAW.
+        if (!local_interface_name_.empty())
+        {
+            if (setsockopt(fd_, SOL_SOCKET, SO_BINDTODEVICE,
+                           local_interface_name_.c_str(),
+                           local_interface_name_.size())
+                < 0)
+            {
+                ::close(fd_);
+                throw std::runtime_error(
+                    "MulticastReceiver: SO_BINDTODEVICE failed for interface '"
+                    + local_interface_name_ + "': " + strerror(errno));
+            }
+        }
+
         sockaddr_in addr{};
         addr.sin_family = AF_INET;
         addr.sin_addr.s_addr = htonl(INADDR_ANY);
@@ -130,11 +146,7 @@ public:
             }
         }
 
-        // ip_mreqn (not ip_mreq) lets us select the interface by index
-        // (imr_ifindex) instead of requiring it to have an IPv4 address
-        // assigned -- veth interfaces used purely for raw/multicast
-        // traffic often have none. The kernel distinguishes which struct
-        // was passed by the optlen given to setsockopt.
+        // Join the multicast group on the specific interface index
         ip_mreqn mreq{};
         mreq.imr_multiaddr.s_addr = inet_addr(group_addr_.c_str());
         mreq.imr_address.s_addr = htonl(INADDR_ANY);
@@ -181,15 +193,37 @@ private:
     {
         std::vector<uint8_t> buf(65536);
         bool logged_first_packet = false;
+        int consecutive_errors = 0;
         while (running_.load(std::memory_order_relaxed))
         {
             ssize_t n = ::recv(fd_, buf.data(), buf.size(), 0);
-            if (n <= 0)
+            if (n < 0)
             {
                 if (!running_.load(std::memory_order_relaxed))
-                    break; // shutdown() unblocked recv() intentionally
-                continue; // transient error, keep going
+                    break; // shutdown() unblocked recv() intentionally, not a
+                           // real error
+                // Previously silently swallowed -- meaning "no traffic is
+                // arriving" and "the socket itself is broken" looked
+                // identical in the logs (just endless silence after the
+                // startup line). Rate-limited so a persistent failure
+                // (EPERM, ENOBUFS under load, etc.) doesn't spam.
+                if (consecutive_errors < 5)
+                    DASHBOARD_LOG("MulticastReceiver",
+                                  "recv() error on %s:%u: %s",
+                                  group_addr_.c_str(), port_, strerror(errno));
+                else if (consecutive_errors == 5)
+                    DASHBOARD_LOG("MulticastReceiver",
+                                  "recv() on %s:%u still failing, suppressing "
+                                  "further errno logs",
+                                  group_addr_.c_str(), port_);
+                ++consecutive_errors;
+                continue;
             }
+            consecutive_errors = 0;
+            // n == 0 is a valid zero-length UDP datagram, not an error
+            // (unlike TCP) -- still fine to hand to the handler, which
+            // will just see len==0 and reject it via the size-multiple
+            // check already in place at the call sites.
             if (!logged_first_packet)
             {
                 DASHBOARD_LOG("MulticastReceiver",

@@ -16,6 +16,12 @@ namespace Gateways
         std::array<int64_t, MaxPositions> Confirmed;
         std::array<int64_t, MaxPositions> Attempt;
         uint8_t Auth;
+        uint32_t SessionId;
+
+        ClientState(void)
+            : Auth(0)
+            , SessionId(0)
+        {}
 
         [[nodiscard]] bool GetAssetIdx(const uint16_t assetId,
                                        size_t &idx) const noexcept

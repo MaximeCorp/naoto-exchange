@@ -12,15 +12,15 @@
 // uniformly across etcd, both multicast feeds, and every TCP session.
 //
 
-#include "etcd_watcher.hpp"
-#include "wire_formats.hpp"
-
 #include <cstdint>
 #include <functional>
 #include <map>
 #include <string>
 #include <utility>
 #include <vector>
+
+#include "etcd_watcher.hpp"
+#include "wire_formats.hpp"
 
 // ---- Order book: per asset, per side, price -> depth ---------------------
 // Depth == 0 removes the level (see OrderBookUpdate semantics). Asset 0
@@ -29,7 +29,7 @@
 struct OrderBook
 {
     std::map<int64_t, uint32_t, std::greater<int64_t>> bids; // best bid first
-    std::map<int64_t, uint32_t> asks;                        // best ask first
+    std::map<int64_t, uint32_t> asks; // best ask first
 
     void apply(const MarketExecution::OrderBookUpdate &u)
     {
@@ -61,6 +61,10 @@ struct TradeFeedEntry
     uint16_t sold_asset;
     int64_t bought_delta;
     int64_t sold_delta;
+    int64_t sold_attempt_delta;
+    MarketExecution::OrderState state; // FILL/PARTIAL_FILL/CANCEL/REJECT/ADD --
+                                       // changes how this entry should read,
+                                       // see draw_trade_feed_panel in main.cpp
 };
 
 // ---- Live-updated balance for one connected trading session --------------
@@ -77,6 +81,11 @@ struct LiveBalance
     void apply_confirmed_delta(uint16_t asset_id, int64_t delta)
     {
         positions[asset_id].first += delta;
+    }
+
+    void apply_attempt_delta(uint16_t asset_id, int64_t delta)
+    {
+        positions[asset_id].second += delta;
     }
 };
 
@@ -145,7 +154,6 @@ private:
     }
 
 public:
-
     // client_id -> live balance, for BOTH the two trading panels and any
     // ad-hoc client lookups.
     std::map<uint32_t, LiveBalance> balances;
@@ -154,15 +162,22 @@ public:
     {
         trade_feed.push_back(e);
         if (trade_feed.size() > kMaxTradeFeed)
-            trade_feed.erase(trade_feed.begin(), trade_feed.begin() +
-                                                       (trade_feed.size() - kMaxTradeFeed));
+            trade_feed.erase(trade_feed.begin(),
+                             trade_feed.begin()
+                                 + (trade_feed.size() - kMaxTradeFeed));
     }
 
-    // Applies a trade's effect to any client we're currently tracking a
+    // Applies a report's effect to any client we're currently tracking a
     // balance for (i.e. one of the two trading panels, or a client
     // that's been looked up). Both legs of a match arrive as separate
     // OrderStateReports (one per client), so this is called once per
-    // report, not once per match.
+    // report, not once per match. Applied unconditionally regardless of
+    // State (FILL/PARTIAL_FILL/CANCEL/REJECT/ADD) -- the deltas
+    // themselves are defined to already be correct for whatever
+    // happened (e.g. a REJECT presumably carries all-zero deltas, an ADD
+    // reserves via SoldAttemptDelta without touching Confirmed yet); the
+    // State only changes how this should be *described*, not whether the
+    // numbers get applied. See draw_trade_feed_panel in main.cpp.
     void apply_trade_to_balance(const MarketExecution::OrderStateReport &r)
     {
         auto it = balances.find(r.ClientId);
@@ -170,5 +185,6 @@ public:
             return; // not a client we're tracking right now
         it->second.apply_confirmed_delta(r.BoughtAssetId, r.BoughtDelta);
         it->second.apply_confirmed_delta(r.SoldAssetId, r.SoldDelta);
+        it->second.apply_attempt_delta(r.SoldAssetId, r.SoldAttemptDelta);
     }
 };

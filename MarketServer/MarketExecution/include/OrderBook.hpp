@@ -49,9 +49,10 @@ namespace MarketExecution
         {
             int64_t key = order->GetPrice();
 
-            PriceLevel *curPrice = FastMap.GetVal(key);
+            PriceLevel *curPrice;
+            bool found = FastMap.GetVal(key, curPrice);
 
-            if (!curPrice) [[unlikely]]
+            if (!found) [[unlikely]]
             {
                 curPrice = PriceLevelPool.acquire();
 
@@ -73,15 +74,17 @@ namespace MarketExecution
             return curPrice;
         }
 
-        void DeleteOrder(OrderNode *order) noexcept
+        PriceLevel *DeleteOrder(OrderNode *order) noexcept
         {
             const int64_t key = order->GetPrice();
-            PriceLevel *curPrice = FastMap.GetVal(key);
+            PriceLevel *curPrice;
 
-            if (!curPrice) [[unlikely]]
+            bool found = FastMap.GetVal(key, curPrice);
+
+            if (!found) [[unlikely]]
             {
                 std::cerr << "tried deleting node with no price level\n";
-                std::terminate();
+                return nullptr;
             }
 
             if (curPrice->DeleteOrder(order)) [[unlikely]]
@@ -92,18 +95,23 @@ namespace MarketExecution
 
                 if (!released) [[unlikely]]
                 {
-                    std::cerr << "oops\n";
-                    std::terminate();
+                    std::cerr << "Couldn't release to price level mempool when "
+                                 "trying to "
+                                 "delete an order.\n\n";
                 }
+
+                return nullptr;
             }
 
             bool released = OrderNodePool.release(order);
 
             if (!released) [[unlikely]]
             {
-                std::cerr << "caca\n";
-                std::terminate();
+                std::cerr << "Couldn't release to order mempool when trying to "
+                             "delete an order.\n\n";
             }
+
+            return curPrice;
         }
     };
 } // namespace MarketExecution

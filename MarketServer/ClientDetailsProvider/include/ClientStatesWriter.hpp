@@ -46,8 +46,8 @@ namespace AccountService
             States.SetClientAssets(report->ClientId, report->BoughtDelta, 0,
                                    report->BoughtAssetId, report->SequenceId);
             States.SetClientAssets(report->ClientId, report->SoldDelta,
-                                   report->SoldDelta, report->SoldAssetId,
-                                   report->SequenceId);
+                                   report->SoldAttemptDelta,
+                                   report->SoldAssetId, report->SequenceId);
             States.FlushTripleBuffer(report->ClientId);
         }
 
@@ -74,8 +74,8 @@ namespace AccountService
                                        report->BoughtAssetId,
                                        report->SequenceId);
                 States.SetClientAssets(report->ClientId, report->SoldDelta,
-                                       report->SoldDelta, report->SoldAssetId,
-                                       report->SequenceId);
+                                       report->SoldAttemptDelta,
+                                       report->SoldAssetId, report->SequenceId);
             }
 
             for (size_t i = 0; i < batchSize; ++i)

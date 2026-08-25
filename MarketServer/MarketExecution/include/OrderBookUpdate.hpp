@@ -16,9 +16,10 @@ namespace MarketExecution
         uint16_t AssetId;
         uint8_t Side; // 0 for buy and 1 for sell
 
-        void FillUpdate(uint32_t depth, int64_t price, uint16_t assetId,
-                        uint8_t side)
+        void FillUpdate(uint32_t sequenceId, uint32_t depth, int64_t price,
+                        uint16_t assetId, uint8_t side)
         {
+            SequenceId = sequenceId;
             Depth = depth;
             Price = price;
             AssetId = assetId;

@@ -5,26 +5,16 @@ namespace MarketExecution
 {
     struct OrderNode
     {
-        Order NodeOrder;
         OrderNode *Prev;
         OrderNode *Next;
+        Order NodeOrder;
 
         OrderNode() = default;
 
         OrderNode(const Order &order)
-            : NodeOrder(order)
-            , Prev(nullptr)
+            : Prev(nullptr)
             , Next(nullptr)
-        {}
-
-        OrderNode(const uint32_t id, OrderType type, OrderSide side,
-                  std::int64_t price, std::int32_t client_id,
-                  std::uint32_t amount, std::int32_t asset,
-                  std::int64_t timestamp)
-            : NodeOrder(id, type, side, price, client_id, amount, asset,
-                        timestamp)
-            , Prev(nullptr)
-            , Next(nullptr)
+            , NodeOrder(order)
         {}
 
         void SetOrder(const Order &order) noexcept
@@ -34,7 +24,7 @@ namespace MarketExecution
 
         void SetAmount(const uint32_t amount) noexcept
         {
-            NodeOrder.setAmount(amount);
+            NodeOrder.Amount = amount;
         }
 
         void SetPrev(OrderNode *prev) noexcept
@@ -47,34 +37,34 @@ namespace MarketExecution
             Next = next;
         }
 
-        [[nodiscard]] OrderNode *GetPrev(void) noexcept
+        [[nodiscard]] OrderNode *GetPrev(void) const noexcept
         {
             return Prev;
         }
 
-        [[nodiscard]] OrderNode *GetNext(void) noexcept
+        [[nodiscard]] OrderNode *GetNext(void) const noexcept
         {
             return Next;
         }
 
         [[nodiscard]] uint32_t GetAmount(void) const noexcept
         {
-            return NodeOrder.getAmount();
+            return NodeOrder.Amount;
         }
 
         [[nodiscard]] uint32_t GetId(void) const noexcept
         {
-            return NodeOrder.getId();
+            return NodeOrder.OrderId;
         }
 
         [[nodiscard]] uint32_t GetClientId(void) const noexcept
         {
-            return NodeOrder.getClientId();
+            return NodeOrder.ClientId;
         }
 
         [[nodiscard]] int64_t GetPrice(void) const noexcept
         {
-            return NodeOrder.getPrice();
+            return NodeOrder.Price;
         }
 
         void log(void) noexcept

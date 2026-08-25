@@ -14,6 +14,7 @@ namespace Gateways
         UnknownSymbol = 5,
         TechnicalFailure = 6,
         UserNotConnected = 7,
+        BadClientId = 8,
     };
 #pragma pack(push, 1)
     struct OrderConfirmation

@@ -139,6 +139,7 @@ namespace Gateways
 
             state->ClientId = response->ClientId;
             state->Auth = 1;
+            ++state->SessionId;
 
             for (size_t i = 0; i < MaxPositions; ++i)
             {
@@ -187,6 +188,7 @@ namespace Gateways
 
             const uint32_t clientId = curState->ClientId;
             const uint8_t auth = curState->Auth;
+            const uint32_t sessionId = curState->SessionId;
 
             for (size_t i = 0; i < MaxPositions; ++i)
             {
@@ -221,6 +223,7 @@ namespace Gateways
 
             newState->ClientId = clientId;
             newState->Auth = auth;
+            newState->SessionId = sessionId;
         }
     };
 } // namespace Gateways

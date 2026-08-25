@@ -85,8 +85,8 @@ namespace Gateways
         SocketGateway(int argc, char **argv, const uint16_t portId,
                       const uint16_t nbRxQueueSlots, const size_t poolSize,
                       const uint32_t dstIp, const uint16_t dstPort,
-                      const size_t max_clients, const size_t queue_size,
-                      const int port, const int maxEvents, const int maxPending)
+                      const size_t queue_size, const int port,
+                      const int maxEvents, const int maxPending)
             : OrdersPool(poolSize)
             , ReportsPool(poolSize)
             , ResponsesPool(poolSize)
@@ -98,7 +98,7 @@ namespace Gateways
             , IncomingResponses(queue_size)
             , ServerIncomingRequests(queue_size)
             , WriterIncomingRequests(queue_size)
-            , States(max_clients)
+            , States(MaxClients)
             , Server(port, maxEvents, maxPending, OrdersPool, IncomingOrders,
                      States, ClientStatesUpdatesFd, IncomingDisconnects,
                      ServerRequestsPool, ServerIncomingRequests)
@@ -115,7 +115,7 @@ namespace Gateways
                             ServerRequestsPool, WriterRequestsPool,
                             ClientStatesUpdatesFd)
         {
-            FileDescriptorsOps::setMaxFd(max_clients);
+            FileDescriptorsOps::setMaxFd(MaxClients);
         }
 
         void StartGateway(void)

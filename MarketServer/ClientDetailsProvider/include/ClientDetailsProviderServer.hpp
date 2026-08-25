@@ -45,12 +45,16 @@ namespace AccountService
                 return;
             }
 
-            std::cout << "Gateway " << message->GatewayId << " connected\n\n";
+            std::cout << "Gateway " << message->GatewayId << " connected at fd "
+                      << fd << ".\n\n";
             Gateways[message->GatewayId].SwitchFd(fd);
+            FdToGateways[fd] = message->GatewayId;
         }
 
         void CloseHandle(uint32_t fd) noexcept
         {
+            std::cout << "Connection to gateway " << FdToGateways[fd]
+                      << " was closed.\n\n";
             Gateways[FdToGateways[fd]].SwitchFd(-1);
         }
     };
