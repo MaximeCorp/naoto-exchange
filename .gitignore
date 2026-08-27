@@ -43,6 +43,15 @@ third_party/etcd-cpp-apiv3/build/
 *.swp
 .DS_Store
 
+# --- runtime data, not build output -------------------------------------
+# etcd's default data directory when run without --data-dir. Contains
+# WAL files that grow large fast and have no business in git — this is
+# what let a 61MB .wal file get committed once already; don't remove
+# this without moving to an explicit, also-ignored --data-dir instead.
+default.etcd/
+*.etcd/
+*.wal
+
 # --- sanitizer / debugging output --------------------------------------
 *.asan.log
 core
