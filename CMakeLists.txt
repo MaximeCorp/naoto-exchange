@@ -1,0 +1,134 @@
+cmake_minimum_required(VERSION 3.20)
+project(MarketServer LANGUAGES CXX)
+
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+
+# Release by default. An -O0 build of this project is not representative
+# of anything: the CRTP layers don't inline and the hot paths are ~10x off.
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+    message(STATUS "No CMAKE_BUILD_TYPE given, defaulting to Release")
+endif()
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")
+set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -DNDEBUG -fno-omit-frame-pointer")
+
+set(ARTIFACTS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/artifacts" CACHE PATH
+    "Directory bootstrap/*.sh installs DPDK and etcd-cpp-apiv3 into")
+
+option(NAOTO_NATIVE_ARCH "Compile with -march=native"                          ON)
+# matching_engine/Makefile currently always builds with ASan. Kept ON by
+# default here so switching to CMake doesn't silently change behavior —
+# flip this OFF (and see the ASan warning below) once you start timing
+# anything, since redzones break the cache-line-isolation assumptions.
+option(NAOTO_SANITIZE    "AddressSanitizer build (never benchmark this)"       ON)
+
+# ---------------------------------------------------------------- flags
+add_library(naoto_flags INTERFACE)
+target_compile_options(naoto_flags INTERFACE
+    -Wall -Wextra -Werror -Wno-volatile)
+
+if(NAOTO_NATIVE_ARCH)
+    target_compile_options(naoto_flags INTERFACE -march=native)
+else()
+    target_compile_options(naoto_flags INTERFACE -msse4.2)
+endif()
+
+if(NAOTO_SANITIZE)
+    message(WARNING
+        "NAOTO_SANITIZE=ON: redzones change object layout, so cache-line "
+        "isolation does not hold. Fine for correctness runs, never for timing.")
+    target_compile_options(naoto_flags INTERFACE -fsanitize=address)
+    target_link_options(naoto_flags    INTERFACE -fsanitize=address)
+endif()
+
+find_package(Threads REQUIRED)
+target_link_libraries(naoto_flags INTERFACE Threads::Threads)
+
+# ---------------------------------------------------------------- DPDK
+# Built by bootstrap/02-build-dpdk.sh into a hash-suffixed artifact dir.
+# Meson installs a standard prefix layout, so it's found via pkg-config
+# by pointing PKG_CONFIG_PATH at that prefix's pkgconfig dir(s) — never
+# vendored, and never allowed to silently fall back to a system libdpdk.
+include(FindArtifacts)
+find_latest_artifact(dpdk DPDK_ARTIFACT_DIR)
+message(STATUS "Using DPDK artifact: ${DPDK_ARTIFACT_DIR}")
+
+file(GLOB _dpdk_pc_dirs
+    "${DPDK_ARTIFACT_DIR}/lib/pkgconfig"
+    "${DPDK_ARTIFACT_DIR}/lib/*/pkgconfig"
+    "${DPDK_ARTIFACT_DIR}/lib64/pkgconfig")
+if(NOT _dpdk_pc_dirs)
+    message(FATAL_ERROR "No pkgconfig dir found under ${DPDK_ARTIFACT_DIR}/lib*. "
+                         "Did 02-build-dpdk.sh finish 'ninja install'?")
+endif()
+string(REPLACE ";" ":" _dpdk_pc_path "${_dpdk_pc_dirs}")
+set(ENV{PKG_CONFIG_PATH} "${_dpdk_pc_path}:$ENV{PKG_CONFIG_PATH}")
+
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(DPDK REQUIRED IMPORTED_TARGET libdpdk)
+message(STATUS "DPDK ${DPDK_VERSION}")
+
+# Static, not dynamic — matches the original Makefile's
+# `pkg-config --static --libs libdpdk`. This is deliberate, not
+# incidental: dynamic linking means the loader has to find every
+# librte_*.so at runtime, and DPDK's libraries are layered (librte_ethdev
+# depends on librte_kvargs, librte_log, librte_telemetry...) in a way
+# that made RPATH propagation fragile across linkers/distros — see the
+# chat history for the debugging session that motivated this. Static
+# linking embeds all of it into the binary at build time, so there's
+# nothing left to resolve at load time, and the RPATH/--disable-new-dtags
+# handling below becomes a non-issue for DPDK specifically.
+#
+# pkg_check_modules populates <prefix>_STATIC_* variables automatically
+# alongside the normal ones; DPDK's own .pc file already encodes the
+# correct -Wl,--whole-archive / --no-whole-archive wrapping needed for
+# PMD driver self-registration, so this is just consuming what DPDK's
+# build already produces, not something we're constructing by hand.
+add_library(naoto_dpdk INTERFACE)
+target_include_directories(naoto_dpdk SYSTEM INTERFACE ${DPDK_STATIC_INCLUDE_DIRS})
+target_compile_options(naoto_dpdk    INTERFACE ${DPDK_STATIC_CFLAGS_OTHER})
+target_link_libraries(naoto_dpdk     INTERFACE ${DPDK_STATIC_LDFLAGS})
+
+# etcd-cpp-api is still dynamic (see below), and its own transitive deps
+# — grpc/protobuf/cpprest/ssl/crypto/zlib — all come from apt at standard
+# system paths, already in the loader's default search path. So it's a
+# single direct dependency with nothing layered underneath it at a
+# nonstandard location, unlike DPDK was — RPATH is still set for it
+# further down, but --disable-new-dtags is no longer load-bearing the
+# way it was for DPDK. Left in place below since it's harmless and
+# slightly more correct regardless.
+
+# ---------------------------------------------------------------- etcd
+# Built by bootstrap/03-build-etcd-cpp.sh. Point FindEtcdCpp.cmake at
+# that exact artifact so it never silently picks up a different copy.
+find_latest_artifact(etcd-cpp-apiv3 EtcdCpp_ARTIFACT_DIR)
+message(STATUS "Using etcd-cpp-apiv3 artifact: ${EtcdCpp_ARTIFACT_DIR}")
+find_package(EtcdCpp REQUIRED)
+
+# libetcd-cpp-api.so itself still lives under the artifact prefix (it's
+# not on apt, per the chat history), so it needs the same rpath treatment
+# DPDK needed before switching to static. Its own dependencies (grpc,
+# protobuf, cpprest, ssl, crypto, zlib) are all apt-installed at standard
+# paths already in the loader's default search, so this one rpath entry
+# is sufficient — no layered chain underneath it the way DPDK had.
+target_link_options(EtcdCpp::EtcdCpp INTERFACE
+    "-Wl,-rpath,${EtcdCpp_ARTIFACT_DIR}/lib"
+    "-Wl,--disable-new-dtags")
+
+# ---------------------------------------------------------------- LTO
+include(CheckIPOSupported)
+check_ipo_supported(RESULT NAOTO_IPO_OK)
+if(NAOTO_IPO_OK AND CMAKE_BUILD_TYPE STREQUAL "Release")
+    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
+endif()
+
+add_subdirectory(third_party)
+add_subdirectory(market_server/common)
+add_subdirectory(market_server/matching_engine)
+# add_subdirectory(market_server/order_gateway)          # still Makefile — see chat
+# add_subdirectory(market_server/client_details_provider) # still Makefile — see chat
