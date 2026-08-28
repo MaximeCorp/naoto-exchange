@@ -6,7 +6,7 @@
 #include <iomanip>
 #include <iostream>
 
-namespace Gateways
+namespace naoto::order_gateway
 {
     template <size_t MaxPositions>
     struct alignas(64) ClientState
@@ -108,4 +108,4 @@ namespace Gateways
             }
         }
     };
-} // namespace Gateways
+} // namespace naoto::order_gateway

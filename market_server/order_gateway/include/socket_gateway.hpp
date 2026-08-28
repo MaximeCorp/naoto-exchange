@@ -9,15 +9,15 @@
 #include <gateway_request.hpp>
 #include <gateway_server.hpp>
 #include <market_updates.hpp>
+#include <netinet/tcp.h>
 #include <object_batch.hpp>
 #include <order.hpp>
-#include <reader_writer_circular_buffer.hpp>
-#include <risk_service.hpp>
-#include <netinet/tcp.h>
 #include <pthread.h>
+#include <readerwritercircularbuffer.h>
+#include <risk_service.hpp>
 #include <thread>
 
-namespace Gateways
+namespace naoto::order_gateway
 {
     template <size_t BatchSize, size_t MaxAsset, size_t MaxPositions,
               size_t MaxClients, size_t UpdatesBufferSize,
@@ -154,4 +154,4 @@ namespace Gateways
             serverThread.join();
         }
     };
-} // namespace Gateways
+} // namespace naoto::order_gateway

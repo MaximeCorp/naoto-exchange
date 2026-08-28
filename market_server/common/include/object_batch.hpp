@@ -11,7 +11,8 @@ namespace naoto
     {
         alignas(64) std::array<T, BatchSize> Data;
         alignas(64) size_t Size = 0;
-        alignas(64) std::uint32_t Fd = 0;
+        alignas(64) uint32_t Fd = 0;
+        alignas(64) uint8_t Auth = 0;
 
         ObjectBatch(void) = default;
 

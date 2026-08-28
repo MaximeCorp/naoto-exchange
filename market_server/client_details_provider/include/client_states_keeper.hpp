@@ -1,22 +1,23 @@
 #pragma once
 
-#include <client_request.hpp>
 #include <client_request_response.hpp>
 #include <client_states.hpp>
+#include <gateway_request.hpp>
 #include <gateway_writer.hpp>
 #include <message_container.hpp>
 #include <object_batch.hpp>
-#include <reader_writer_circular_buffer.hpp>
-#include <storage_pool.hpp>
 #include <openssl/sha.h>
+#include <readerwritercircularbuffer.h>
+#include <storage_pool.hpp>
+#include <system_conf.hpp>
 
-namespace AccountService
+namespace naoto::client_details_provider
 {
-    template <size_t MaxPositions, size_t BatchSize>
+
     class ClientStatesKeeper
     {
         using MessageQueue = moodycamel::BlockingReaderWriterCircularBuffer<
-            ObjectBatch<ClientRequest, BatchSize> *>;
+            ObjectBatch<GatewayRequest, CdpEpollReceiveBatchSize> *>;
         using ResponsesQueue = moodycamel::BlockingReaderWriterCircularBuffer<
             MessageContainer<ClientRequestResponse<MaxPositions>>>;
 
@@ -24,12 +25,14 @@ namespace AccountService
         ClientStates<MaxPositions> &States;
         MessageQueue &IncomingMessages;
         ResponsesQueue &ResponsesSend;
-        StoragePool<ObjectBatch<ClientRequest, BatchSize>> &MessagesPool;
+        StoragePool<ObjectBatch<GatewayRequest, CdpEpollReceiveBatchSize>>
+            &MessagesPool;
         StoragePool<ClientRequestResponse<MaxPositions>> &ResponsesPool;
 
         void ProcessMessage(void)
         {
-            ObjectBatch<ClientRequest, BatchSize> *curBatch = nullptr;
+            ObjectBatch<GatewayRequest, CdpEpollReceiveBatchSize> *curBatch =
+                nullptr;
 
             if (IncomingMessages.try_dequeue(curBatch)) [[likely]]
             {
@@ -39,7 +42,7 @@ namespace AccountService
 
                 for (size_t i = 0; i < curBatch->getSize(); ++i)
                 {
-                    const ClientRequest &curMessage = (*curBatch)[i];
+                    const GatewayRequest &curMessage = (*curBatch)[i];
 
                     // Might do that later to avoid unnecessary memory accesses
                     uint16_t gatewayId = curMessage.GatewayId;
@@ -160,7 +163,8 @@ namespace AccountService
         ClientStatesKeeper(
             ClientStates<MaxPositions> &states, MessageQueue &incomingMessages,
             ResponsesQueue &responsesSend,
-            StoragePool<ObjectBatch<ClientRequest, BatchSize>> &messagesPool,
+            StoragePool<ObjectBatch<GatewayRequest, CdpEpollReceiveBatchSize>>
+                &messagesPool,
             StoragePool<ClientRequestResponse<MaxPositions>> &responsesPool)
             : States(states)
             , IncomingMessages(incomingMessages)
@@ -177,4 +181,4 @@ namespace AccountService
             }
         }
     };
-} // namespace AccountService
+} // namespace naoto::client_details_provider

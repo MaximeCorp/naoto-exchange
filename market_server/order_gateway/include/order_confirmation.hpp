@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-namespace Gateways
+namespace naoto::order_gateway
 {
     enum class OrderConfirmationStatus : uint8_t
     {
@@ -24,4 +24,4 @@ namespace Gateways
         OrderConfirmationStatus Status;
     };
 #pragma pack(pop)
-} // namespace Gateways
+} // namespace naoto::order_gateway

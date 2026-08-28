@@ -8,14 +8,11 @@ find_package(OpenGL REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(GLFW REQUIRED glfw3)
 
-# etcd-cpp-apiv3 and its dependencies. Assumed already installed system-
-# wide on this project's build machines (as noted in the project context
-# doc). Adjust find_library paths if they live somewhere non-standard.
-find_library(ETCD_CPP_API_LIB etcd-cpp-api REQUIRED)
-find_library(GRPCPP_LIB grpc++ REQUIRED)
-find_library(GRPC_LIB grpc REQUIRED)
-find_library(PROTOBUF_LIB protobuf REQUIRED)
-find_library(CPPREST_LIB cpprest REQUIRED)
+# etcd-cpp-apiv3 is NOT assumed system-wide here — this project builds it
+# from source into artifacts/ (see bootstrap/03-build-etcd-cpp.sh and the
+# root CMakeLists.txt), same as every other service. EtcdCpp::EtcdCpp is
+# defined there; this file must be add_subdirectory()'d from the root
+# project, not configured fully standalone, for that target to exist.
 
 include(FetchContent)
 
@@ -79,11 +76,7 @@ target_link_libraries(trading_dashboard PRIVATE
   imgui
   ${GLFW_LIBRARIES}
   OpenGL::GL
-  ${ETCD_CPP_API_LIB}
-  ${GRPCPP_LIB}
-  ${GRPC_LIB}
-  ${PROTOBUF_LIB}
-  ${CPPREST_LIB}
+  EtcdCpp::EtcdCpp
   nlohmann_json::nlohmann_json
   pthread
 )

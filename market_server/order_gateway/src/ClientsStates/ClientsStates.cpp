@@ -1,11 +1,11 @@
-#include <ClientStates.hpp>
-#include <FileDescriptorsOps.hpp>
+#include <client_states.hpp>
+#include <file_descriptors_ops.hpp>
 
-namespace Gateways
+namespace naoto::order_gateway
 {
     template <size_t MaxPositions>
     [[nodiscard]] ClientStates<MaxPositions> make_fd_array(void)
     {
         return ClientStates<MaxPositions>(FileDescriptorsOps::getMaxFd());
     }
-} // namespace Gateways
+} // namespace naoto::order_gateway

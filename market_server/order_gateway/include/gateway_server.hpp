@@ -1,15 +1,15 @@
 #pragma once
 
+#include <atomic>
 #include <client_request.hpp>
 #include <client_states.hpp>
 #include <epoll_server.hpp>
 #include <fd_gen.hpp>
 #include <gateway_request.hpp>
-#include <reader_writer_circular_buffer.hpp>
-#include <atomic>
+#include <readerwritercircularbuffer.h>
 #include <string>
 
-namespace Gateways
+namespace naoto::order_gateway
 {
     template <size_t BatchSize, size_t MaxPositions>
     class GatewayServer
@@ -106,4 +106,4 @@ namespace Gateways
             }
         }
     };
-} // namespace Gateways
+} // namespace naoto::order_gateway

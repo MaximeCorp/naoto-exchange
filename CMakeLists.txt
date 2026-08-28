@@ -120,15 +120,52 @@ target_link_options(EtcdCpp::EtcdCpp INTERFACE
     "-Wl,-rpath,${EtcdCpp_ARTIFACT_DIR}/lib"
     "-Wl,--disable-new-dtags")
 
+# ---------------------------------------------------------------- abseil
+# Used by order_gateway (flat_hash_map + flat_hash_set) and
+# client_details_provider (flat_hash_set only) for client-state lookups —
+# matching_engine doesn't use it, its own SIMD hash map is hand-written.
+# One combined target covers both; client_details_provider just gets
+# flat_hash_map's include path along for free, unused, harmless.
+#
+# Slated for removal later — both call sites are candidates to move onto
+# the project's own SIMD hash map/set instead. See chat history: the
+# client-id -> fd map may drop straight in as-is, the off-hot-path set
+# may be a free byproduct if the map is generic over value type, or a
+# small standalone structure otherwise. When that migration happens,
+# remove this whole block, drop naoto_absl from both services below, and
+# remove the apt package from bootstrap/01-install-deps.sh too.
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(ABSL REQUIRED IMPORTED_TARGET absl_flat_hash_map absl_flat_hash_set)
+message(STATUS "abseil found via pkg-config")
+
+add_library(naoto_absl INTERFACE)
+target_link_libraries(naoto_absl INTERFACE PkgConfig::ABSL)
+
 # ---------------------------------------------------------------- LTO
-include(CheckIPOSupported)
-check_ipo_supported(RESULT NAOTO_IPO_OK)
-if(NAOTO_IPO_OK AND CMAKE_BUILD_TYPE STREQUAL "Release")
-    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
+# Opt-in, NOT default-on. The link step is a single, non-parallel process
+# that loads every object file's IR at once — and since DPDK itself was
+# built with -flto (bootstrap/02-build-dpdk.sh), its static archive
+# carries LTO bitcode too. Enabling this here can mean the link step
+# tries to re-optimize the whole of DPDK's IR alongside common/'s heavy
+# templated headers, in one process, which is a plausible explanation
+# for a build suddenly needing much more RAM/CPU/time than the Makefile
+# ever did — the Makefile had no LTO at all.
+#
+# Turn on with -DNAOTO_LTO=ON only when you actually want it (e.g. right
+# before a benchmarking pass), not for everyday iteration.
+option(NAOTO_LTO "Whole-program link-time optimization (slow, RAM-heavy link step)" OFF)
+
+if(NAOTO_LTO)
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT NAOTO_IPO_OK)
+    if(NAOTO_IPO_OK AND CMAKE_BUILD_TYPE STREQUAL "Release")
+        set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
+    endif()
 endif()
 
 add_subdirectory(third_party)
 add_subdirectory(market_server/common)
 add_subdirectory(market_server/matching_engine)
-# add_subdirectory(market_server/order_gateway)          # still Makefile — see chat
-# add_subdirectory(market_server/client_details_provider) # still Makefile — see chat
+add_subdirectory(market_server/order_gateway)
+add_subdirectory(market_server/client_details_provider)
+add_subdirectory(market_client)

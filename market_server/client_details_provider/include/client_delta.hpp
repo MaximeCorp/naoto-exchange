@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace AccountService
+namespace naoto::client_details_provider
 {
     template <size_t MaxPositions>
     struct ClientDelta
@@ -19,4 +19,4 @@ namespace AccountService
             Attempt.fill(0);
         }
     };
-} // namespace AccountService
+} // namespace naoto::client_details_provider

@@ -1,17 +1,16 @@
 #pragma once
 
 #include <client_request_response.hpp>
-#include <client_update.hpp>
+#include <cstring>
 #include <fd_gen.hpp>
 #include <message_container.hpp>
 #include <object_batch.hpp>
-#include <reader_writer_circular_buffer.hpp>
+#include <readerwritercircularbuffer.h>
 #include <storage_pool.hpp>
-#include <cstring>
 #include <sys/socket.h>
 #include <type_traits>
 
-namespace AccountService
+namespace naoto::client_details_provider
 {
     template <size_t MaxPositions, size_t BatchesSize, size_t MaxGateways,
               size_t ResendBufferSize>
@@ -20,8 +19,8 @@ namespace AccountService
         // Might be worth batching
         using ResponsesQueue = moodycamel::BlockingReaderWriterCircularBuffer<
             MessageContainer<ClientRequestResponse<MaxPositions>>>;
-        using UpdatesQueue = moodycamel::BlockingReaderWriterCircularBuffer<
-            MessageContainer<ClientUpdate>>;
+        // using UpdatesQueue = moodycamel::BlockingReaderWriterCircularBuffer<
+        // MessageContainer<ClientUpdate>>;
 
     private:
         ResponsesQueue &Responses;
@@ -34,11 +33,6 @@ namespace AccountService
                    ResendBufferSize>
             ResponsesResend;
         size_t ResponsesResendSize;
-
-        /*
-        std::array<ClientUpdate, ResendBufferSize> UpdatesResend;
-        size_t UpdatesResendSize;
-        */
 
         template <typename T>
         void DrainResendBuffers(void) noexcept // Call before SendMessage if
@@ -56,19 +50,6 @@ namespace AccountService
                                                   curResponse.GatewayId);
                 }
             }
-            /*
-            else if constexpr (std::is_same_v<T, ClientUpdate>)
-            {
-                while (UpdatesResendSize)
-                {
-                    MessageContainer<ClientUpdate> &curUpdate =
-                        UpdatesResend[--UpdatesResendSize];
-
-                    SendMessage<ClientUpdate>(curUpdate.Message,
-                                              curUpdate.GatewayId);
-                }
-            }
-            */
         }
 
         template <typename T>
@@ -180,6 +161,7 @@ namespace AccountService
 
         void ConsumeMessages(void) noexcept
         {
+            // TODO : decide if this batching is useful
             for (size_t i = 0; i < BatchesSize; ++i)
             {
                 MessageContainer<ClientRequestResponse<MaxPositions>>
@@ -232,4 +214,4 @@ namespace AccountService
             }
         }
     };
-} // namespace AccountService
+} // namespace naoto::client_details_provider

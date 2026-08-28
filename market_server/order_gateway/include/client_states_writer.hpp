@@ -1,5 +1,7 @@
 #pragma once
 
+#include <absl/container/flat_hash_set.h>
+#include <array>
 #include <client_request_response.hpp>
 #include <client_states.hpp>
 #include <consumer.hpp>
@@ -7,10 +9,8 @@
 #include <gateway_request.hpp>
 #include <order_state_report.hpp>
 #include <storage_pool.hpp>
-#include <absl/container/flat_hash_set.h>
-#include <array>
 
-namespace Gateways
+namespace naoto::order_gateway
 {
     template <size_t MaxClients, size_t MaxPositions, size_t BatchSize,
               size_t BufferSize>
@@ -379,4 +379,4 @@ namespace Gateways
             }
         }
     };
-} // namespace Gateways
+} // namespace naoto::order_gateway

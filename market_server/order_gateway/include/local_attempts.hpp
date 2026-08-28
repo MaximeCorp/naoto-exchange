@@ -4,7 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace Gateways
+namespace naoto::order_gateway
 {
     template <size_t MaxPositions>
     struct LocalAttempts
@@ -32,4 +32,4 @@ namespace Gateways
             Attempt.fill(0);
         }
     };
-} // namespace Gateways
+} // namespace naoto::order_gateway

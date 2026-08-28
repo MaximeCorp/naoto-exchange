@@ -1,12 +1,12 @@
 #pragma once
 
+#include <absl/container/flat_hash_set.h>
+#include <array>
 #include <client_states.hpp>
 #include <consumer.hpp>
 #include <order_state_report.hpp>
-#include <absl/container/flat_hash_set.h>
-#include <array>
 
-namespace AccountService
+namespace naoto::client_details_provider
 {
     template <size_t MaxPositions, size_t BatchSize>
     class ClientStatesWriter
@@ -103,4 +103,4 @@ namespace AccountService
             }
         }
     };
-} // namespace AccountService
+} // namespace naoto::client_details_provider

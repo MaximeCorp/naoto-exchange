@@ -1,21 +1,21 @@
 #pragma once
 
-#include <order_state_report.hpp>
-#include <udp_multicast_receiver.hpp>
 #include <cstddef>
 #include <cstring>
 #include <iostream>
 #include <optional>
+#include <order_state_report.hpp>
 #include <rte_eal.h>
 #include <rte_ethdev.h>
 #include <rte_lcore.h>
+#include <udp_multicast_receiver.hpp>
 
 #define RX_QUEUES 1
 #define TX_QUEUES 0
 #define EMITTERS 0
 #define RECEIVERS 1
 
-namespace Gateways
+namespace naoto::order_gateway
 {
     template <size_t RingBufferSize, size_t BatchSize = 0>
     class MarketUpdates
@@ -84,4 +84,4 @@ namespace Gateways
             rte_eal_cleanup();
         }
     };
-} // namespace Gateways
+} // namespace naoto::order_gateway

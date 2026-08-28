@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-namespace AccountService
+namespace naoto::client_details_provider
 {
     template <typename T>
     struct MessageContainer
@@ -15,4 +15,4 @@ namespace AccountService
             , Message(nullptr)
         {}
     };
-} // namespace AccountService
+} // namespace naoto::client_details_provider

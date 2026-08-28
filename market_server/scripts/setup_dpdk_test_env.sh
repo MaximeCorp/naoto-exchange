@@ -69,8 +69,9 @@ echo "== Disabling reverse-path filtering (rp_filter) on both veth interfaces ==
 # routing table entry backing it -- a common gotcha for exactly this kind
 # of local test setup. See: net.ipv4.conf.<iface>.rp_filter in
 # https://www.kernel.org/doc/Documentation/networking/ip-sysctl.txt
-sysctl -w net.ipv4.conf."$VETH_A".rp_filter=0 > /dev/null
-sysctl -w net.ipv4.conf."$VETH_B".rp_filter=0 > /dev/null
+sudo sysctl -w net.ipv4.conf."$VETH_A".rp_filter=0 > /dev/null
+sudo sysctl -w net.ipv4.conf."$VETH_B".rp_filter=0 > /dev/null
+sudo sysctl -w net.ipv4.conf.all.rp_filter=0 > /dev/null
 echo "rp_filter disabled on $VETH_A and $VETH_B."
 
 echo ""

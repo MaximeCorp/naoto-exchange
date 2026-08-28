@@ -1,7 +1,6 @@
 #pragma once
 
 #include <client_details_provider_server.hpp>
-#include <client_request.hpp>
 #include <client_request_response.hpp>
 #include <client_state.hpp>
 #include <client_states.hpp>
@@ -9,22 +8,22 @@
 #include <client_states_writer.hpp>
 #include <etcd/KeepAlive.hpp>
 #include <etcd/SyncClient.hpp>
+#include <gateway_request.hpp>
 #include <gateway_writer.hpp>
 #include <market_updates.hpp>
 #include <nlohmann/json.hpp>
 #include <order_state_report.hpp>
-#include <reader_writer_circular_buffer.hpp>
+#include <readerwritercircularbuffer.h>
 #include <storage_pool.hpp>
+#include <system_conf.hpp>
 #include <thread>
 
-namespace AccountService
+namespace naoto::client_details_provider
 {
-    template <size_t BatchSize, size_t MaxPositions,
-              size_t UdpReceiveBufferSize, size_t MaxGateways>
     class ClientDetailsProvider
     {
         using RequestQueue = moodycamel::BlockingReaderWriterCircularBuffer<
-            ObjectBatch<ClientRequest, BatchSize> *>;
+            ObjectBatch<GatewayRequest, CdpEpollReceiveBatchSize> *>;
         using ReportQueue =
             moodycamel::BlockingReaderWriterCircularBuffer<OrderStateReport *>;
         using ResponseQueue = moodycamel::BlockingReaderWriterCircularBuffer<
@@ -32,18 +31,24 @@ namespace AccountService
 
     private:
         ClientStates<MaxPositions> States;
-        StoragePool<ObjectBatch<ClientRequest, BatchSize>> RequestPool;
+        StoragePool<ObjectBatch<GatewayRequest, CdpEpollReceiveBatchSize>>
+            RequestPool;
         StoragePool<OrderStateReport> ReportPool;
         StoragePool<ClientRequestResponse<MaxPositions>> ResponsePool;
         RequestQueue Requests;
         ReportQueue Reports;
         ResponseQueue Responses;
         std::array<FdGen, MaxGateways> GatewayFd;
-        ClientDetailsProviderServer<BatchSize, MaxGateways> Server;
-        ClientStatesKeeper<MaxPositions, BatchSize> Keeper;
-        GatewayWriter<MaxPositions, BatchSize, MaxGateways, 128> MessageWriter;
-        ClientStatesWriter<MaxPositions, BatchSize> Writer;
-        MarketUpdates<UdpReceiveBufferSize, BatchSize> ReportReceiver;
+        ClientDetailsProviderServer<CdpEpollReceiveBatchSize, MaxGateways>
+            Server;
+        ClientStatesKeeper<MaxPositions, CdpEpollReceiveBatchSize> Keeper;
+        GatewayWriter<MaxPositions, CdpResponseBatchSize, MaxGateways,
+                      CdpResponsesResendBufferSize>
+            MessageWriter;
+        ClientStatesWriter<MaxPositions, ClientStatesSwapBatchSize> Writer;
+        MarketUpdates<MarketUpdateReceiveBufferSize,
+                      MarketUpdateReceiveBatchSize>
+            ReportReceiver;
 
         std::shared_ptr<etcd::KeepAlive> KeepAlive;
         std::unique_ptr<etcd::SyncClient> EtcdClient;
@@ -98,13 +103,13 @@ namespace AccountService
                               const uint16_t nbRxQueueSlots,
                               const size_t dpdkPoolSize, const uint32_t dstIp,
                               const uint16_t dstPort)
-            : States(maxClients)
-            , RequestPool(requestPoolSize)
-            , ReportPool(reportPoolSize)
-            , ResponsePool(responsePoolSize)
-            , Requests(requestQueueSize)
-            , Reports(reportQueueSize)
-            , Responses(responseQueueSize)
+            : States(MaxClients)
+            , RequestPool(MaxClients)
+            , ReportPool(MaxClients * MaxTradeClient)
+            , ResponsePool(MaxClients)
+            , Requests(MaxClients)
+            , Reports(MaxClients)
+            , Responses(MaxClients)
             , Server(serverPort, maxEvents, maxPending, RequestPool, Requests,
                      GatewayFd)
             , Keeper(States, Requests, Responses, RequestPool, ResponsePool)
@@ -124,13 +129,13 @@ namespace AccountService
                               const size_t dpdkPoolSize, const uint32_t dstIp,
                               const uint16_t dstPort,
                               std::vector<ClientState<MaxPositions>> &clients)
-            : States(maxClients, clients)
-            , RequestPool(requestPoolSize)
-            , ReportPool(reportPoolSize)
-            , ResponsePool(responsePoolSize)
-            , Requests(requestQueueSize)
-            , Reports(reportQueueSize)
-            , Responses(responseQueueSize)
+            : States(MaxClients, clients)
+            , RequestPool(MaxClients)
+            , ReportPool(MaxClients * MaxTradeClient)
+            , ResponsePool(MaxClients)
+            , Requests(MaxClients)
+            , Reports(MaxClients)
+            , Responses(MaxClients)
             , Server(serverPort, maxEvents, maxPending, RequestPool, Requests,
                      GatewayFd)
             , Keeper(States, Requests, Responses, RequestPool, ResponsePool)
@@ -158,20 +163,23 @@ namespace AccountService
             EtcdClientSetUp();
 
             std::thread serverThread(
-                &ClientDetailsProviderServer<BatchSize,
+                &ClientDetailsProviderServer<CdpEpollReceiveBatchSize,
                                              MaxGateways>::startServer,
                 &Server);
 
             std::thread keeperThread(
-                &ClientStatesKeeper<MaxPositions, BatchSize>::StartLoop,
+                &ClientStatesKeeper<MaxPositions,
+                                    CdpEpollReceiveBatchSize>::StartLoop,
                 &Keeper);
 
             std::thread messageWriterThread(
-                &GatewayWriter<MaxPositions, BatchSize, 32, 128>::StartLoop,
+                &GatewayWriter<MaxPositions, CdpResponseBatchSize, MaxGateways,
+                               CdpResponsesResendBufferSize>::StartLoop,
                 &MessageWriter);
 
             std::thread writerThread(
-                &ClientStatesWriter<MaxPositions, BatchSize>::StartLoop,
+                &ClientStatesWriter<MaxPositions,
+                                    ClientStatesSwapBatchSize>::StartLoop,
                 &Writer);
 
             setAffinity(serverThread, 7);
@@ -187,4 +195,4 @@ namespace AccountService
             writerThread.join();
         }
     };
-} // namespace AccountService
+} // namespace naoto::client_details_provider

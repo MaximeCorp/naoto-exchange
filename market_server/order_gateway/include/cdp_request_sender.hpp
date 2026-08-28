@@ -3,11 +3,11 @@
 #include <consumer.hpp>
 #include <fd_gen.hpp>
 #include <gateway_request.hpp>
-#include <reader_writer_circular_buffer.hpp>
+#include <readerwritercircularbuffer.h>
 #include <storage_pool.hpp>
 #include <sys/socket.h>
 
-namespace Gateways
+namespace naoto::order_gateway
 {
     class ConsumerImpl : public Consumer<ConsumerImpl, GatewayRequest>
     {
@@ -117,4 +117,4 @@ namespace Gateways
         }
     };
 
-} // namespace Gateways
+} // namespace naoto::order_gateway

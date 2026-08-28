@@ -17,9 +17,9 @@
 
 file(GLOB_RECURSE MATCHING_ENGINE_SOURCES CONFIGURE_DEPENDS src/*.cpp)
 
-add_executable(MarketExecution ${MATCHING_ENGINE_SOURCES})
+add_executable(matching_engine ${MATCHING_ENGINE_SOURCES})
 
-target_include_directories(MarketExecution PRIVATE include)
+target_include_directories(matching_engine PRIVATE include)
 
 # NOTE: also links `common` for the shared wire types (Order, etc.) now
 # that they live in market_server/common/include. If matching_engine's own
@@ -27,7 +27,7 @@ target_include_directories(MarketExecution PRIVATE include)
 # (Order.hpp and friends per the wire-type-drift issue from earlier), the
 # local -Iinclude above will shadow common's version silently — remove the
 # duplicates from matching_engine/include once the migration is done.
-target_link_libraries(MarketExecution PRIVATE
+target_link_libraries(matching_engine PRIVATE
     common
     naoto_dpdk
     EtcdCpp::EtcdCpp)

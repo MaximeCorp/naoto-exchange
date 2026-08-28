@@ -4,7 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace Gateways
+namespace naoto::order_gateway
 {
     template <size_t MaxPositions>
     struct ClientDelta
@@ -14,4 +14,4 @@ namespace Gateways
         std::array<int64_t, MaxPositions> Confirmed;
         std::array<int64_t, MaxPositions> Attempt;
     };
-} // namespace Gateways
+} // namespace naoto::order_gateway

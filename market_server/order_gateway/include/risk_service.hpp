@@ -16,11 +16,11 @@
 #include <nlohmann/json.hpp>
 #include <order.hpp>
 #include <order_confirmation.hpp>
-#include <reader_writer_circular_buffer.hpp>
+#include <readerwritercircularbuffer.h>
 #include <storage_pool.hpp>
 #include <vector>
 
-namespace Gateways
+namespace naoto::order_gateway
 {
     template <size_t BatchSize, size_t MaxAsset, size_t MaxPositions,
               size_t MaxClients>
@@ -756,4 +756,4 @@ namespace Gateways
             }
         }
     };
-} // namespace Gateways
+} // namespace naoto::order_gateway

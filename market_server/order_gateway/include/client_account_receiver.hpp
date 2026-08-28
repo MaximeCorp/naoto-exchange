@@ -1,18 +1,18 @@
 #pragma once
 
+#include <cerrno>
+#include <chrono>
 #include <client_request_response.hpp>
+#include <cstring>
 #include <fd_gen.hpp>
 #include <object_batch.hpp>
 #include <object_buffer.hpp>
-#include <reader_writer_circular_buffer.hpp>
+#include <readerwritercircularbuffer.h>
 #include <storage_pool.hpp>
-#include <cerrno>
-#include <chrono>
-#include <cstring>
 #include <sys/socket.h>
 #include <thread>
 
-namespace Gateways
+namespace naoto::order_gateway
 {
     template <size_t BatchSize, size_t MaxPositions>
     class ClientAccountReceiver
@@ -134,4 +134,4 @@ namespace Gateways
             }
         }
     };
-} // namespace Gateways
+} // namespace naoto::order_gateway

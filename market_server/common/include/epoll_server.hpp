@@ -129,7 +129,7 @@ namespace naoto
 
         void readMessage(const uint32_t curFd) noexcept
         {
-            ssize_t nread;
+            ssize_t nread = -1;
             ObjectBuffer<T> &buffer = Buffers[curFd];
 
             if constexpr (HasFirstMessageHandle<DerivedServer, InitMessage>)

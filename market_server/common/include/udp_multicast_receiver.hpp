@@ -1,23 +1,23 @@
 #pragma once
 
-#include <reader_writer_circular_buffer.hpp>
-#include <sequence_ring_buffer.hpp>
-#include <storage_pool.hpp>
 #include <concepts>
 #include <cstddef>
 #include <cstring>
 #include <iostream>
 #include <netinet/in.h>
+#include <readerwritercircularbuffer.h>
 #include <rte_ethdev.h>
 #include <rte_ether.h>
 #include <rte_ip.h>
 #include <rte_lcore.h>
 #include <rte_mbuf.h>
 #include <rte_udp.h>
+#include <sequence_ring_buffer.hpp>
+#include <storage_pool.hpp>
 #include <string>
 #include <variant>
 
-namespace Gateways
+namespace naoto
 {
     static void ipv4_multicast_to_mac(uint32_t ip_host_order,
                                       rte_ether_addr *mac);
@@ -114,6 +114,7 @@ namespace Gateways
             }
         }
 
+        // TODO : Handle case where BatchSize is 0
         void Receive(void) noexcept
         {
             uint16_t nbRx =
@@ -263,4 +264,4 @@ namespace Gateways
         mac->addr_bytes[4] = (ip_host_order >> 8) & 0xFF;
         mac->addr_bytes[5] = ip_host_order & 0xFF;
     }
-} // namespace Gateways
+} // namespace naoto

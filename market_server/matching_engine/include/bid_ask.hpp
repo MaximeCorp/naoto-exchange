@@ -72,10 +72,11 @@ namespace naoto::matching_engine
             // order.Amount field is reused for cancel requests to represent the
             // id of the order that we want to cancel
 
-            OrderNode *toCancel;
+            OrderNode *toCancel = nullptr;
             bool found = OrderMap.GetVal(order.Amount, toCancel);
 
-            if (!found || toCancel->GetClientId() != order.Amount) [[unlikely]]
+            if (!found || toCancel->GetClientId() != order.ClientId)
+                [[unlikely]]
             {
                 OrderStateReport *rejectReport = OrderReportsPool.acquire();
                 rejectReport->FillReport(0, 0, 0, ReportSequenceId++,
@@ -83,7 +84,17 @@ namespace naoto::matching_engine
                                          OrderState::REJECT);
                 OutgoingOrders.try_enqueue(rejectReport);
 
-                std::cout << "Rejected a cancel request.\n\n";
+                std::cout << "Rejected a cancel request";
+
+                if (toCancel->GetClientId() != order.ClientId)
+                {
+                    std::cout << " because of wrong client id.\n\n";
+                }
+                else
+                {
+                    std::cout
+                        << " because the referenced order was not found.\n\n";
+                }
 
                 return;
             }

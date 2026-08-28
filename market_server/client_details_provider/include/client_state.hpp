@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <openssl/sha.h>
 
-namespace AccountService
+namespace naoto::client_details_provider
 {
     template <size_t MaxPositions>
     struct alignas(64) ClientState
@@ -157,4 +157,4 @@ namespace AccountService
             return Connected;
         }
     };
-} // namespace AccountService
+} // namespace naoto::client_details_provider

@@ -21,9 +21,9 @@ namespace naoto
         }
 
         // Size should be modulo sizeof(Order)
-        void addBytes(Order *ptr, size_t size) noexcept
+        void addBytes(void *ptr, size_t size) noexcept
         {
-            if (BufferSize + size > sizeof(Order)) [[unlikely]]
+            if (BufferSize + size > sizeof(T)) [[unlikely]]
             {
                 // Might have to terminate
                 return;

@@ -1,26 +1,26 @@
 #pragma once
 
-#include <client_request.hpp>
+#include <cstddef>
 #include <epoll_server.hpp>
 #include <fd_gen.hpp>
 #include <file_descriptors_ops.hpp>
 #include <gateway_connection.hpp>
+#include <gateway_request.hpp>
 #include <object_batch.hpp>
-#include <reader_writer_circular_buffer.hpp>
-#include <cstddef>
+#include <readerwritercircularbuffer.h>
 
-namespace AccountService
+namespace naoto::client_details_provider
 {
     template <size_t BatchSize, size_t MaxGateways>
     class ClientDetailsProviderServer
         : public EpollServer<
               ClientDetailsProviderServer<BatchSize, MaxGateways>,
-              ClientRequest, BatchSize, GatewayConnection>
+              GatewayRequest, BatchSize, GatewayConnection>
     {
-        using Base = EpollServer<ClientDetailsProviderServer, ClientRequest,
+        using Base = EpollServer<ClientDetailsProviderServer, GatewayRequest,
                                  BatchSize, GatewayConnection>;
         using RequestQueue = moodycamel::BlockingReaderWriterCircularBuffer<
-            ObjectBatch<ClientRequest, BatchSize> *>;
+            ObjectBatch<GatewayRequest, BatchSize> *>;
 
     private:
         std::array<FdGen, MaxGateways> &Gateways;
@@ -29,7 +29,7 @@ namespace AccountService
     public:
         ClientDetailsProviderServer(
             const int port, const int maxEvents, const int maxPending,
-            StoragePool<ObjectBatch<ClientRequest, BatchSize>> &pool,
+            StoragePool<ObjectBatch<GatewayRequest, BatchSize>> &pool,
             RequestQueue &orders, std::array<FdGen, MaxGateways> &gateways)
             : Base(port, maxEvents, maxPending, pool, orders)
             , Gateways(gateways)
@@ -58,4 +58,4 @@ namespace AccountService
             Gateways[FdToGateways[fd]].SwitchFd(-1);
         }
     };
-} // namespace AccountService
+} // namespace naoto::client_details_provider

@@ -1,10 +1,10 @@
-#include <SocketGateway.hpp>
+#include <socket_gateway.hpp>
 
 #define IPV4(a, b, c, d)                                                       \
     (((uint32_t)(a) << 24) | ((uint32_t)(b) << 16) | ((uint32_t)(c) << 8)      \
      | (uint32_t)(d))
 
-using namespace Gateways;
+using namespace naoto::order_gateway;
 
 int main(int argc, char **argv)
 {

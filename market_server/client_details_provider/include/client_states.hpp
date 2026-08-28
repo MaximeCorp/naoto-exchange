@@ -1,12 +1,12 @@
 #pragma once
 
+#include <atomic>
 #include <client_delta.hpp>
 #include <client_state.hpp>
-#include <reader_writer_circular_buffer.hpp>
-#include <atomic>
+#include <readerwritercircularbuffer.h>
 #include <vector>
 
-namespace AccountService
+namespace naoto::client_details_provider
 {
     template <size_t MaxPositions>
     class ClientStates // Data coherence not guaranteed, pls update the right
@@ -191,4 +191,4 @@ namespace AccountService
             newSeqId = curSeqId;
         }
     };
-} // namespace AccountService
+} // namespace naoto::client_details_provider

@@ -1,13 +1,13 @@
 #pragma once
 
+#include <atomic>
 #include <client_delta.hpp>
 #include <client_request_response.hpp>
 #include <client_state.hpp>
-#include <reader_writer_circular_buffer.hpp>
-#include <atomic>
+#include <readerwritercircularbuffer.h>
 #include <vector>
 
-namespace Gateways
+namespace naoto::order_gateway
 {
     template <size_t MaxPositions>
     class ClientStates // Data coherence not guaranteed, pls update the right
@@ -226,4 +226,4 @@ namespace Gateways
             newState->SessionId = sessionId;
         }
     };
-} // namespace Gateways
+} // namespace naoto::order_gateway
