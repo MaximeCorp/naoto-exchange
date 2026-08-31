@@ -2,41 +2,42 @@
 
 #include <cstddef>
 #include <epoll_server.hpp>
-#include <fd_gen.hpp>
+#include <versioned_fd.hpp>
 #include <file_descriptors_ops.hpp>
-#include <gateway_connection.hpp>
-#include <gateway_request.hpp>
+#include <gateway_handshake.hpp>
+#include <routed_auth_request.hpp>
 #include <object_batch.hpp>
 #include <readerwritercircularbuffer.h>
 
-namespace naoto::client_details_provider
+namespace naoto::account_service
 {
     template <size_t BatchSize, size_t MaxGateways>
-    class ClientDetailsProviderServer
+    class GatewayEpollServer
         : public EpollServer<
-              ClientDetailsProviderServer<BatchSize, MaxGateways>,
-              GatewayRequest, BatchSize, GatewayConnection>
+              GatewayEpollServer<BatchSize, MaxGateways>,
+              RoutedAuthRequest, BatchSize, GatewayHandshake>
     {
-        using Base = EpollServer<ClientDetailsProviderServer, GatewayRequest,
-                                 BatchSize, GatewayConnection>;
+        using Base = EpollServer<GatewayEpollServer, RoutedAuthRequest,
+                                 BatchSize, GatewayHandshake>;
         using RequestQueue = moodycamel::BlockingReaderWriterCircularBuffer<
-            ObjectBatch<GatewayRequest, BatchSize> *>;
+            ObjectBatch<RoutedAuthRequest, BatchSize> *>;
 
     private:
-        std::array<FdGen, MaxGateways> &Gateways;
+        std::array<VersionedFd, MaxGateways> &Gateways;
         std::vector<uint16_t> FdToGateways;
 
     public:
-        ClientDetailsProviderServer(
+        GatewayEpollServer(
             const int port, const int maxEvents, const int maxPending,
-            StoragePool<ObjectBatch<GatewayRequest, BatchSize>> &pool,
-            RequestQueue &orders, std::array<FdGen, MaxGateways> &gateways)
+            StoragePool<ObjectBatch<RoutedAuthRequest, BatchSize>> &pool,
+            RequestQueue &orders,
+            std::array<VersionedFd, MaxGateways> &gateways)
             : Base(port, maxEvents, maxPending, pool, orders)
             , Gateways(gateways)
             , FdToGateways(FileDescriptorsOps::getMaxFd(), 0)
         {}
 
-        void FirstMessageHandle(GatewayConnection *message, uint32_t fd)
+        void FirstMessageHandle(GatewayHandshake *message, uint32_t fd)
         {
             if (message->GatewayId > MaxGateways) [[unlikely]]
             {
@@ -58,4 +59,4 @@ namespace naoto::client_details_provider
             Gateways[FdToGateways[fd]].SwitchFd(-1);
         }
     };
-} // namespace naoto::client_details_provider
+} // namespace naoto::account_service

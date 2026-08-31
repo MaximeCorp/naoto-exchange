@@ -45,8 +45,8 @@ namespace naoto::matching_engine
         StoragePool<ObjectBatch<Order, BatchSize>> &OrdersPool;
         StoragePool<OrderStateReport> &OrderReportsPool;
         StoragePool<OrderBookUpdate> &OrderBookUpdatesPool;
-        UnsafeStoragePool<OrderNode> OrderNodePool;
-        UnsafeStoragePool<PriceLevel> PriceLevelPool;
+        SingleThreadedStoragePool<OrderNode> OrderNodePool;
+        SingleThreadedStoragePool<PriceLevel> PriceLevelPool;
 
         FlatHashMap<uint64_t, OrderNode *, OrderMapSize> OrderMap;
 
@@ -381,6 +381,14 @@ namespace naoto::matching_engine
         void AddSellLimitOrder(Order &order)
         {
             OrderNode *toAdd = OrderNodePool.acquire();
+
+            if (!toAdd) [[unlikely]]
+            {
+                std::cout << "Matching engine failed getting an order node "
+                             "from pool, dropping order.\n\n";
+                return;
+            }
+
             toAdd->SetOrder(order);
 
             BestAskPrice = std::min(BestAskPrice, order.Price);
@@ -390,18 +398,37 @@ namespace naoto::matching_engine
             PriceLevel *curLevel = Ask.AddLimitOrder(toAdd);
 
             OrderStateReport *addReport = OrderReportsPool.acquire();
-            addReport->FillReport(0, 0, order.Amount, ReportSequenceId++,
-                                  order.ClientId, order.OrderId, 0, 0,
-                                  MarketAssetId, OrderState::ADD);
-            OutgoingOrders.try_enqueue(addReport);
-            // TODO : try_enqueue failure handling
+
+            if (addReport) [[likely]]
+            {
+                addReport->FillReport(0, 0, order.Amount, ReportSequenceId++,
+                                      order.ClientId, order.OrderId, 0, 0,
+                                      MarketAssetId, OrderState::ADD);
+                OutgoingOrders.try_enqueue(addReport);
+                // TODO : try_enqueue failure handling
+            }
+            else [[unlikely]]
+            {
+                std::cout << "Matching engine failed getting an order state "
+                             "report from pool, skipping report.\n\n";
+            }
 
             OrderBookUpdate *curOrderBookUpdate =
                 OrderBookUpdatesPool.acquire();
-            curOrderBookUpdate->FillUpdate(
-                OrderBookSequenceId++, curLevel->GetTotalAmount(),
-                curLevel->GetKey(), MarketAssetId, ORDER_BOOK_UPDATE_SELL);
-            OutgoingBook.try_enqueue(curOrderBookUpdate);
+
+            if (curOrderBookUpdate) [[likely]]
+            {
+                curOrderBookUpdate->FillUpdate(
+                    OrderBookSequenceId++, curLevel->GetTotalAmount(),
+                    curLevel->GetKey(), MarketAssetId,
+                    ORDER_BOOK_UPDATE_SELL);
+                OutgoingBook.try_enqueue(curOrderBookUpdate);
+            }
+            else [[unlikely]]
+            {
+                std::cout << "Matching engine failed getting an order book "
+                             "update from pool, skipping update.\n\n";
+            }
         }
 
         void AddBuyLimitOrder(Order &order)
@@ -411,7 +438,8 @@ namespace naoto::matching_engine
             if (!toAdd) [[unlikely]]
             {
                 std::cout << "Matching engine failed getting an order node "
-                             "from pool.\n\n";
+                             "from pool, dropping order.\n\n";
+                return;
             }
 
             toAdd->SetOrder(order);
@@ -423,19 +451,37 @@ namespace naoto::matching_engine
             PriceLevel *curLevel = Bid.AddLimitOrder(toAdd);
 
             OrderStateReport *addReport = OrderReportsPool.acquire();
-            addReport->FillReport(0, 0, order.Amount * order.Price,
-                                  ReportSequenceId++, order.ClientId,
-                                  order.OrderId, 0, MarketAssetId, 0,
-                                  OrderState::ADD);
-            OutgoingOrders.try_enqueue(addReport);
-            // TODO : try_enqueue failure handling
+
+            if (addReport) [[likely]]
+            {
+                addReport->FillReport(0, 0, order.Amount * order.Price,
+                                      ReportSequenceId++, order.ClientId,
+                                      order.OrderId, 0, MarketAssetId, 0,
+                                      OrderState::ADD);
+                OutgoingOrders.try_enqueue(addReport);
+                // TODO : try_enqueue failure handling
+            }
+            else [[unlikely]]
+            {
+                std::cout << "Matching engine failed getting an order state "
+                             "report from pool, skipping report.\n\n";
+            }
 
             OrderBookUpdate *curOrderBookUpdate =
                 OrderBookUpdatesPool.acquire();
-            curOrderBookUpdate->FillUpdate(
-                OrderBookSequenceId++, curLevel->GetTotalAmount(),
-                curLevel->GetKey(), MarketAssetId, ORDER_BOOK_UPDATE_BUY);
-            OutgoingBook.try_enqueue(curOrderBookUpdate);
+
+            if (curOrderBookUpdate) [[likely]]
+            {
+                curOrderBookUpdate->FillUpdate(
+                    OrderBookSequenceId++, curLevel->GetTotalAmount(),
+                    curLevel->GetKey(), MarketAssetId, ORDER_BOOK_UPDATE_BUY);
+                OutgoingBook.try_enqueue(curOrderBookUpdate);
+            }
+            else [[unlikely]]
+            {
+                std::cout << "Matching engine failed getting an order book "
+                             "update from pool, skipping update.\n\n";
+            }
             // TODO : failure handling
         }
 

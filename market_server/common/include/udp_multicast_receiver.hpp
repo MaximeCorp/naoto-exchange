@@ -212,11 +212,18 @@ namespace naoto
                     if (added)
                     {
                         std::cout << "Added market update to ring buffer\n\n";
-                        // FIXME: Forgot what I wanted to do here
                     }
                     else
                     {
-                        // TODO: Free without spsc (save pointer locally)
+                        std::cerr << "Failed adding to ring buffer, "
+                                     "releasing object back to pool\n\n";
+
+                        if (!TPool.localRelease(curObj)) [[unlikely]]
+                        {
+                            std::cerr << "Failed releasing object back to "
+                                         "pool after failed ring buffer "
+                                         "add\n\n";
+                        }
                     }
                 }
 
@@ -228,7 +235,14 @@ namespace naoto
 
                     if (!pushed) [[unlikely]]
                     {
-                        // TODO: Free without spsc (save pointer locally)
+                        std::cerr << "Failed enqueueing to consumer, "
+                                     "releasing object back to pool\n\n";
+
+                        if (!TPool.localRelease(readSlot)) [[unlikely]]
+                        {
+                            std::cerr << "Failed releasing object back to "
+                                         "pool after failed enqueue\n\n";
+                        }
                     }
                     else
                     {

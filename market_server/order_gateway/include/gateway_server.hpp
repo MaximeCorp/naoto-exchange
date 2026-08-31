@@ -1,11 +1,11 @@
 #pragma once
 
 #include <atomic>
-#include <client_request.hpp>
+#include <client_auth_request.hpp>
 #include <client_states.hpp>
 #include <epoll_server.hpp>
-#include <fd_gen.hpp>
-#include <gateway_request.hpp>
+#include <versioned_fd.hpp>
+#include <routed_auth_request.hpp>
 #include <readerwritercircularbuffer.h>
 #include <string>
 
@@ -14,44 +14,46 @@ namespace naoto::order_gateway
     template <size_t BatchSize, size_t MaxPositions>
     class GatewayServer
         : public EpollServer<GatewayServer<BatchSize, MaxPositions>, Order,
-                             BatchSize, ClientRequest>
+                             BatchSize, ClientAuthRequest>
     {
         using Base = EpollServer<GatewayServer<BatchSize, MaxPositions>, Order,
-                                 BatchSize, ClientRequest>;
+                                 BatchSize, ClientAuthRequest>;
         using DisconnectQueue =
             moodycamel::BlockingReaderWriterCircularBuffer<uint32_t>;
         using GatewayRequestQueue =
-            moodycamel::BlockingReaderWriterCircularBuffer<GatewayRequest *>;
+            moodycamel::BlockingReaderWriterCircularBuffer<RoutedAuthRequest *>;
         using OrderQueue = moodycamel::BlockingReaderWriterCircularBuffer<
             ObjectBatch<Order, BatchSize> *>;
 
     private:
-        FdGen &CdpFd;
+        VersionedFd &AccountFd;
         uint16_t GatewayId;
         ClientStates<MaxPositions> &States;
         DisconnectQueue &OutgoingDisconnects;
-        StoragePool<GatewayRequest> &GwReqPool;
+        StoragePool<RoutedAuthRequest> &GatewayReqPool;
         GatewayRequestQueue &OutgoingRequests;
 
     public:
         GatewayServer(const int port, const int maxEvents, const int maxPending,
                       StoragePool<ObjectBatch<Order, BatchSize>> &pool,
                       OrderQueue &orders, ClientStates<MaxPositions> &states,
-                      FdGen &cdpFd, DisconnectQueue &outgoingDisconnects,
-                      StoragePool<GatewayRequest> &gwReqPool,
+                      VersionedFd &accountFd,
+                      DisconnectQueue &outgoingDisconnects,
+                      StoragePool<RoutedAuthRequest> &gatewayReqPool,
                       GatewayRequestQueue &outgoingRequests)
             : Base(port, maxEvents, maxPending, pool, orders)
-            , CdpFd(cdpFd)
+            , AccountFd(accountFd)
             , GatewayId(std::stoul(std::getenv("GATEWAY_ID") ?: "0"))
             , States(states)
             , OutgoingDisconnects(outgoingDisconnects)
-            , GwReqPool(gwReqPool)
+            , GatewayReqPool(gatewayReqPool)
             , OutgoingRequests(outgoingRequests)
         {}
 
-        void FirstMessageHandle(ClientRequest *message, uint32_t fd) noexcept
+        void FirstMessageHandle(ClientAuthRequest *message,
+                                uint32_t fd) noexcept
         {
-            GatewayRequest *finalRequest = GwReqPool.acquire();
+            RoutedAuthRequest *finalRequest = GatewayReqPool.acquire();
 
             if (!finalRequest) [[unlikely]]
             {
@@ -60,7 +62,7 @@ namespace naoto::order_gateway
                              "from pool.\n\n";
             }
 
-            std::memcpy(finalRequest, message, sizeof(ClientRequest));
+            std::memcpy(finalRequest, message, sizeof(ClientAuthRequest));
 
             finalRequest->ClientFd = fd;
             finalRequest->GatewayId = GatewayId;
@@ -69,18 +71,18 @@ namespace naoto::order_gateway
 
             if (!enqueued) [[unlikely]]
             {
-                std::cout
-                    << "Failed pushing the message to cdp request sender.\n\n";
+                std::cout << "Failed pushing the message to account "
+                             "request sender.\n\n";
 
                 // TODO : handle failure here
-                if (!GwReqPool.localRelease(finalRequest)) [[unlikely]]
+                if (!GatewayReqPool.localRelease(finalRequest)) [[unlikely]]
                 {
                     // TODO : here too
                 }
             }
             else
             {
-                std::cout << "Successfully push to cdp request sender.\n\n";
+                std::cout << "Successfully push to account request sender.\n\n";
             }
         }
 

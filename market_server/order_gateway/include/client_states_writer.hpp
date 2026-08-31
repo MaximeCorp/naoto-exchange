@@ -2,11 +2,11 @@
 
 #include <absl/container/flat_hash_set.h>
 #include <array>
-#include <client_request_response.hpp>
+#include <client_account_snapshot.hpp>
 #include <client_states.hpp>
 #include <consumer.hpp>
 #include <flat_hash_map.hpp>
-#include <gateway_request.hpp>
+#include <routed_auth_request.hpp>
 #include <order_state_report.hpp>
 #include <storage_pool.hpp>
 
@@ -21,7 +21,7 @@ namespace naoto::order_gateway
         , public Consumer<
               ClientStatesWriter<MaxClients, MaxPositions, BatchSize,
                                  BufferSize>,
-              ObjectBatch<ClientRequestResponse<MaxPositions>, BatchSize>>
+              ObjectBatch<ClientAccountSnapshot<MaxPositions>, BatchSize>>
 
     {
         using ReportBase = Consumer<
@@ -31,17 +31,17 @@ namespace naoto::order_gateway
             moodycamel::BlockingReaderWriterCircularBuffer<OrderStateReport *>;
 
         using ResponseBatch =
-            ObjectBatch<ClientRequestResponse<MaxPositions>, BatchSize>;
+            ObjectBatch<ClientAccountSnapshot<MaxPositions>, BatchSize>;
         using ResponseBase = Consumer<
             ClientStatesWriter<MaxClients, MaxPositions, BatchSize, BufferSize>,
-            ObjectBatch<ClientRequestResponse<MaxPositions>, BatchSize>>;
+            ObjectBatch<ClientAccountSnapshot<MaxPositions>, BatchSize>>;
         using ResponseQueue =
             moodycamel::BlockingReaderWriterCircularBuffer<ResponseBatch *>;
 
         using DisconnectQueue =
             moodycamel::BlockingReaderWriterCircularBuffer<uint32_t>;
-        using GwReqQueue =
-            moodycamel::BlockingReaderWriterCircularBuffer<GatewayRequest *>;
+        using GatewayReqQueue =
+            moodycamel::BlockingReaderWriterCircularBuffer<RoutedAuthRequest *>;
 
     private:
         const uint16_t GatewayId;
@@ -51,8 +51,8 @@ namespace naoto::order_gateway
         std::array<OrderStateReport, BufferSize> UpdatesBuffer;
         uint64_t LastSeq;
         DisconnectQueue &IncomingDisconnects;
-        StoragePool<GatewayRequest> &GwReqPool;
-        GwReqQueue &OutgoingReq;
+        StoragePool<RoutedAuthRequest> &GatewayReqPool;
+        GatewayReqQueue &OutgoingReq;
 
     public:
         ClientStatesWriter(ClientStates<MaxPositions> &states,
@@ -61,15 +61,15 @@ namespace naoto::order_gateway
                            ResponseQueue &incomingResponses,
                            StoragePool<ResponseBatch> &responsePool,
                            DisconnectQueue &incomingDisconnects,
-                           GwReqQueue &outgoingReq,
-                           StoragePool<GatewayRequest> &gwReqPool)
+                           GatewayReqQueue &outgoingReq,
+                           StoragePool<RoutedAuthRequest> &gatewayReqPool)
             : ReportBase(incomingReports, reportPool)
             , ResponseBase(incomingResponses, responsePool)
             , GatewayId(std::stoi(std::getenv("MACHINE_ID") ?: "0"))
             , States(states)
             , LastSeq(0)
             , IncomingDisconnects(incomingDisconnects)
-            , GwReqPool(gwReqPool)
+            , GatewayReqPool(gatewayReqPool)
             , OutgoingReq(outgoingReq)
         {
             Touched.reserve(BatchSize);
@@ -187,7 +187,7 @@ namespace naoto::order_gateway
         {
             for (size_t i = 0; i < responseBatch->Size; ++i)
             {
-                ClientRequestResponse<MaxPositions> &response =
+                ClientAccountSnapshot<MaxPositions> &response =
                     (*responseBatch)[i];
                 if (UpdatesBuffer[response.SequenceId & (BufferSize - 1)]
                             .SequenceId
@@ -195,28 +195,29 @@ namespace naoto::order_gateway
                     && response.SequenceId != LastSeq) [[unlikely]]
                 {
                     // Resend the request
-                    GatewayRequest *gwRequest = GwReqPool.acquire();
+                    RoutedAuthRequest *gatewayRequest =
+                        GatewayReqPool.acquire();
 
-                    if (!gwRequest) [[unlikely]]
+                    if (!gatewayRequest) [[unlikely]]
                     {
                         // TODO : Handle failure to get user details
                         std::cout << "Couldn't acquire while trying to "
-                                     "process a cdp response.\n\n";
+                                     "process an account service response.\n\n";
                     }
 
-                    gwRequest->RequestType = 'A';
-                    gwRequest->ClientId = response.ClientId;
-                    gwRequest->ClientFd = response.ClientFd;
-                    gwRequest->Key.fill('R');
-                    gwRequest->GatewayId = GatewayId;
+                    gatewayRequest->RequestType = 'A';
+                    gatewayRequest->ClientId = response.ClientId;
+                    gatewayRequest->ClientFd = response.ClientFd;
+                    gatewayRequest->Key.fill('R');
+                    gatewayRequest->GatewayId = GatewayId;
 
-                    bool enqueued = OutgoingReq.try_enqueue(gwRequest);
+                    bool enqueued = OutgoingReq.try_enqueue(gatewayRequest);
 
                     if (!enqueued) [[unlikely]]
                     {
                         // TODO : Handle failure again
                         std::cout << "Couldn't push while trying to "
-                                     "process a cdp response.\n\n";
+                                     "process an account service response.\n\n";
                     }
 
                     std::cerr << "Response sequence id is stale: "
@@ -273,89 +274,6 @@ namespace naoto::order_gateway
 
                 ClientsFd.AddNode(response.ClientId, response.ClientFd);
             }
-        }
-
-        void Handle(std::array<ResponseBatch *, BatchSize> &responseBatch,
-                    size_t batchSize) noexcept
-        {
-            for (size_t i = 0; i < batchSize; ++i)
-            {
-                // TODO : this seems broken but likely won't be used
-                ResponseBatch *response = responseBatch[i];
-
-                for (size_t j = 0; j < response->Size; ++j)
-                {
-                    if (UpdatesBuffer[response->SequenceId & (BufferSize - 1)]
-                            != response->SequenceId
-                        && response.SequenceId != LastSeq) [[unlikely]]
-                    {
-                        // Resend the request
-                        std::cerr << "Response sequence id is stale.\n\n";
-                        continue;
-                    }
-
-                    // Iterate buffer to apply missed delta
-                    uint64_t seqId = response->SequenceId + 1;
-
-                    while (seqId <= LastSeq)
-                    {
-                        OrderStateReport &curReport =
-                            UpdatesBuffer[seqId++ & (BufferSize - 1)];
-
-                        if (curReport.ClientId == response->ClientId)
-                        {
-                            for (size_t k = 0; k < MaxPositions; ++k)
-                            {
-                                if (response->AssetId[k]
-                                    == curReport.BoughtAssetId)
-                                {
-                                    response->Confirmed[k] +=
-                                        curReport.BoughtDelta;
-                                }
-                                else if (response->AssetId[k]
-                                         == curReport.SoldAssetId)
-                                {
-                                    response->Confirmed += curReport.SoldDelta;
-                                    response->Attempt[k] += curReport.SoldDelta;
-                                }
-                            }
-                        }
-                    }
-
-                    std::cout << "Got a connection confirmation:\n"
-                              << "- Client Id: " << response->ClientId
-                              << "\n\n";
-
-                    response->log();
-
-                    uint32_t curClientId =
-                        States.GetClientId(response.ClientFd);
-
-                    if (curClientId != response.clientId)
-                    {
-                        ClientsFd.DeleteNode(States.GetClient);
-                        ClientsFd.AddNode(response.ClientId, response.ClientFd);
-                    }
-
-                    States.SetClientState(response);
-                }
-            }
-
-            for (size_t i = 0; i < batchSize; ++i)
-            {
-                uint32_t clientFd = responseBatch[i]->ClientFd;
-
-                if (Touched.contains(clientFd))
-                {
-                    continue;
-                }
-
-                States.FlushTripleBuffer(clientFd);
-
-                Touched.insert(clientFd);
-            }
-
-            Touched.clear();
         }
 
         void TryConsumeDisconnects(void) noexcept

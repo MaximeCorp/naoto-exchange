@@ -6,7 +6,7 @@
 #include <consumer.hpp>
 #include <order_state_report.hpp>
 
-namespace naoto::client_details_provider
+namespace naoto::account_service
 {
     template <size_t MaxPositions, size_t BatchSize>
     class ClientStatesWriter
@@ -103,4 +103,4 @@ namespace naoto::client_details_provider
             }
         }
     };
-} // namespace naoto::client_details_provider
+} // namespace naoto::account_service

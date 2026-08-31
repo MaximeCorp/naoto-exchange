@@ -66,7 +66,7 @@ namespace naoto
         std::vector<ObjectBuffer<T>> Buffers;
         [[no_unique_address]] FirstMessageBuffer FirstMessage;
         StoragePool<ObjectBatch<T, BatchSize>> &Pool;
-        alignas(64) ObjectQueue &Orders;
+        alignas(64) ObjectQueue &OutgoingBatches;
 
         inline void setNonBlocking(const int fd) noexcept
         {
@@ -149,7 +149,15 @@ namespace naoto
 
                         if (nread > 0)
                         {
-                            buffer.addBytes((T *)&firstMessage, nread);
+                            if (!buffer.addBytes((T *)&firstMessage, nread))
+                                [[unlikely]]
+                            {
+                                std::cerr << "First-message buffer overflow "
+                                             "on FD "
+                                          << curFd << ", dropping connection\n";
+                                removeClient(curFd);
+                                return;
+                            }
                         }
                         else if (nread == 0)
                         {
@@ -194,7 +202,7 @@ namespace naoto
                 {
                     // TODO: Handle drained pool
                     // Send error message to client (don't forget to give
-                    // context: which order was refused)
+                    // context: which item was refused)
                     break;
                 }
 
@@ -235,9 +243,15 @@ namespace naoto
                 batch->Size = batchSize;
 
                 buffer.clearBuffer();
-                buffer.addBytes(batch->Data.data() + sizeof(T) * batchSize,
-                                bufferSize); // Double check if sizeof(T) *
-                                             // batchSize is right
+
+                if (!buffer.addBytes(batch->Data.data()
+                                          + sizeof(T) * batchSize,
+                                      bufferSize)) [[unlikely]]
+                {
+                    std::cerr << "Unexpected buffer overflow while storing "
+                                 "leftover bytes on FD "
+                              << curFd << "\n";
+                }
 
                 if constexpr (HasBatchHandleServer<DerivedServer, T, BatchSize>)
                 {
@@ -245,7 +259,7 @@ namespace naoto
                                                                     curFd);
                 }
 
-                if (!Orders.try_enqueue(batch)) [[unlikely]]
+                if (!OutgoingBatches.try_enqueue(batch)) [[unlikely]]
                 {
                     // TODO : think about what to do in this case
                     if (Pool.localRelease(batch)) [[unlikely]]
@@ -313,12 +327,12 @@ namespace naoto
     public:
         EpollServer(const int port, const int maxEvents, const int maxPending,
                     StoragePool<ObjectBatch<T, BatchSize>> &pool,
-                    ObjectQueue &orders, const size_t nb_fds)
+                    ObjectQueue &outgoingBatches, const size_t nb_fds)
             : Port(port)
             , MaxEvents(maxEvents)
             , MaxPending(maxPending)
             , Pool(pool)
-            , Orders(orders)
+            , OutgoingBatches(outgoingBatches)
         {
             Buffers.resize(nb_fds);
             if constexpr (HasFirstMessageHandle<DerivedServer, InitMessage>)
@@ -331,12 +345,12 @@ namespace naoto
 
         EpollServer(const int port, const int maxEvents, const int maxPending,
                     StoragePool<ObjectBatch<T, BatchSize>> &pool,
-                    ObjectQueue &orders)
+                    ObjectQueue &outgoingBatches)
             : Port(port)
             , MaxEvents(maxEvents)
             , MaxPending(maxPending)
             , Pool(pool)
-            , Orders(orders)
+            , OutgoingBatches(outgoingBatches)
         {
             Buffers.resize(FileDescriptorsOps::getMaxFd());
             if constexpr (HasFirstMessageHandle<DerivedServer, InitMessage>)

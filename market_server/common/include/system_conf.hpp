@@ -11,8 +11,8 @@ namespace naoto
     inline constexpr size_t MTU = 1500;
     inline constexpr size_t MaxTradeClient = 1000; // Expected max
 
-    inline constexpr size_t MarketUpdateReceiveBufferSize = 1024;
-    inline constexpr size_t MarketUpdateReceiveBatchSize = 16;
+    inline constexpr size_t TradeReportReceiveBufferSize = 1024;
+    inline constexpr size_t TradeReportReceiveBatchSize = 16;
     inline constexpr size_t ClientStatesSwapBatchSize = 16;
 
     inline constexpr size_t MeEpollReceiveBatchSize = 16;
@@ -23,21 +23,21 @@ namespace naoto
     inline constexpr size_t MeOrderStateBatchSize = 16;
     inline constexpr size_t MeOrderBookUpdateBatchSize = 16;
 
-    inline constexpr size_t CdpEpollReceiveBatchSize = 16;
-    inline constexpr size_t CdpResponsesResendBufferSize = 128;
+    inline constexpr size_t AccountEpollReceiveBatchSize = 16;
+    inline constexpr size_t AccountResponsesResendBufferSize = 128;
 
-    inline constexpr size_t GwMaxClients = 128;
-    inline constexpr size_t GwEpollReceiveBatchSize = 16;
-    inline constexpr size_t GwClientRequestResponseBatchSize = 16;
-    inline constexpr size_t GwResendBufferSize = 32;
-    inline constexpr size_t GwUpdateBufferSize = 1024;
+    inline constexpr size_t GatewayMaxClients = 128;
+    inline constexpr size_t GatewayEpollReceiveBatchSize = 16;
+    inline constexpr size_t GatewayClientRequestResponseBatchSize = 16;
+    inline constexpr size_t GatewayResendBufferSize = 32;
+    inline constexpr size_t GatewayUpdateBufferSize = 1024;
 
-    inline constexpr size_t CdpEpollCore = 12;
-    inline constexpr size_t CdpKeeperCore = 12;
-    inline constexpr size_t CdpSenderCore = 12;
-    inline constexpr size_t CdpWriterCore = 12;
-    inline constexpr size_t CdpMarketUpdateReceiveBufferSize = 1024;
-    inline constexpr size_t CdpMarketUpdateReceiveBatchSize = 16;
-    inline constexpr size_t CdpResponseBatchSize = 16;
+    inline constexpr size_t AccountEpollCore = 12;
+    inline constexpr size_t AccountProcessorCore = 12;
+    inline constexpr size_t AccountSenderCore = 12;
+    inline constexpr size_t AccountWriterCore = 12;
+    inline constexpr size_t AccountTradeReportReceiveBufferSize = 1024;
+    inline constexpr size_t AccountTradeReportReceiveBatchSize = 16;
+    inline constexpr size_t AccountResponseBatchSize = 16;
 
 } // namespace naoto

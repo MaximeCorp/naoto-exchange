@@ -1,38 +1,39 @@
 #pragma once
 
-#include <client_request_response.hpp>
+#include <client_account_snapshot.hpp>
 #include <client_states.hpp>
-#include <gateway_request.hpp>
-#include <gateway_writer.hpp>
-#include <message_container.hpp>
+#include <routed_auth_request.hpp>
+#include <gateway_response_dispatcher.hpp>
+#include <routed_message.hpp>
 #include <object_batch.hpp>
 #include <openssl/sha.h>
 #include <readerwritercircularbuffer.h>
 #include <storage_pool.hpp>
 #include <system_conf.hpp>
 
-namespace naoto::client_details_provider
+namespace naoto::account_service
 {
 
-    class ClientStatesKeeper
+    class ClientRequestProcessor
     {
         using MessageQueue = moodycamel::BlockingReaderWriterCircularBuffer<
-            ObjectBatch<GatewayRequest, CdpEpollReceiveBatchSize> *>;
+            ObjectBatch<RoutedAuthRequest, AccountEpollReceiveBatchSize> *>;
         using ResponsesQueue = moodycamel::BlockingReaderWriterCircularBuffer<
-            MessageContainer<ClientRequestResponse<MaxPositions>>>;
+            RoutedMessage<ClientAccountSnapshot<MaxPositions>>>;
 
     private:
         ClientStates<MaxPositions> &States;
         MessageQueue &IncomingMessages;
         ResponsesQueue &ResponsesSend;
-        StoragePool<ObjectBatch<GatewayRequest, CdpEpollReceiveBatchSize>>
+        StoragePool<
+            ObjectBatch<RoutedAuthRequest, AccountEpollReceiveBatchSize>>
             &MessagesPool;
-        StoragePool<ClientRequestResponse<MaxPositions>> &ResponsesPool;
+        StoragePool<ClientAccountSnapshot<MaxPositions>> &ResponsesPool;
 
         void ProcessMessage(void)
         {
-            ObjectBatch<GatewayRequest, CdpEpollReceiveBatchSize> *curBatch =
-                nullptr;
+            ObjectBatch<RoutedAuthRequest, AccountEpollReceiveBatchSize>
+                *curBatch = nullptr;
 
             if (IncomingMessages.try_dequeue(curBatch)) [[likely]]
             {
@@ -42,7 +43,7 @@ namespace naoto::client_details_provider
 
                 for (size_t i = 0; i < curBatch->getSize(); ++i)
                 {
-                    const GatewayRequest &curMessage = (*curBatch)[i];
+                    const RoutedAuthRequest &curMessage = (*curBatch)[i];
 
                     // Might do that later to avoid unnecessary memory accesses
                     uint16_t gatewayId = curMessage.GatewayId;
@@ -70,15 +71,15 @@ namespace naoto::client_details_provider
                             && gatewayId != 10)
                         {
                             // Client connection denied
-                            ClientRequestResponse<MaxPositions> *curResponse =
+                            ClientAccountSnapshot<MaxPositions> *curResponse =
                                 ResponsesPool.acquire();
                             curResponse->Clear();
                             curResponse->Status = 'R';
                             curResponse->ClientId = clientId;
                             curResponse->ClientFd = curMessage.ClientFd;
 
-                            MessageContainer<
-                                ClientRequestResponse<MaxPositions>>
+                            RoutedMessage<
+                                ClientAccountSnapshot<MaxPositions>>
                                 toPush;
 
                             toPush.GatewayId = gatewayId;
@@ -94,15 +95,15 @@ namespace naoto::client_details_provider
                         if (!curClient.CheckKey(key))
                         {
                             // Send refuse response: wrong credentials
-                            ClientRequestResponse<MaxPositions> *curResponse =
+                            ClientAccountSnapshot<MaxPositions> *curResponse =
                                 ResponsesPool.acquire();
                             curResponse->Clear();
                             curResponse->Status = 'C';
                             curResponse->ClientId = clientId;
                             curResponse->ClientFd = curMessage.ClientFd;
 
-                            MessageContainer<
-                                ClientRequestResponse<MaxPositions>>
+                            RoutedMessage<
+                                ClientAccountSnapshot<MaxPositions>>
                                 toPush;
 
                             toPush.GatewayId = gatewayId;
@@ -116,7 +117,7 @@ namespace naoto::client_details_provider
                         }
 
                         // Send details
-                        ClientRequestResponse<MaxPositions> *curResponse =
+                        ClientAccountSnapshot<MaxPositions> *curResponse =
                             ResponsesPool.acquire();
                         curResponse->Status = 'A';
                         curResponse->SequenceId = 0; // Handle sequence ID later
@@ -126,7 +127,7 @@ namespace naoto::client_details_provider
                         curResponse->Confirmed = curClient.Confirmed;
                         curResponse->Attempt = curClient.Attempt;
 
-                        MessageContainer<ClientRequestResponse<MaxPositions>>
+                        RoutedMessage<ClientAccountSnapshot<MaxPositions>>
                             toPush;
 
                         toPush.GatewayId = gatewayId;
@@ -160,12 +161,13 @@ namespace naoto::client_details_provider
         }
 
     public:
-        ClientStatesKeeper(
+        ClientRequestProcessor(
             ClientStates<MaxPositions> &states, MessageQueue &incomingMessages,
             ResponsesQueue &responsesSend,
-            StoragePool<ObjectBatch<GatewayRequest, CdpEpollReceiveBatchSize>>
+            StoragePool<ObjectBatch<RoutedAuthRequest,
+                                   AccountEpollReceiveBatchSize>>
                 &messagesPool,
-            StoragePool<ClientRequestResponse<MaxPositions>> &responsesPool)
+            StoragePool<ClientAccountSnapshot<MaxPositions>> &responsesPool)
             : States(states)
             , IncomingMessages(incomingMessages)
             , ResponsesSend(responsesSend)
@@ -181,4 +183,4 @@ namespace naoto::client_details_provider
             }
         }
     };
-} // namespace naoto::client_details_provider
+} // namespace naoto::account_service

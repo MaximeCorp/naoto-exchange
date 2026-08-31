@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <iostream>
 #include <order_node.hpp>
-#include <unsafe_storage_pool.hpp>
+#include <single_threaded_storage_pool.hpp>
 
 namespace naoto::matching_engine
 {
@@ -117,7 +117,8 @@ namespace naoto::matching_engine
             return res;
         }
 
-        void ClearPriceLevel(UnsafeStoragePool<OrderNode> &orderNodePool)
+        void ClearPriceLevel(
+            SingleThreadedStoragePool<OrderNode> &orderNodePool)
         {
             Size = 0;
             TotalAmount = 0;

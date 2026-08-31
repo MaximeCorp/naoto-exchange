@@ -11,7 +11,7 @@ LDFLAGS = -letcd-cpp-api -lgrpc++ -lgrpc -lprotobuf -lcpprest -lssl -lcrypto -lz
 
 SRC=$(shell find src -type f -name '*.cpp')
 OBJ=$(patsubst %.cpp,%.o,$(SRC))
-BIN=SocketGateway
+BIN=OrderGatewayService
 
 all: $(BIN)
 

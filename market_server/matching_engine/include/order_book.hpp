@@ -5,7 +5,7 @@
 #include <order_node.hpp>
 #include <price_level.hpp>
 #include <skip_list.hpp>
-#include <unsafe_storage_pool.hpp>
+#include <single_threaded_storage_pool.hpp>
 
 namespace naoto::matching_engine
 {
@@ -17,13 +17,13 @@ namespace naoto::matching_engine
         FlatHashMap<int64_t, PriceLevel *, FHMSize> FastMap;
         SkipList<int64_t, PriceLevel *, SkipListMaxLevel, Compare>
             BestPricesMap;
-        UnsafeStoragePool<OrderNode> &OrderNodePool;
-        UnsafeStoragePool<PriceLevel> &PriceLevelPool;
+        SingleThreadedStoragePool<OrderNode> &OrderNodePool;
+        SingleThreadedStoragePool<PriceLevel> &PriceLevelPool;
 
     public:
         OrderBook(const size_t skipListNodesPoolSize,
-                  UnsafeStoragePool<OrderNode> &orderNodePool,
-                  UnsafeStoragePool<PriceLevel> &priceLevelPool)
+                  SingleThreadedStoragePool<OrderNode> &orderNodePool,
+                  SingleThreadedStoragePool<PriceLevel> &priceLevelPool)
             : BestPricesMap(skipListNodesPoolSize)
             , OrderNodePool(orderNodePool)
             , PriceLevelPool(priceLevelPool)

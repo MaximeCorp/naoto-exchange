@@ -20,17 +20,18 @@ namespace naoto
             BufferSize = 0;
         }
 
-        // Size should be modulo sizeof(Order)
-        void addBytes(void *ptr, size_t size) noexcept
+        // size should be a multiple of sizeof(T)
+        [[nodiscard]] bool addBytes(void *ptr, size_t size) noexcept
         {
             if (BufferSize + size > sizeof(T)) [[unlikely]]
             {
-                // Might have to terminate
-                return;
+                return false;
             }
 
             std::memcpy(Buffer.data() + BufferSize, ptr, size);
             BufferSize += size;
+
+            return true;
         }
 
         // Caller's responsability to check buffer size

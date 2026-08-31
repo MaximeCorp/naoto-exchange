@@ -5,7 +5,7 @@
 #include <cstdlib>
 #include <limits>
 #include <queue>
-#include <unsafe_storage_pool.hpp>
+#include <single_threaded_storage_pool.hpp>
 
 namespace naoto
 {
@@ -37,7 +37,7 @@ namespace naoto
         Compare comp;
         SkipNode *Head;
         SkipNode *Tail;
-        UnsafeStoragePool<SkipNode> NodesPool;
+        SingleThreadedStoragePool<SkipNode> NodesPool;
         uint64_t State;
         size_t CurMax;
 

@@ -2,17 +2,17 @@
 
 #include <cstdint>
 
-namespace naoto::client_details_provider
+namespace naoto::account_service
 {
     template <typename T>
-    struct MessageContainer
+    struct RoutedMessage
     {
         uint16_t GatewayId;
         T *Message;
 
-        MessageContainer(void) noexcept
+        RoutedMessage(void) noexcept
             : GatewayId(0)
             , Message(nullptr)
         {}
     };
-} // namespace naoto::client_details_provider
+} // namespace naoto::account_service

@@ -1,11 +1,11 @@
-#include <client_details_provider.hpp>
+#include <account_service.hpp>
 #include <client_state.hpp>
 
 #define IPV4(a, b, c, d)                                                       \
     (((uint32_t)(a) << 24) | ((uint32_t)(b) << 16) | ((uint32_t)(c) << 8)      \
      | (uint32_t)(d))
 
-using namespace naoto::client_details_provider;
+using namespace naoto::account_service;
 
 int main(int argc, char **argv)
 {
@@ -63,9 +63,9 @@ int main(int argc, char **argv)
     clients.push_back(client2);
     clients.push_back(client3);
 
-    ClientDetailsProvider<126, 16, 128, 32> test(
+    AccountService<126, 16, 128, 32> test(
         argc, argv, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 8082, 16, 16, 0,
         256, 1024, RTE_IPV4(239, 1, 1, 1), 30001, clients);
 
-    test.StartClientDetailsProvider();
+    test.StartAccountService();
 }

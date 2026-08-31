@@ -1,35 +1,35 @@
 #pragma once
 
-#include <client_request_response.hpp>
+#include <client_account_snapshot.hpp>
 #include <cstring>
-#include <fd_gen.hpp>
-#include <message_container.hpp>
+#include <versioned_fd.hpp>
+#include <routed_message.hpp>
 #include <object_batch.hpp>
 #include <readerwritercircularbuffer.h>
 #include <storage_pool.hpp>
 #include <sys/socket.h>
 #include <type_traits>
 
-namespace naoto::client_details_provider
+namespace naoto::account_service
 {
     template <size_t MaxPositions, size_t BatchesSize, size_t MaxGateways,
               size_t ResendBufferSize>
-    class GatewayWriter
+    class GatewayResponseDispatcher
     {
         // Might be worth batching
         using ResponsesQueue = moodycamel::BlockingReaderWriterCircularBuffer<
-            MessageContainer<ClientRequestResponse<MaxPositions>>>;
+            RoutedMessage<ClientAccountSnapshot<MaxPositions>>>;
         // using UpdatesQueue = moodycamel::BlockingReaderWriterCircularBuffer<
-        // MessageContainer<ClientUpdate>>;
+        // RoutedMessage<ClientUpdate>>;
 
     private:
         ResponsesQueue &Responses;
         // UpdatesQueue &Updates;
-        StoragePool<ClientRequestResponse<MaxPositions>> &ResponsesPool;
+        StoragePool<ClientAccountSnapshot<MaxPositions>> &ResponsesPool;
         // StoragePool<ClientUpdate> &UpdatesPool;
-        std::array<FdGen, MaxGateways> &GatewayFd; // Consumer
+        std::array<VersionedFd, MaxGateways> &GatewayFd; // Consumer
 
-        std::array<MessageContainer<ClientRequestResponse<MaxPositions>>,
+        std::array<RoutedMessage<ClientAccountSnapshot<MaxPositions>>,
                    ResendBufferSize>
             ResponsesResend;
         size_t ResponsesResendSize;
@@ -39,14 +39,14 @@ namespace naoto::client_details_provider
                                                // order of messages matters
         {
             if constexpr (std::is_same_v<T,
-                                         ClientRequestResponse<MaxPositions>>)
+                                         ClientAccountSnapshot<MaxPositions>>)
             {
                 while (ResponsesResendSize)
                 {
-                    MessageContainer<ClientRequestResponse<MaxPositions>>
+                    RoutedMessage<ClientAccountSnapshot<MaxPositions>>
                         &curResponse = ResponsesResend[--ResponsesResendSize];
 
-                    SendMessage<MessageContainer>(curResponse.Message,
+                    SendMessage<RoutedMessage>(curResponse.Message,
                                                   curResponse.GatewayId);
                 }
             }
@@ -55,7 +55,7 @@ namespace naoto::client_details_provider
         template <typename T>
         void SendMessage(const T *curMessage, size_t idx) noexcept
         {
-            FdGen &curSlot = GatewayFd[idx];
+            VersionedFd &curSlot = GatewayFd[idx];
             uint64_t curVal =
                 curSlot.load(std::memory_order_relaxed); // Relaxed because
                                                          // memory dependancy
@@ -63,7 +63,7 @@ namespace naoto::client_details_provider
 
             std::cout << "curVal is " << (int32_t)curVal << "\n";
 
-            int32_t curFd = FdGen::Fd(curVal);
+            int32_t curFd = VersionedFd::Fd(curVal);
 
             if (curFd == -1) [[unlikely]]
             {
@@ -86,7 +86,7 @@ namespace naoto::client_details_provider
                 if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
                 {
                     if constexpr (std::is_same_v<
-                                      T, ClientRequestResponse<MaxPositions>>)
+                                      T, ClientAccountSnapshot<MaxPositions>>)
                     {
                         ResponsesResend[ResponsesResendSize].GatewayId = idx;
                         ResponsesResend[ResponsesResendSize++].Message =
@@ -116,7 +116,7 @@ namespace naoto::client_details_provider
                 // For later : push to the array / vector of
                 // messages to send again
                 if constexpr (std::is_same_v<
-                                  T, ClientRequestResponse<MaxPositions>>)
+                                  T, ClientAccountSnapshot<MaxPositions>>)
                 {
                     ResponsesResend[ResponsesResendSize].GatewayId = idx;
                     ResponsesResend[ResponsesResendSize++].Message =
@@ -135,7 +135,7 @@ namespace naoto::client_details_provider
 
             // Release the message if no sending error
             if constexpr (std::is_same_v<T,
-                                         ClientRequestResponse<MaxPositions>>)
+                                         ClientAccountSnapshot<MaxPositions>>)
             {
                 bool released = ResponsesPool.release((T *)curMessage);
 
@@ -164,7 +164,7 @@ namespace naoto::client_details_provider
             // TODO : decide if this batching is useful
             for (size_t i = 0; i < BatchesSize; ++i)
             {
-                MessageContainer<ClientRequestResponse<MaxPositions>>
+                RoutedMessage<ClientAccountSnapshot<MaxPositions>>
                     curResponse;
 
                 if (!Responses.try_dequeue(curResponse)) [[unlikely]]
@@ -172,14 +172,14 @@ namespace naoto::client_details_provider
                     break;
                 }
 
-                SendMessage<ClientRequestResponse<MaxPositions>>(
+                SendMessage<ClientAccountSnapshot<MaxPositions>>(
                     curResponse.Message, curResponse.GatewayId);
             }
 
             /*
             for (size_t i = 0; i < BatchesSize; ++i)
             {
-                const MessageContainer<ClientUpdate> curUpdate;
+                const RoutedMessage<ClientUpdate> curUpdate;
 
                 if (!Updates.try_dequeue(curUpdate)) [[unlikely]]
                 {
@@ -193,11 +193,11 @@ namespace naoto::client_details_provider
         }
 
     public:
-        GatewayWriter(
+        GatewayResponseDispatcher(
             ResponsesQueue &responses, // UpdatesQueue &updates,
-            StoragePool<ClientRequestResponse<MaxPositions>> &responsesPool, //,
+            StoragePool<ClientAccountSnapshot<MaxPositions>> &responsesPool, //,
             // StoragePool<ClientUpdate> &updatesPool,
-            std::array<FdGen, MaxGateways> &gatewayFd)
+            std::array<VersionedFd, MaxGateways> &gatewayFd)
             : Responses(responses)
             //, Updates(updates)
             , ResponsesPool(responsesPool)
@@ -214,4 +214,4 @@ namespace naoto::client_details_provider
             }
         }
     };
-} // namespace naoto::client_details_provider
+} // namespace naoto::account_service

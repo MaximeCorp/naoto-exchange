@@ -15,10 +15,10 @@
 #define EMITTERS 0
 #define RECEIVERS 1
 
-namespace naoto::client_details_provider
+namespace naoto::order_gateway
 {
     template <size_t RingBufferSize, size_t BatchSize = 0>
-    class MarketUpdates
+    class TradeReportReceiver
     {
         using ReportQueue =
             moodycamel::BlockingReaderWriterCircularBuffer<OrderStateReport *>;
@@ -30,7 +30,8 @@ namespace naoto::client_details_provider
 
     public:
         // Must be called on a dedicated thread
-        MarketUpdates(int argc, char **argv, ReportQueue &incomingOrderStates,
+        TradeReportReceiver(int argc, char **argv,
+                      ReportQueue &incomingOrderStates,
                       StoragePool<OrderStateReport> &orderStatesPool,
                       const uint16_t portId, const uint16_t nbRxQueueSlots,
                       const size_t poolSize, const uint32_t dstIp,
@@ -84,4 +85,4 @@ namespace naoto::client_details_provider
             rte_eal_cleanup();
         }
     };
-} // namespace naoto::client_details_provider
+} // namespace naoto::order_gateway

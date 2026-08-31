@@ -2,7 +2,7 @@
 
 #include <atomic>
 #include <client_delta.hpp>
-#include <client_request_response.hpp>
+#include <client_account_snapshot.hpp>
 #include <client_state.hpp>
 #include <readerwritercircularbuffer.h>
 #include <vector>
@@ -122,7 +122,7 @@ namespace naoto::order_gateway
 
         // Producer methods
         void SetClientState(
-            const ClientRequestResponse<MaxPositions> *response) noexcept
+            const ClientAccountSnapshot<MaxPositions> *response) noexcept
         {
             const uint32_t clientFd = response->ClientFd;
 

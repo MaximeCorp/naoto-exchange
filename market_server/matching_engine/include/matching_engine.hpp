@@ -4,7 +4,7 @@
 #include <cstdlib>
 #include <etcd/KeepAlive.hpp>
 #include <etcd/SyncClient.hpp>
-#include <market_updates.hpp>
+#include <market_data_emitters.hpp>
 #include <nlohmann/json.hpp>
 #include <order_book_update.hpp>
 #include <order_ingress_server.hpp>
@@ -36,7 +36,7 @@ namespace naoto::matching_engine
         StoragePool<OrderBookUpdate> OrderBookUpdatesPool;
         BidAsk<FHMSize, SkipListMaxLevel, BatchSize, OrderMapSize> OrderBook;
         OrderIngressServer<BatchSize> Server;
-        MarketUpdates<BatchSize> MarketUpdatesSender;
+        MarketDataEmitters<BatchSize> Emitters;
 
         std::shared_ptr<etcd::KeepAlive> KeepAlive;
         std::unique_ptr<etcd::SyncClient> EtcdClient;
@@ -107,7 +107,7 @@ namespace naoto::matching_engine
                         skipListNodesPoolSize)
             , Server(port, maxEvents, maxPending, OrdersPool, IncomingOrders,
                      nb_fds)
-            , MarketUpdatesSender(
+            , Emitters(
                   argc, argv, OutgoingOrders, OutgoingBook, OrderStatesPool,
                   OrderBookUpdatesPool, portId, nbTxQueueSlots, poolSize, srcIp,
                   srcPort, dstOrderIp, dstOrderPort, dstBookIp, dstBookPort)
@@ -144,7 +144,7 @@ namespace naoto::matching_engine
                                "MatchineEngine");
             pthread_setname_np(serverThread.native_handle(), "EpollServer");
 
-            MarketUpdatesSender.StartEmittersLoop();
+            Emitters.StartEmittersLoop();
 
             matchingThread.join();
             serverThread.join();

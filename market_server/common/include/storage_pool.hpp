@@ -1,7 +1,6 @@
 #pragma once
 
 #include <iostream>
-#include <order.hpp>
 #include <readerwritercircularbuffer.h>
 #include <stdexcept>
 #include <vector>
@@ -14,7 +13,7 @@ namespace naoto
         using FreeQueue = moodycamel::BlockingReaderWriterCircularBuffer<T *>;
 
     private:
-        std::vector<T> OrderStorage;
+        std::vector<T> Storage;
 
         const size_t Capacity;
         FreeQueue Free;
@@ -33,16 +32,16 @@ namespace naoto
                     "Pool size must be greater than zero.");
             }
 
-            std::cout << "Initializing Order Pool with capacity: " << Capacity
-                      << " orders.\n";
+            std::cout << "Initializing storage pool with capacity: "
+                      << Capacity << " objects.\n";
 
-            OrderStorage.resize(Capacity);
+            Storage.resize(Capacity);
 
             LocalReuseBuffer.resize(Capacity);
 
             for (size_t i = 0; i < Capacity; ++i)
             {
-                T *ptr = &OrderStorage[i];
+                T *ptr = &Storage[i];
 
                 if (!Free.try_enqueue(ptr))
                 {

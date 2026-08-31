@@ -6,7 +6,7 @@
 #include <readerwritercircularbuffer.h>
 #include <vector>
 
-namespace naoto::client_details_provider
+namespace naoto::account_service
 {
     template <size_t MaxPositions>
     class ClientStates // Data coherence not guaranteed, pls update the right
@@ -191,4 +191,4 @@ namespace naoto::client_details_provider
             newSeqId = curSeqId;
         }
     };
-} // namespace naoto::client_details_provider
+} // namespace naoto::account_service

@@ -1,16 +1,16 @@
 #pragma once
 
-#include <client_details_provider_server.hpp>
-#include <client_request_response.hpp>
+#include <gateway_epoll_server.hpp>
+#include <client_account_snapshot.hpp>
 #include <client_state.hpp>
 #include <client_states.hpp>
-#include <client_states_keeper.hpp>
+#include <client_request_processor.hpp>
 #include <client_states_writer.hpp>
 #include <etcd/KeepAlive.hpp>
 #include <etcd/SyncClient.hpp>
-#include <gateway_request.hpp>
-#include <gateway_writer.hpp>
-#include <market_updates.hpp>
+#include <routed_auth_request.hpp>
+#include <gateway_response_dispatcher.hpp>
+#include <trade_report_receiver.hpp>
 #include <nlohmann/json.hpp>
 #include <order_state_report.hpp>
 #include <readerwritercircularbuffer.h>
@@ -18,36 +18,38 @@
 #include <system_conf.hpp>
 #include <thread>
 
-namespace naoto::client_details_provider
+namespace naoto::account_service
 {
-    class ClientDetailsProvider
+    class AccountService
     {
         using RequestQueue = moodycamel::BlockingReaderWriterCircularBuffer<
-            ObjectBatch<GatewayRequest, CdpEpollReceiveBatchSize> *>;
+            ObjectBatch<RoutedAuthRequest, AccountEpollReceiveBatchSize> *>;
         using ReportQueue =
             moodycamel::BlockingReaderWriterCircularBuffer<OrderStateReport *>;
         using ResponseQueue = moodycamel::BlockingReaderWriterCircularBuffer<
-            MessageContainer<ClientRequestResponse<MaxPositions>>>;
+            RoutedMessage<ClientAccountSnapshot<MaxPositions>>>;
 
     private:
         ClientStates<MaxPositions> States;
-        StoragePool<ObjectBatch<GatewayRequest, CdpEpollReceiveBatchSize>>
+        StoragePool<
+            ObjectBatch<RoutedAuthRequest, AccountEpollReceiveBatchSize>>
             RequestPool;
         StoragePool<OrderStateReport> ReportPool;
-        StoragePool<ClientRequestResponse<MaxPositions>> ResponsePool;
+        StoragePool<ClientAccountSnapshot<MaxPositions>> ResponsePool;
         RequestQueue Requests;
         ReportQueue Reports;
         ResponseQueue Responses;
-        std::array<FdGen, MaxGateways> GatewayFd;
-        ClientDetailsProviderServer<CdpEpollReceiveBatchSize, MaxGateways>
+        std::array<VersionedFd, MaxGateways> GatewayFd;
+        GatewayEpollServer<AccountEpollReceiveBatchSize, MaxGateways>
             Server;
-        ClientStatesKeeper<MaxPositions, CdpEpollReceiveBatchSize> Keeper;
-        GatewayWriter<MaxPositions, CdpResponseBatchSize, MaxGateways,
-                      CdpResponsesResendBufferSize>
-            MessageWriter;
+        ClientRequestProcessor<MaxPositions, AccountEpollReceiveBatchSize>
+            Processor;
+        GatewayResponseDispatcher<MaxPositions, AccountResponseBatchSize,
+                                  MaxGateways, AccountResponsesResendBufferSize>
+            Dispatcher;
         ClientStatesWriter<MaxPositions, ClientStatesSwapBatchSize> Writer;
-        MarketUpdates<MarketUpdateReceiveBufferSize,
-                      MarketUpdateReceiveBatchSize>
+        TradeReportReceiver<TradeReportReceiveBufferSize,
+                      TradeReportReceiveBatchSize>
             ReportReceiver;
 
         std::shared_ptr<etcd::KeepAlive> KeepAlive;
@@ -84,7 +86,7 @@ namespace naoto::client_details_provider
             KeepAlive = EtcdClient->leasekeepalive(10);
             int64_t lid = KeepAlive->Lease();
 
-            std::string key = std::string("/client-details-provider/0");
+            std::string key = std::string("/account-service/0");
 
             EtcdClient->set(
                 key,
@@ -94,7 +96,7 @@ namespace naoto::client_details_provider
         }
 
     public:
-        ClientDetailsProvider(int argc, char **argv, size_t maxClients,
+        AccountService(int argc, char **argv, size_t maxClients,
                               size_t requestPoolSize, size_t reportPoolSize,
                               size_t responsePoolSize, size_t requestQueueSize,
                               size_t reportQueueSize, size_t responseQueueSize,
@@ -112,14 +114,14 @@ namespace naoto::client_details_provider
             , Responses(MaxClients)
             , Server(serverPort, maxEvents, maxPending, RequestPool, Requests,
                      GatewayFd)
-            , Keeper(States, Requests, Responses, RequestPool, ResponsePool)
-            , MessageWriter(Responses, ResponsePool, GatewayFd)
+            , Processor(States, Requests, Responses, RequestPool, ResponsePool)
+            , Dispatcher(Responses, ResponsePool, GatewayFd)
             , Writer(States, Reports, ReportPool)
             , ReportReceiver(argc, argv, Reports, ReportPool, portId,
                              nbRxQueueSlots, dpdkPoolSize, dstIp, dstPort)
         {}
 
-        ClientDetailsProvider(int argc, char **argv, size_t maxClients,
+        AccountService(int argc, char **argv, size_t maxClients,
                               size_t requestPoolSize, size_t reportPoolSize,
                               size_t responsePoolSize, size_t requestQueueSize,
                               size_t reportQueueSize, size_t responseQueueSize,
@@ -138,14 +140,14 @@ namespace naoto::client_details_provider
             , Responses(MaxClients)
             , Server(serverPort, maxEvents, maxPending, RequestPool, Requests,
                      GatewayFd)
-            , Keeper(States, Requests, Responses, RequestPool, ResponsePool)
-            , MessageWriter(Responses, ResponsePool, GatewayFd)
+            , Processor(States, Requests, Responses, RequestPool, ResponsePool)
+            , Dispatcher(Responses, ResponsePool, GatewayFd)
             , Writer(States, Reports, ReportPool)
             , ReportReceiver(argc, argv, Reports, ReportPool, portId,
                              nbRxQueueSlots, dpdkPoolSize, dstIp, dstPort)
         {}
 
-        ~ClientDetailsProvider()
+        ~AccountService()
         {
             if (KeepAlive)
             {
@@ -153,29 +155,32 @@ namespace naoto::client_details_provider
             }
         }
 
-        void StartClientDetailsProvider(void) noexcept
+        void StartAccountService(void) noexcept
         {
             assert(rte_lcore_id() == rte_get_main_lcore()
-                   && "StartClientDetailsProvider must run on the thread that "
+                   && "StartAccountService must run on the thread that "
                       "constructed "
-                      "ClientDetailsProvider (the DPDK main lcore)");
+                      "AccountService (the DPDK main lcore)");
 
             EtcdClientSetUp();
 
             std::thread serverThread(
-                &ClientDetailsProviderServer<CdpEpollReceiveBatchSize,
+                &GatewayEpollServer<AccountEpollReceiveBatchSize,
                                              MaxGateways>::startServer,
                 &Server);
 
             std::thread keeperThread(
-                &ClientStatesKeeper<MaxPositions,
-                                    CdpEpollReceiveBatchSize>::StartLoop,
-                &Keeper);
+                &ClientRequestProcessor<MaxPositions,
+                                    AccountEpollReceiveBatchSize>::StartLoop,
+                &Processor);
 
-            std::thread messageWriterThread(
-                &GatewayWriter<MaxPositions, CdpResponseBatchSize, MaxGateways,
-                               CdpResponsesResendBufferSize>::StartLoop,
-                &MessageWriter);
+            std::thread dispatcherThread(
+                &GatewayResponseDispatcher<MaxPositions,
+                                           AccountResponseBatchSize,
+                                           MaxGateways,
+                                           AccountResponsesResendBufferSize>::
+                    StartLoop,
+                &Dispatcher);
 
             std::thread writerThread(
                 &ClientStatesWriter<MaxPositions,
@@ -184,15 +189,15 @@ namespace naoto::client_details_provider
 
             setAffinity(serverThread, 7);
             setAffinity(keeperThread, 8);
-            setAffinity(messageWriterThread, 9);
+            setAffinity(dispatcherThread, 9);
             setAffinity(writerThread, 10);
 
             ReportReceiver.StartReceiversLoop();
 
             serverThread.join();
             keeperThread.join();
-            messageWriterThread.join();
+            dispatcherThread.join();
             writerThread.join();
         }
     };
-} // namespace naoto::client_details_provider
+} // namespace naoto::account_service
