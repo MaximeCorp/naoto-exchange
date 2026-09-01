@@ -2,7 +2,7 @@
 
 #include <array>
 #include <chrono>
-#include <iostream>
+#include <cstdint>
 
 namespace naoto
 {
@@ -38,16 +38,11 @@ namespace naoto
         OrderAction Action;
         std::array<uint8_t, 7> Padding;
 
-        void log() const noexcept
-        {
-            std::string side = Side == OrderSide::BUY ? "BUY" : "SELL";
-            std::string type = Type == OrderType::LIMIT ? "LIMIT" : "MARKET";
-            std::cout << side << " " << type << " ORDER - Amount: " << Amount
-                      << " - Price: " << Price << " - Client ID: " << ClientId
-                      << " order id:" << OrderId << " asset id: " << AssetId
-                      << "\n"
-                      << std::endl;
-        }
+        // Debug/diagnostic logging only, never called on the hot path -
+        // defined out of line in order.cpp so this header (included by
+        // every hot-path translation unit) doesn't have to drag in
+        // <iostream>/<string> just to see this declaration.
+        void log() const noexcept;
     };
 #pragma pack(pop)
 } // namespace naoto

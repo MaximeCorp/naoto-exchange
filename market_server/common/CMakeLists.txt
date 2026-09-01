@@ -1,17 +1,25 @@
 # market_server/common — wire types + generic infra shared by every service.
-# Header-only for now (src/ is empty), so this is an INTERFACE library.
-# The moment a .cpp lands in src/, change add_library(... INTERFACE) to
-# add_library(... STATIC <the .cpp files>) and INTERFACE -> PUBLIC below —
-# see the "Splitting into .cpp" note from earlier in the chat re: LTO.
+#
+# Now has real .cpp sources (order.cpp, file_descriptors_ops.cpp — the
+# non-hot-path pieces pulled out of their headers to cut compile time), so
+# per the note that used to be here: add_library(... INTERFACE) has become
+# add_library(... STATIC <the .cpp files>) and INTERFACE -> PUBLIC below.
+# See the "Splitting into .cpp" note from earlier in the chat re: LTO —
+# make sure LTO/IPO is on in release builds so the split doesn't cost real
+# inlining at the callers that are still hot (VersionedFd, PriceLevel,
+# OrderNode, etc. were deliberately left untouched/header-only for that
+# reason and don't go in this list).
 
-add_library(common INTERFACE)
+file(GLOB_RECURSE COMMON_SOURCES CONFIGURE_DEPENDS src/*.cpp)
 
-target_include_directories(common INTERFACE
+add_library(common STATIC ${COMMON_SOURCES})
+
+target_include_directories(common PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
 # epoll_server.ipp is included by epoll_server.hpp, not compiled directly —
 # listed here only so it shows up in IDEs, never treated as a source file.
-target_sources(common INTERFACE
+target_sources(common PUBLIC
     FILE_SET HEADERS
     BASE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/include"
     FILES "${CMAKE_CURRENT_SOURCE_DIR}/include/epoll_server.ipp")
@@ -19,9 +27,10 @@ target_sources(common INTERFACE
 # moodycamel: consumer.hpp / storage_pool.hpp / unsafe_storage_pool.hpp
 # are built on its SPSC queue.
 # DPDK: udp_multicast_emitter.hpp sends over it directly.
-# Both are INTERFACE deps of an INTERFACE lib, so they propagate to
-# whatever links common — a service doesn't need to know common uses them.
-target_link_libraries(common INTERFACE
+# Both used to be INTERFACE deps of an INTERFACE lib; now common has actual
+# object code too, but the headers still need these propagated to whatever
+# links common, so they stay PUBLIC.
+target_link_libraries(common PUBLIC
     naoto_flags
     naoto_moodycamel
     naoto_dpdk)
