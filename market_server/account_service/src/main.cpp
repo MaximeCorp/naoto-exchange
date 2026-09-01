@@ -63,9 +63,8 @@ int main(int argc, char **argv)
     clients.push_back(client2);
     clients.push_back(client3);
 
-    AccountService<126, 16, 128, 32> test(
-        argc, argv, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 8082, 16, 16, 0,
-        256, 1024, RTE_IPV4(239, 1, 1, 1), 30001, clients);
+    AccountService test(argc, argv, 8082, 16, 16, 0, 256, 1024,
+                        RTE_IPV4(239, 1, 1, 1), 30001, clients);
 
     test.StartAccountService();
 }

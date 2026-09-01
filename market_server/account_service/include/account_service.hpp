@@ -1,22 +1,22 @@
 #pragma once
 
-#include <gateway_epoll_server.hpp>
 #include <client_account_snapshot.hpp>
+#include <client_request_processor.hpp>
 #include <client_state.hpp>
 #include <client_states.hpp>
-#include <client_request_processor.hpp>
 #include <client_states_writer.hpp>
 #include <etcd/KeepAlive.hpp>
 #include <etcd/SyncClient.hpp>
-#include <routed_auth_request.hpp>
+#include <gateway_epoll_server.hpp>
 #include <gateway_response_dispatcher.hpp>
-#include <trade_report_receiver.hpp>
 #include <nlohmann/json.hpp>
 #include <order_state_report.hpp>
 #include <readerwritercircularbuffer.h>
+#include <routed_auth_request.hpp>
 #include <storage_pool.hpp>
 #include <system_conf.hpp>
 #include <thread>
+#include <trade_report_receiver.hpp>
 
 namespace naoto::account_service
 {
@@ -40,16 +40,14 @@ namespace naoto::account_service
         ReportQueue Reports;
         ResponseQueue Responses;
         std::array<VersionedFd, MaxGateways> GatewayFd;
-        GatewayEpollServer<AccountEpollReceiveBatchSize, MaxGateways>
-            Server;
-        ClientRequestProcessor<MaxPositions, AccountEpollReceiveBatchSize>
-            Processor;
+        GatewayEpollServer<AccountEpollReceiveBatchSize, MaxGateways> Server;
+        ClientRequestProcessor Processor;
         GatewayResponseDispatcher<MaxPositions, AccountResponseBatchSize,
                                   MaxGateways, AccountResponsesResendBufferSize>
             Dispatcher;
         ClientStatesWriter<MaxPositions, ClientStatesSwapBatchSize> Writer;
         TradeReportReceiver<TradeReportReceiveBufferSize,
-                      TradeReportReceiveBatchSize>
+                            TradeReportReceiveBatchSize>
             ReportReceiver;
 
         std::shared_ptr<etcd::KeepAlive> KeepAlive;
@@ -96,15 +94,10 @@ namespace naoto::account_service
         }
 
     public:
-        AccountService(int argc, char **argv, size_t maxClients,
-                              size_t requestPoolSize, size_t reportPoolSize,
-                              size_t responsePoolSize, size_t requestQueueSize,
-                              size_t reportQueueSize, size_t responseQueueSize,
-                              int serverPort, int maxEvents, int maxPending,
-                              const uint16_t portId,
-                              const uint16_t nbRxQueueSlots,
-                              const size_t dpdkPoolSize, const uint32_t dstIp,
-                              const uint16_t dstPort)
+        AccountService(int argc, char **argv, int serverPort, int maxEvents,
+                       int maxPending, const uint16_t portId,
+                       const uint16_t nbRxQueueSlots, const size_t dpdkPoolSize,
+                       const uint32_t dstIp, const uint16_t dstPort)
             : States(MaxClients)
             , RequestPool(MaxClients)
             , ReportPool(MaxClients * MaxTradeClient)
@@ -121,16 +114,11 @@ namespace naoto::account_service
                              nbRxQueueSlots, dpdkPoolSize, dstIp, dstPort)
         {}
 
-        AccountService(int argc, char **argv, size_t maxClients,
-                              size_t requestPoolSize, size_t reportPoolSize,
-                              size_t responsePoolSize, size_t requestQueueSize,
-                              size_t reportQueueSize, size_t responseQueueSize,
-                              int serverPort, int maxEvents, int maxPending,
-                              const uint16_t portId,
-                              const uint16_t nbRxQueueSlots,
-                              const size_t dpdkPoolSize, const uint32_t dstIp,
-                              const uint16_t dstPort,
-                              std::vector<ClientState<MaxPositions>> &clients)
+        AccountService(int argc, char **argv, int serverPort, int maxEvents,
+                       int maxPending, const uint16_t portId,
+                       const uint16_t nbRxQueueSlots, const size_t dpdkPoolSize,
+                       const uint32_t dstIp, const uint16_t dstPort,
+                       std::vector<ClientState<MaxPositions>> &clients)
             : States(MaxClients, clients)
             , RequestPool(MaxClients)
             , ReportPool(MaxClients * MaxTradeClient)
@@ -166,20 +154,16 @@ namespace naoto::account_service
 
             std::thread serverThread(
                 &GatewayEpollServer<AccountEpollReceiveBatchSize,
-                                             MaxGateways>::startServer,
+                                    MaxGateways>::startServer,
                 &Server);
 
-            std::thread keeperThread(
-                &ClientRequestProcessor<MaxPositions,
-                                    AccountEpollReceiveBatchSize>::StartLoop,
-                &Processor);
+            std::thread keeperThread(&ClientRequestProcessor::StartLoop,
+                                     &Processor);
 
             std::thread dispatcherThread(
-                &GatewayResponseDispatcher<MaxPositions,
-                                           AccountResponseBatchSize,
-                                           MaxGateways,
-                                           AccountResponsesResendBufferSize>::
-                    StartLoop,
+                &GatewayResponseDispatcher<
+                    MaxPositions, AccountResponseBatchSize, MaxGateways,
+                    AccountResponsesResendBufferSize>::StartLoop,
                 &Dispatcher);
 
             std::thread writerThread(

@@ -4,10 +4,11 @@
 #include <client_auth_request.hpp>
 #include <client_states.hpp>
 #include <epoll_server.hpp>
-#include <versioned_fd.hpp>
-#include <routed_auth_request.hpp>
+#include <order.hpp>
 #include <readerwritercircularbuffer.h>
+#include <routed_auth_request.hpp>
 #include <string>
+#include <versioned_fd.hpp>
 
 namespace naoto::order_gateway
 {
