@@ -77,23 +77,6 @@ namespace naoto
         FlatHashMap(void)
         {
             Tags.fill(EMPTY_MARKER);
-            // BUG FIX: FootPrints/Keys/Data used to be left
-            // default-initialized (indeterminate), relying on the
-            // runtime invariant that GetVal()/AddNode()/DeleteNode()
-            // only ever read a slot's FootPrints/Keys/Data once Tags
-            // has proven that slot occupied. That invariant genuinely
-            // holds (extensively exercised by
-            // tests/market_server/unit/test_flat_hash_map.cpp, including a randomized
-            // cross-check against std::map), but it's not something
-            // GCC's static analysis can verify - at -O3 specifically,
-            // -Wmaybe-uninitialized flags the FootPrints[idx]/Keys[idx]
-            // reads inside GetVal() as possibly using uninitialized
-            // memory (confirmed: -Werror=maybe-uninitialized fails the
-            // build). Zero-initializing here is a one-time construction
-            // cost (negligible, and off the hot path entirely) that
-            // makes the class's behavior fully well-defined instead of
-            // "correct but unprovably so", and resolves the warning at
-            // its root rather than suppressing it.
             FootPrints.fill(0);
             Keys.fill(K{});
             Data.fill(V{});
@@ -161,22 +144,6 @@ namespace naoto
                     return false;
                 }
 
-                // BUG FIX: this loop advanced cur_dib by 16 every
-                // iteration but never advanced cur_idx to the next
-                // 16-slot probe window - so once a key's Robin-Hood
-                // probe distance exceeds 16 (i.e. AddNode had to spill
-                // into a second window, which it handles correctly via
-                // its own `cur_idx = (cur_idx + 16) & (total_size - 1)`),
-                // GetVal kept re-reading the *same* already-examined
-                // Tags/FootPrints bytes against an ever-larger
-                // expected_dibs, which makes every slot in that window
-                // look "richer than expected" and forces an incorrect
-                // early `return false` - even though the key is really
-                // sitting in the next window. Confirmed by
-                // tests/market_server/unit/test_flat_hash_map.cpp's
-                // WraparoundProbingWorks, which fails without this line.
-                // AddNode already had the matching advance; GetVal (and,
-                // by the same pattern, DeleteNode below) needed it too.
                 cur_idx = (cur_idx + 16) & (total_size - 1);
                 cur_dib += 16;
             }

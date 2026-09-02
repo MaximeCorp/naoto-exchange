@@ -245,40 +245,27 @@ namespace naoto
 
                 buffer.clearBuffer();
 
-                if (!buffer.addBytes(batch->Data.data()
-                                          + sizeof(T) * batchSize,
-                                      bufferSize)) [[unlikely]]
+                if (!buffer.addBytes(batch->Data.data() + sizeof(T) * batchSize,
+                                     bufferSize)) [[unlikely]]
                 {
                     std::cerr << "Unexpected buffer overflow while storing "
                                  "leftover bytes on FD "
                               << curFd << "\n";
                 }
 
-                // BUG FIX: this used to unconditionally run BatchHandle()
-                // and enqueue `batch` even when batchSize == 0 - i.e. a
-                // partial message (fewer bytes than one T) arrived and
-                // got correctly stashed above via addBytes(), but an
-                // empty batch still went out to the consumer anyway,
-                // wasting a pool slot and a queue slot and waking
-                // whatever's reading OutgoingBatches for nothing.
-                // Confirmed by
-                // tests/market_server/unit/test_epoll_server.cpp. Now
-                // only enqueue once there's at least one complete
-                // message; a partial read just gets its bytes stashed
-                // and the batch released back to the pool immediately.
                 if (batchSize > 0) [[likely]]
                 {
                     if constexpr (HasBatchHandleServer<DerivedServer, T,
-                                                        BatchSize>)
+                                                       BatchSize>)
                     {
-                        static_cast<DerivedServer *>(this)->BatchHandle(
-                            batch, curFd);
+                        static_cast<DerivedServer *>(this)->BatchHandle(batch,
+                                                                        curFd);
                     }
 
                     if (!OutgoingBatches.try_enqueue(batch)) [[unlikely]]
                     {
                         // TODO : think about what to do in this case
-                        if (Pool.localRelease(batch)) [[unlikely]]
+                        if (!Pool.localRelease(batch)) [[unlikely]]
                         {
                             // TODO : handle this
                         }
@@ -286,7 +273,7 @@ namespace naoto
                 }
                 else
                 {
-                    if (Pool.localRelease(batch)) [[unlikely]]
+                    if (!Pool.localRelease(batch)) [[unlikely]]
                     {
                         // TODO : handle this
                     }
@@ -351,8 +338,8 @@ namespace naoto
         // Testing hooks: EpollServer's only public API is startServer()
         // (an infinite epoll_wait() loop) and the destructor, so there's
         // no way to drive a single accept/read/close cycle synchronously
-        // without these. tests/market_server/unit/test_epoll_server.cpp's fixture puts
-        // most private-member access in shared helper methods
+        // without these. tests/market_server/unit/test_epoll_server.cpp's
+        // fixture puts most private-member access in shared helper methods
         // (ConnectClient(), GetBoundPort()) rather than repeating it in
         // every TEST_F body - friendship isn't inherited by the
         // TEST_F-generated subclasses down to those helpers, so the
@@ -360,10 +347,12 @@ namespace naoto
         // just FRIEND_TEST per test case.
         friend class EpollServerTest;
         FRIEND_TEST(EpollServerTest, AddClientAddsToEpollAndFiresAcceptHandle);
-        FRIEND_TEST(EpollServerTest, FullMessageProducesOneBatchWithCorrectContent);
+        FRIEND_TEST(EpollServerTest,
+                    FullMessageProducesOneBatchWithCorrectContent);
         FRIEND_TEST(EpollServerTest, MultipleMessagesInOneReadProduceOneBatch);
         FRIEND_TEST(EpollServerTest, PartialMessageDoesNotEnqueueAnEmptyBatch);
-        FRIEND_TEST(EpollServerTest, OrderlyCloseFiresRemoveClientAndCloseHandle);
+        FRIEND_TEST(EpollServerTest,
+                    OrderlyCloseFiresRemoveClientAndCloseHandle);
         FRIEND_TEST(EpollServerTest, ReadEventDispatchesToRemoveClientOnHup);
         FRIEND_TEST(EpollServerTest, BatchHandleHookFiresBeforeEnqueue);
 

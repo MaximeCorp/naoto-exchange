@@ -8,7 +8,6 @@
 #include <etcd/KeepAlive.hpp>
 #include <etcd/SyncClient.hpp>
 #include <etcd/Watcher.hpp>
-#include <versioned_fd.hpp>
 #include <gateway_handshake.hpp>
 #include <local_attempts.hpp>
 #include <netdb.h>
@@ -20,6 +19,7 @@
 #include <readerwritercircularbuffer.h>
 #include <storage_pool.hpp>
 #include <vector>
+#include <versioned_fd.hpp>
 
 namespace naoto::order_gateway
 {
@@ -54,8 +54,7 @@ namespace naoto::order_gateway
         const uint16_t GatewayId;
         uint64_t OrdersCount;
 
-        [[nodiscard]] int32_t
-        connectToService(const std::string &service_addr)
+        [[nodiscard]] int32_t connectToService(const std::string &service_addr)
         {
             auto colon = service_addr.rfind(':');
             if (colon == std::string::npos)
@@ -182,10 +181,9 @@ namespace naoto::order_gateway
 
                     while (totalSent < sizeof(GatewayHandshake))
                     {
-                        ssize_t sent =
-                            send(newFd, (uint8_t *)(&handshake) + totalSent,
-                                 sizeof(GatewayHandshake) - totalSent,
-                                 MSG_NOSIGNAL);
+                        ssize_t sent = send(
+                            newFd, (uint8_t *)(&handshake) + totalSent,
+                            sizeof(GatewayHandshake) - totalSent, MSG_NOSIGNAL);
 
                         if (sent <= 0)
                         {
@@ -193,22 +191,19 @@ namespace naoto::order_gateway
                             {
                                 continue;
                             }
-                            std::cerr
-                                << "Failed sending first message to "
-                                  "account service\n\n";
+                            std::cerr << "Failed sending first message to "
+                                         "account service\n\n";
                             return;
                         }
 
                         totalSent += sent;
                     }
 
-                    std::cout
-                        << "new account service found:  " << account_addr
-                        << "\n";
+                    std::cout << "new account service found:  " << account_addr
+                              << "\n";
 
-                    int32_t oldFd =
-                        VersionedFd::Fd(
-                            AccountFd.load(std::memory_order_acquire));
+                    int32_t oldFd = VersionedFd::Fd(
+                        AccountFd.load(std::memory_order_acquire));
 
                     AccountFd.SwitchFd(newFd);
 
@@ -216,7 +211,7 @@ namespace naoto::order_gateway
                     {
                         std::cout
                             << "New account service: closing connection to "
-                              "old account service.\n\n";
+                               "old account service.\n\n";
                         close(oldFd);
                     }
                 }
@@ -224,17 +219,15 @@ namespace naoto::order_gateway
                 {
                     std::string key = ev.kv().key();
 
-                    int32_t oldFd =
-                        VersionedFd::Fd(
-                            AccountFd.load(std::memory_order_acquire));
+                    int32_t oldFd = VersionedFd::Fd(
+                        AccountFd.load(std::memory_order_acquire));
 
                     AccountFd.SwitchFd(-1);
 
                     if (oldFd != -1)
                     {
-                        std::cout
-                            << "Delete account service: closing "
-                              "connection to account service.\n\n";
+                        std::cout << "Delete account service: closing "
+                                     "connection to account service.\n\n";
                         close(oldFd);
                     }
                 }
@@ -306,9 +299,9 @@ namespace naoto::order_gateway
 
                 while (totalSent < sizeof(GatewayHandshake))
                 {
-                    ssize_t sent = send(
-                        fd, (uint8_t *)(&handshake) + totalSent,
-                        sizeof(GatewayHandshake) - totalSent, MSG_NOSIGNAL);
+                    ssize_t sent = send(fd, (uint8_t *)(&handshake) + totalSent,
+                                        sizeof(GatewayHandshake) - totalSent,
+                                        MSG_NOSIGNAL);
 
                     if (sent <= 0)
                     {
@@ -317,7 +310,7 @@ namespace naoto::order_gateway
                             continue;
                         }
                         std::cerr << "Failed sending first message to "
-                                    "account service\n\n";
+                                     "account service\n\n";
                         return;
                     }
 
@@ -486,15 +479,15 @@ namespace naoto::order_gateway
         // TODO: Make it return OrderConfirmationStatus
         [[nodiscard]] OrderConfirmationStatus
         CheckOrderRisk(const uint32_t fd, const Order &order,
-                   const uint8_t auth) noexcept
+                       const uint8_t auth) noexcept
         {
             // The actual risk-check logic now lives in
             // order_risk_check.hpp as a free function with zero
             // etcd/socket dependencies, specifically so it can be unit
             // tested without OrderRouter's mandatory live-etcd
             // constructor - see that header's comment and
-            // tests/market_server/unit/test_order_risk_check.cpp. This wrapper keeps
-            // the two pieces of behavior that genuinely belong to
+            // tests/market_server/unit/test_order_risk_check.cpp. This wrapper
+            // keeps the two pieces of behavior that genuinely belong to
             // OrderRouter itself rather than to the risk check: the
             // early auth short-circuit (preserved here, before curState
             // is even fetched, to avoid a pointless GetClientState()

@@ -97,22 +97,6 @@ namespace naoto::account_service
                 ? States2[clientId]
                 : (complete == 1 ? States3[clientId] : States1[clientId]);
 
-            // BUG FIX (was the "TODO: Should update deltas if this
-            // function is ever used" above): this used to do
-            // `toChange = clientState;`, a direct full-struct overwrite
-            // of Confirmed/Attempt on a single buffer, completely
-            // bypassing the Deltas[]-based propagation mechanism that
-            // SetClientAssets()/FlushTripleBuffer() rely on to keep all
-            // three buffers eventually consistent. The result: whatever
-            // Confirmed/Attempt values this call set were lost after
-            // exactly one buffer rotation (about two FlushTripleBuffer()
-            // calls), since nothing ever recorded them as a delta.
-            // Recording them as a delta against the currently-*visible*
-            // state (mirrors order_gateway's ClientStates::
-            // SetClientState(), which already does exactly this) makes
-            // SetClientState() participate correctly in the same
-            // propagation the rest of the class depends on. Confirmed
-            // by tests/market_server/unit/test_client_states_account_service.cpp.
             const ClientState<MaxPositions> &ref = complete == 0
                 ? States1[clientId]
                 : (complete == 1 ? States2[clientId] : States3[clientId]);
@@ -131,24 +115,6 @@ namespace naoto::account_service
             toChange.Authorized = clientState.Authorized;
             toChange.Connected = clientState.Connected;
 
-            // BUG FIX: SequenceIds is declared as
-            // std::vector<std::array<uint64_t, 3>> - outer index is the
-            // client (bounded by maxClients), inner is the fixed-size-3
-            // buffer slot (the constructor's own init loop,
-            // `SequenceIds[i][j] = 3334`, confirms this convention). All
-            // four access sites in this class had it backwards -
-            // `SequenceIds[X][clientId]` - which is an outer-vector
-            // out-of-bounds access (confirmed by ASan: heap-buffer-
-            // overflow) whenever the buffer-slot value X reaches 2 and
-            // maxClients < 3, and would separately be an inner-array
-            // out-of-bounds access for any clientId >= 3 regardless of
-            // maxClients. Pre-existing bug, not something introduced by
-            // the SetClientState()/FlushTripleBuffer() fixes elsewhere in
-            // this file - just never exercised until
-            // tests/market_server/unit/test_client_states_account_service.cpp's
-            // MultipleSequentialUpdatesAccumulateCorrectly actually
-            // drove enough SetClientState()+FlushTripleBuffer() rounds
-            // to hit it.
             uint64_t &curSeqId = complete == 0
                 ? SequenceIds[clientId][1]
                 : (complete == 1 ? SequenceIds[clientId][2]
@@ -235,20 +201,6 @@ namespace naoto::account_service
                 newState->Attempt[i] += curDelta[0].Attempt[i];
                 newState->Attempt[i] += curDelta[1].Attempt[i];
                 newState->Attempt[i] += curDelta[2].Attempt[i];
-                // BUG FIX: AssetId wasn't being carried forward to the
-                // new "next" buffer at all - it was only ever set once,
-                // directly, by SetClientState() writing into a single
-                // buffer. After exactly one flush, the *other* two
-                // buffers still had AssetId all-zero (from
-                // construction), so SetClientAssets()'s
-                // `if (toChange.AssetId[i] == assetId)` check would
-                // never match once it targeted one of those buffers -
-                // silently dropping every subsequent funds delta for
-                // that client. Confirmed by
-                // tests/market_server/unit/test_client_states_account_service.cpp.
-                // Mirrors what order_gateway's ClientStates::
-                // FlushTripleBuffer already does correctly
-                // (`newState->AssetId[i] = curState->AssetId[i];`).
                 newState->AssetId[i] = curState->AssetId[i];
             }
 

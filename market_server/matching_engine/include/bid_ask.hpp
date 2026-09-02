@@ -24,8 +24,8 @@ namespace naoto::matching_engine
         FRIEND_TEST(BidAskTest, MarketableBuyCrossesRestingAsk);
         FRIEND_TEST(BidAskTest, NonMarketableBuyRestsInBook);
         // Additional hooks added while building out the GoogleTest suite
-        // (tests/market_server/unit/test_bid_ask.cpp) -- same pattern as the two above,
-        // granting the named TEST_F(BidAskTest, ...) cases access to
+        // (tests/market_server/unit/test_bid_ask.cpp) -- same pattern as the
+        // two above, granting the named TEST_F(BidAskTest, ...) cases access to
         // executeOrder()/CancelOrder<>()/the private Bid/Ask/OrderMap
         // members so matching behavior can be driven and inspected
         // directly instead of only through the blocking
@@ -36,13 +36,14 @@ namespace naoto::matching_engine
         FRIEND_TEST(BidAskTest, MarketOrderSweepsMultiplePriceLevels);
         FRIEND_TEST(BidAskTest, MarketOrderWithNoLiquidityIsFullyCancelled);
         FRIEND_TEST(BidAskTest,
-                     MarketableLimitBuyPartialFillCancelsRemainder_LIKELY_BUG);
+                    MarketableLimitBuyPartialFillCancelsRemainder_LIKELY_BUG);
         FRIEND_TEST(BidAskTest, CancelOrderRemovesRestingBuyFromBook);
         FRIEND_TEST(BidAskTest, CancelOrderRemovesRestingSellFromBook);
         FRIEND_TEST(BidAskTest, CancelOrderRejectedForUnknownOrderId);
         FRIEND_TEST(BidAskTest, CancelOrderRejectedForWrongClientId);
         FRIEND_TEST(BidAskTest, ExactFillRemovesRestingOrderFromBook);
-        FRIEND_TEST(BidAskTest, MarketBuyOrderWithZeroPriceNeverMatches_LIKELY_BUG);
+        FRIEND_TEST(BidAskTest,
+                    MarketBuyOrderWithZeroPriceNeverMatches_LIKELY_BUG);
 
         using OrdersQueue = moodycamel::BlockingReaderWriterCircularBuffer<
             ObjectBatch<Order, BatchSize> *>;
@@ -106,18 +107,6 @@ namespace naoto::matching_engine
 
                 std::cout << "Rejected a cancel request";
 
-                // BUG FIX: this used to re-check
-                // `toCancel->GetClientId() != order.ClientId` unconditionally
-                // here, with no `found` guard - so any cancel for an
-                // unknown/already-filled order id (found == false, toCancel
-                // == nullptr) null-dereferenced and crashed the whole
-                // matching engine process. Confirmed by
-                // tests/market_server/unit/test_bid_ask.cpp's
-                // CancelOrderRejectedForUnknownOrderId under ASan. This is
-                // reachable directly from client input (an ordinary CANCEL
-                // for an order that's already fully filled/cancelled/never
-                // existed), so it's a real remote DoS, not just a
-                // theoretical edge case.
                 if (found && toCancel->GetClientId() != order.ClientId)
                 {
                     std::cout << " because of wrong client id.\n\n";
@@ -452,8 +441,7 @@ namespace naoto::matching_engine
             {
                 curOrderBookUpdate->FillUpdate(
                     OrderBookSequenceId++, curLevel->GetTotalAmount(),
-                    curLevel->GetKey(), MarketAssetId,
-                    ORDER_BOOK_UPDATE_SELL);
+                    curLevel->GetKey(), MarketAssetId, ORDER_BOOK_UPDATE_SELL);
                 OutgoingBook.try_enqueue(curOrderBookUpdate);
             }
             else [[unlikely]]
@@ -570,8 +558,10 @@ namespace naoto::matching_engine
             , OrderBookUpdatesPool(orderBookUpdatesPool)
             , OrderNodePool(orderNodePoolSize)
             , PriceLevelPool(orderNodePoolSize)
-            , Bid(skipListNodesPoolSize, OrderNodePool, PriceLevelPool)
-            , Ask(skipListNodesPoolSize, OrderNodePool, PriceLevelPool)
+            , Bid(skipListNodesPoolSize, OrderNodePool, PriceLevelPool,
+                  OrderMap)
+            , Ask(skipListNodesPoolSize, OrderNodePool, PriceLevelPool,
+                  OrderMap)
         {}
 
         ~BidAsk() = default;

@@ -6,10 +6,7 @@
 #include <limits>
 #include <queue>
 #include <single_threaded_storage_pool.hpp>
-#include <x86intrin.h> // __rdtsc() -- not pulled in transitively by any
-                        // of the headers above; this file didn't compile
-                        // standalone (or first in a TU) without it. See
-                        // tests/market_server/README.md.
+#include <x86intrin.h>
 
 namespace naoto
 {

@@ -4,8 +4,8 @@
 #include <iostream>
 #include <order_node.hpp>
 #include <price_level.hpp>
-#include <skip_list.hpp>
 #include <single_threaded_storage_pool.hpp>
+#include <skip_list.hpp>
 
 namespace naoto::matching_engine
 {
@@ -20,13 +20,18 @@ namespace naoto::matching_engine
         SingleThreadedStoragePool<OrderNode> &OrderNodePool;
         SingleThreadedStoragePool<PriceLevel> &PriceLevelPool;
 
+        FlatHashMap<uint64_t, OrderNode *, OrderMapSize> &OrderMap;
+
     public:
-        OrderBook(const size_t skipListNodesPoolSize,
-                  SingleThreadedStoragePool<OrderNode> &orderNodePool,
-                  SingleThreadedStoragePool<PriceLevel> &priceLevelPool)
+        OrderBook(
+            const size_t skipListNodesPoolSize,
+            SingleThreadedStoragePool<OrderNode> &orderNodePool,
+            SingleThreadedStoragePool<PriceLevel> &priceLevelPool
+                FlatHashMap<uint64_t, OrderNode *, OrderMapSize> &orderMap)
             : BestPricesMap(skipListNodesPoolSize)
             , OrderNodePool(orderNodePool)
             , PriceLevelPool(priceLevelPool)
+            , OrderMap(orderMap)
         {}
 
         [[nodiscard]] PriceLevel *GetBestLevel(void) noexcept
@@ -80,11 +85,23 @@ namespace naoto::matching_engine
             const int64_t key = order->GetPrice();
             PriceLevel *curPrice;
 
+            OrderMap.DeleteNode(order->GetId());
+
             bool found = FastMap.GetVal(key, curPrice);
 
             if (!found) [[unlikely]]
             {
                 std::cerr << "tried deleting node with no price level\n";
+
+                bool released = OrderNodePool.release(order);
+
+                if (!released) [[unlikely]]
+                {
+                    std::cerr
+                        << "Couldn't release to order mempool when trying to "
+                           "delete an order.\n\n";
+                }
+
                 return nullptr;
             }
 
@@ -99,6 +116,15 @@ namespace naoto::matching_engine
                     std::cerr << "Couldn't release to price level mempool when "
                                  "trying to "
                                  "delete an order.\n\n";
+                }
+
+                released = OrderNodePool.release(order);
+
+                if (!released) [[unlikely]]
+                {
+                    std::cerr
+                        << "Couldn't release to order mempool when trying to "
+                           "delete an order.\n\n";
                 }
 
                 return nullptr;

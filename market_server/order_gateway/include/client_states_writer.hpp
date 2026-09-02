@@ -6,13 +6,9 @@
 #include <client_states.hpp>
 #include <consumer.hpp>
 #include <flat_hash_map.hpp>
-#include <object_batch.hpp> // used directly (ResponseBatch = ObjectBatch<...>)
-                            // below but wasn't included - only compiled
-                            // by luck of some other already-included
-                            // header pulling it in first. See
-                            // tests/market_server/README.md.
-#include <routed_auth_request.hpp>
+#include <object_batch.hpp>
 #include <order_state_report.hpp>
+#include <routed_auth_request.hpp>
 #include <storage_pool.hpp>
 
 namespace naoto::order_gateway
@@ -229,15 +225,6 @@ namespace naoto::order_gateway
                               << response.SequenceId << ".\n\n";
 
                     response.log();
-                    // BUG FIX: this was `return;` - which aborted the
-                    // rest of the batch entirely, dropping every
-                    // response after this one even though they're for
-                    // unrelated clients. `continue` processes the
-                    // remaining entries in this batch normally after
-                    // resending the request for the one stale entry.
-                    // Confirmed by
-                    // tests/market_server/unit/test_client_states_writer_order_gateway.cpp.
-                    continue;
                 }
 
                 // Iterate buffer to apply missed delta

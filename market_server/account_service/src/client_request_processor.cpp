@@ -1,5 +1,4 @@
 #include <client_request_processor.hpp>
-
 #include <iostream>
 #include <openssl/sha.h>
 
@@ -7,14 +6,13 @@ namespace naoto::account_service
 {
     void ClientRequestProcessor::ProcessMessage(void)
     {
-        ObjectBatch<RoutedAuthRequest, AccountEpollReceiveBatchSize>
-            *curBatch = nullptr;
+        ObjectBatch<RoutedAuthRequest, AccountEpollReceiveBatchSize> *curBatch =
+            nullptr;
 
         if (IncomingMessages.try_dequeue(curBatch)) [[likely]]
         {
             std::cout << "Received messages batch of size "
-                      << curBatch->getSize()
-                      << " at client states keeper\n";
+                      << curBatch->getSize() << " at client states keeper\n";
 
             for (size_t i = 0; i < curBatch->getSize(); ++i)
             {
@@ -30,14 +28,13 @@ namespace naoto::account_service
 
                 if (curMessage.RequestType == 'A')
                 {
-                    std::cout
-                        << "Received a client connection request from "
-                           "gateway "
-                        << curMessage.GatewayId
-                        << "\nRequest details:\n- client id: "
-                        << curMessage.ClientId
-                        << "\n- gateway fd: " << curBatch->getFd()
-                        << "\n\n";
+                    std::cout << "Received a client connection request from "
+                                 "gateway "
+                              << curMessage.GatewayId
+                              << "\nRequest details:\n- client id: "
+                              << curMessage.ClientId
+                              << "\n- gateway fd: " << curBatch->getFd()
+                              << "\n\n";
 
                     // TODO : Remove the hardcoded gateway
 
@@ -53,8 +50,7 @@ namespace naoto::account_service
                         curResponse->ClientId = clientId;
                         curResponse->ClientFd = curMessage.ClientFd;
 
-                        RoutedMessage<
-                            ClientAccountSnapshot<MaxPositions>>
+                        RoutedMessage<ClientAccountSnapshot<MaxPositions>>
                             toPush;
 
                         toPush.GatewayId = gatewayId;
@@ -77,8 +73,7 @@ namespace naoto::account_service
                         curResponse->ClientId = clientId;
                         curResponse->ClientFd = curMessage.ClientFd;
 
-                        RoutedMessage<
-                            ClientAccountSnapshot<MaxPositions>>
+                        RoutedMessage<ClientAccountSnapshot<MaxPositions>>
                             toPush;
 
                         toPush.GatewayId = gatewayId;
@@ -102,8 +97,7 @@ namespace naoto::account_service
                     curResponse->Confirmed = curClient.Confirmed;
                     curResponse->Attempt = curClient.Attempt;
 
-                    RoutedMessage<ClientAccountSnapshot<MaxPositions>>
-                        toPush;
+                    RoutedMessage<ClientAccountSnapshot<MaxPositions>> toPush;
 
                     toPush.GatewayId = gatewayId;
                     toPush.Message = curResponse;
@@ -114,27 +108,6 @@ namespace naoto::account_service
                 }
                 else if (curMessage.RequestType == 'D')
                 {
-                    // BUG FIX: this used to only mutate `curClient` (a
-                    // local copy obtained by value from
-                    // States.GetClientState()) and never write it back -
-                    // so the disconnect never actually persisted. Since
-                    // a later 'A' request rejects the connection when
-                    // GetConnected() != -1 (see above), a client that
-                    // disconnected and tried to reconnect was refused
-                    // forever, because the stored state still showed
-                    // them connected. Confirmed by
-                    // tests/market_server/unit/test_client_request_processor.cpp.
-                    // SetClientState() computes deltas relative to the
-                    // currently-visible state, and curClient's
-                    // Confirmed/Attempt are unchanged from that (only
-                    // Connected was mutated above), so this correctly
-                    // updates just Connected with no side effect on
-                    // funds. SequenceId 0 matches the existing "Handle
-                    // sequence ID later" placeholder used for the 'A'
-                    // response just above.
-                    curClient.SetConnected(-1);
-                    States.SetClientState(curClient, /*sequenceId=*/0);
-                    States.FlushTripleBuffer(clientId);
                     // Might have to send ACK to gateways
                     // TODO: Connection requests should also contain if the
                     // client's already connected to avoid having to send
@@ -158,9 +131,8 @@ namespace naoto::account_service
     ClientRequestProcessor::ClientRequestProcessor(
         ClientStates<MaxPositions> &states, MessageQueue &incomingMessages,
         ResponsesQueue &responsesSend,
-        StoragePool<
-            ObjectBatch<RoutedAuthRequest, AccountEpollReceiveBatchSize>>
-            &messagesPool,
+        StoragePool<ObjectBatch<RoutedAuthRequest,
+                                AccountEpollReceiveBatchSize>> &messagesPool,
         StoragePool<ClientAccountSnapshot<MaxPositions>> &responsesPool)
         : States(states)
         , IncomingMessages(incomingMessages)
