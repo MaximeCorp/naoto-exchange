@@ -19,9 +19,29 @@ namespace naoto::order_gateway
         uint32_t SessionId;
 
         ClientState(void)
-            : Auth(0)
+            : ClientId(0)
+            , AssetId{}
+            , Confirmed{}
+            , Attempt{}
+            , Auth(0)
             , SessionId(0)
         {}
+        // BUG FIX: previously only initialized Auth/SessionId. ClientId,
+        // AssetId, Confirmed, and Attempt were left at indeterminate
+        // values (this is a class with a user-provided constructor, so
+        // members missing from the init list are NOT zero-initialized).
+        // ClientStates builds States1/2/3 as
+        // std::vector<ClientState<MaxPositions>>(maxClients), which
+        // default-constructs every element via exactly this
+        // constructor - so every "fresh" client (before any
+        // SetClientState()) had garbage Confirmed/Attempt instead of
+        // the zero baseline the whole delta-accumulation design
+        // assumes. Confirmed by tests/market_server/unit/test_client_states_triple_buffer.cpp's
+        // FreshStateStartsAtZero, which read back actual heap garbage
+        // before this fix (see tests/market_server/README.md for a worse manifestation:
+        // combined with the ClientAccountSnapshot alignment issue in the
+        // same file, this produced genuinely wrong Confirmed/Attempt
+        // values - not just theoretical UB - once built with -O3).
 
         [[nodiscard]] bool GetAssetIdx(const uint16_t assetId,
                                        size_t &idx) const noexcept

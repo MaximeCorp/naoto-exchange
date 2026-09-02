@@ -30,21 +30,55 @@ namespace naoto::account_service
 
         ClientState(void)
             : ClientId(0)
+            , Key{}
+            , AssetId{}
+            , Confirmed{}
+            , Attempt{}
             , Authorized(0)
             , Connected(0)
         {}
-
+        // BUG FIX: same class of issue as order_gateway's ClientState
+        // (see that header's fix comment) - Key/AssetId/Confirmed/Attempt
+        // were missing from the init list and left indeterminate.
+        // ClientStates builds States1/2/3 via
+        // std::vector<ClientState<MaxPositions>>(maxClients), which
+        // default-constructs every element through exactly this
+        // constructor, so every "fresh" client had garbage funds data
+        // and a garbage Key (meaning CheckKey() could spuriously pass or
+        // fail depending on what was on the heap). Confirmed by
+        // tests/market_server/unit/test_client_state_account_service.cpp.
+        // BUG FIX: these two constructors took confirmed/attempt but
+        // never stored them anywhere. Now that SetConfirmed()/
+        // SetAttempt() exist (fixed alongside this) and establish what
+        // "set confirmed/attempt from a scalar" means for this class -
+        // fill every position uniformly - these two do the same thing,
+        // for consistency, instead of silently discarding the argument.
+        // Confirmed by
+        // tests/market_server/unit/test_client_state_account_service.cpp.
         ClientState(uint32_t clientId, int64_t confirmed)
             : ClientId(clientId)
+            , Key{}
+            , AssetId{}
+            , Confirmed{}
+            , Attempt{}
             , Authorized(0)
             , Connected(0)
-        {}
+        {
+            Confirmed.fill(confirmed);
+        }
 
         ClientState(uint32_t clientId, int64_t confirmed, int64_t attempt)
             : ClientId(clientId)
+            , Key{}
+            , AssetId{}
+            , Confirmed{}
+            , Attempt{}
             , Authorized(0)
             , Connected(0)
-        {}
+        {
+            Confirmed.fill(confirmed);
+            Attempt.fill(attempt);
+        }
 
         [[nodiscard]] bool
         CheckKey(const std::array<uint8_t, 32> &key) const noexcept
@@ -67,14 +101,26 @@ namespace naoto::account_service
             ClientId = clientId;
         }
 
+        // BUG FIX: these used to do `Confirmed = confirmed;` /
+        // `Attempt = attempt;` - assigning a scalar int64_t directly to
+        // a std::array<int64_t, MaxPositions> member, which does not
+        // compile (no such std::array::operator=). Since these methods
+        // are never called anywhere in the codebase today, the compile
+        // error was latent - templates only instantiate members that
+        // are actually used. Confirmed by
+        // tests/market_server/unit/test_client_state_account_service.cpp, which does
+        // call them. Fixed to fill every position with the given value,
+        // the closest sensible meaning for a scalar "set confirmed/
+        // attempt" call - flag if a per-asset-index setter was actually
+        // intended instead.
         void SetConfirmed(int64_t confirmed) noexcept
         {
-            Confirmed = confirmed;
+            Confirmed.fill(confirmed);
         }
 
         void SetAttempt(int64_t attempt) noexcept
         {
-            Attempt = attempt;
+            Attempt.fill(attempt);
         }
 
         void SetAuthorized(int16_t authorized) noexcept

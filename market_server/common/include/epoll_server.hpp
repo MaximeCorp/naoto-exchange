@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <fcntl.h>
 #include <file_descriptors_ops.hpp>
+#include <gtest/gtest_prod.h>
 #include <iostream>
 #include <netinet/in.h>
 #include <object_batch.hpp>
@@ -253,15 +254,38 @@ namespace naoto
                               << curFd << "\n";
                 }
 
-                if constexpr (HasBatchHandleServer<DerivedServer, T, BatchSize>)
+                // BUG FIX: this used to unconditionally run BatchHandle()
+                // and enqueue `batch` even when batchSize == 0 - i.e. a
+                // partial message (fewer bytes than one T) arrived and
+                // got correctly stashed above via addBytes(), but an
+                // empty batch still went out to the consumer anyway,
+                // wasting a pool slot and a queue slot and waking
+                // whatever's reading OutgoingBatches for nothing.
+                // Confirmed by
+                // tests/market_server/unit/test_epoll_server.cpp. Now
+                // only enqueue once there's at least one complete
+                // message; a partial read just gets its bytes stashed
+                // and the batch released back to the pool immediately.
+                if (batchSize > 0) [[likely]]
                 {
-                    static_cast<DerivedServer *>(this)->BatchHandle(batch,
-                                                                    curFd);
-                }
+                    if constexpr (HasBatchHandleServer<DerivedServer, T,
+                                                        BatchSize>)
+                    {
+                        static_cast<DerivedServer *>(this)->BatchHandle(
+                            batch, curFd);
+                    }
 
-                if (!OutgoingBatches.try_enqueue(batch)) [[unlikely]]
+                    if (!OutgoingBatches.try_enqueue(batch)) [[unlikely]]
+                    {
+                        // TODO : think about what to do in this case
+                        if (Pool.localRelease(batch)) [[unlikely]]
+                        {
+                            // TODO : handle this
+                        }
+                    }
+                }
+                else
                 {
-                    // TODO : think about what to do in this case
                     if (Pool.localRelease(batch)) [[unlikely]]
                     {
                         // TODO : handle this
@@ -323,6 +347,25 @@ namespace naoto
         }
 
         void initSocket(void) noexcept; // Not in hot path
+
+        // Testing hooks: EpollServer's only public API is startServer()
+        // (an infinite epoll_wait() loop) and the destructor, so there's
+        // no way to drive a single accept/read/close cycle synchronously
+        // without these. tests/market_server/unit/test_epoll_server.cpp's fixture puts
+        // most private-member access in shared helper methods
+        // (ConnectClient(), GetBoundPort()) rather than repeating it in
+        // every TEST_F body - friendship isn't inherited by the
+        // TEST_F-generated subclasses down to those helpers, so the
+        // fixture class itself needs a plain friend declaration too, not
+        // just FRIEND_TEST per test case.
+        friend class EpollServerTest;
+        FRIEND_TEST(EpollServerTest, AddClientAddsToEpollAndFiresAcceptHandle);
+        FRIEND_TEST(EpollServerTest, FullMessageProducesOneBatchWithCorrectContent);
+        FRIEND_TEST(EpollServerTest, MultipleMessagesInOneReadProduceOneBatch);
+        FRIEND_TEST(EpollServerTest, PartialMessageDoesNotEnqueueAnEmptyBatch);
+        FRIEND_TEST(EpollServerTest, OrderlyCloseFiresRemoveClientAndCloseHandle);
+        FRIEND_TEST(EpollServerTest, ReadEventDispatchesToRemoveClientOnHup);
+        FRIEND_TEST(EpollServerTest, BatchHandleHookFiresBeforeEnqueue);
 
     public:
         EpollServer(const int port, const int maxEvents, const int maxPending,

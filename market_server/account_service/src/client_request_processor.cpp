@@ -114,7 +114,27 @@ namespace naoto::account_service
                 }
                 else if (curMessage.RequestType == 'D')
                 {
+                    // BUG FIX: this used to only mutate `curClient` (a
+                    // local copy obtained by value from
+                    // States.GetClientState()) and never write it back -
+                    // so the disconnect never actually persisted. Since
+                    // a later 'A' request rejects the connection when
+                    // GetConnected() != -1 (see above), a client that
+                    // disconnected and tried to reconnect was refused
+                    // forever, because the stored state still showed
+                    // them connected. Confirmed by
+                    // tests/market_server/unit/test_client_request_processor.cpp.
+                    // SetClientState() computes deltas relative to the
+                    // currently-visible state, and curClient's
+                    // Confirmed/Attempt are unchanged from that (only
+                    // Connected was mutated above), so this correctly
+                    // updates just Connected with no side effect on
+                    // funds. SequenceId 0 matches the existing "Handle
+                    // sequence ID later" placeholder used for the 'A'
+                    // response just above.
                     curClient.SetConnected(-1);
+                    States.SetClientState(curClient, /*sequenceId=*/0);
+                    States.FlushTripleBuffer(clientId);
                     // Might have to send ACK to gateways
                     // TODO: Connection requests should also contain if the
                     // client's already connected to avoid having to send

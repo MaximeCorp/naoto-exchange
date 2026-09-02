@@ -22,6 +22,15 @@ namespace naoto
         void Add(const uint8_t *data, const size_t size) noexcept
         {
             std::memcpy(Buffer.data() + Size, data, size);
+            // BUG FIX: Size was never advanced here. Every caller
+            // (OrderRouter's OrderBuffer/ConfirmationBuffer accumulating
+            // wire bytes across possibly-partial socket reads) needs
+            // Add() to mean "append `size` bytes and remember they're
+            // there" - without this, a second Add() call would silently
+            // overwrite the first at the same offset instead of
+            // appending after it. Confirmed by
+            // tests/market_server/unit/test_bytes_buffer.cpp.
+            Size += size;
         }
 
         void Shift(const size_t size) noexcept

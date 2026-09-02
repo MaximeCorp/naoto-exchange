@@ -16,6 +16,7 @@
 #include <nlohmann/json.hpp>
 #include <order.hpp>
 #include <order_confirmation.hpp>
+#include <order_risk_check.hpp>
 #include <readerwritercircularbuffer.h>
 #include <storage_pool.hpp>
 #include <vector>
@@ -487,6 +488,20 @@ namespace naoto::order_gateway
         CheckOrderRisk(const uint32_t fd, const Order &order,
                    const uint8_t auth) noexcept
         {
+            // The actual risk-check logic now lives in
+            // order_risk_check.hpp as a free function with zero
+            // etcd/socket dependencies, specifically so it can be unit
+            // tested without OrderRouter's mandatory live-etcd
+            // constructor - see that header's comment and
+            // tests/market_server/unit/test_order_risk_check.cpp. This wrapper keeps
+            // the two pieces of behavior that genuinely belong to
+            // OrderRouter itself rather than to the risk check: the
+            // early auth short-circuit (preserved here, before curState
+            // is even fetched, to avoid a pointless GetClientState()
+            // call when auth is false - matches the original's
+            // behavior/cost exactly) and clearing this fd's
+            // ConfirmationBuffer on a client-id mismatch (a resend-buffer
+            // concern, not a risk-check concern).
             if (!auth) [[unlikely]]
             {
                 std::cerr
@@ -501,70 +516,18 @@ namespace naoto::order_gateway
             std::cout << "Risk check going on:\n";
             curState.log();
 
-            if (curState.SessionId != LocalSessionId[fd]) [[unlikely]]
-            {
-                LocalAttempt[fd].Clear();
-                LocalSessionId[fd] = curState.SessionId;
-            }
+            OrderConfirmationStatus status =
+                naoto::order_gateway::CheckOrderRisk<MaxPositions, MaxAsset>(
+                    curState, LocalAttempt[fd], LocalSessionId[fd], order,
+                    auth);
 
-            if (curState.ClientId != order.ClientId) [[unlikely]]
+            if (status == OrderConfirmationStatus::BadClientId) [[unlikely]]
             {
                 ConfirmationBuffer[fd].Clear();
-
                 std::cout << "ClientId mismatch.\n\n";
-                return OrderConfirmationStatus::BadClientId;
             }
 
-            uint16_t assetId =
-                order.Type == OrderType::MARKET && order.Side == OrderSide::BUY
-                ? 0
-                : order.AssetId;
-
-            size_t assetIdx;
-
-            bool found = curState.GetAssetIdx(assetId, assetIdx);
-
-            if (!found) [[unlikely]]
-            {
-                // Think about how to handle missing assetId
-                // Should evict an asset that has attempt = 0
-                std::cerr << "Requested asset id not in the client state\n\n";
-
-                return assetId >= MaxAsset
-                    ? OrderConfirmationStatus::UnknownSymbol
-                    : OrderConfirmationStatus::MaxPositions;
-            }
-
-            int64_t confirmed = curState.GetConfirmedAt(assetIdx);
-            int64_t attempt =
-                curState.GetAttemptAt(assetIdx) + LocalAttempt[fd][assetIdx];
-
-            // The maximum needed amount when selling is the amount since it's
-            // exactly what we'll spend
-            // For buy, LIMIT order allows us to calculate exactly how much will
-            // be spent and MARKET orders have a maximum price, giving us an
-            // upper bound which we will use to freeze money
-
-            int64_t amount = order.Side == OrderSide::SELL
-                ? order.Amount
-                : order.Amount * order.Price;
-
-            std::cout << "Trying to use " << amount << " of asset " << assetId
-                      << ", " << confirmed - attempt << " available ("
-                      << LocalAttempt[fd][assetIdx]
-                      << " from local counter).\n\n";
-
-            if (amount > confirmed - attempt) [[unlikely]]
-            {
-                std::cerr << "Trade rejected: not enough funds\n\n";
-                return OrderConfirmationStatus::InsufficientFunds;
-            }
-
-            // TODO : add the session gen counter to detect new
-            // connections and reset local counter
-            LocalAttempt[fd][assetIdx] += amount;
-
-            return OrderConfirmationStatus::Accepted;
+            return status;
         }
 
         void consumeOrder(void) noexcept

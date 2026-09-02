@@ -125,15 +125,19 @@ namespace naoto::matching_engine
 
             OrderNode *curNode = Head;
 
+            // BUG FIX: this used to advance `curNode` to the next node
+            // *before* releasing `toRelease`, then `break` as soon as
+            // `curNode` became null (i.e. right after processing the
+            // second-to-last node) - so the last node in the list was
+            // never released back to the pool. Confirmed by
+            // tests/market_server/unit/test_price_level.cpp: with a
+            // 3-node level and a 3-capacity pool, only 2 nodes came
+            // back after ClearPriceLevel(). Fixed by releasing every
+            // node the loop visits, including the last one.
             while (curNode)
             {
                 OrderNode *toRelease = curNode;
                 curNode = curNode->GetNext();
-
-                if (!curNode)
-                {
-                    break;
-                }
 
                 bool released = orderNodePool.release(toRelease);
 

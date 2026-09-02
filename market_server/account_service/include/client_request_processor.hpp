@@ -4,6 +4,7 @@
 #include <client_states.hpp>
 #include <routed_auth_request.hpp>
 #include <gateway_response_dispatcher.hpp>
+#include <gtest/gtest_prod.h>
 #include <routed_message.hpp>
 #include <object_batch.hpp>
 #include <readerwritercircularbuffer.h>
@@ -35,6 +36,26 @@ namespace naoto::account_service
         // and iostream machinery it uses doesn't have to be reparsed by
         // every translation unit that includes this header.
         void ProcessMessage(void);
+
+        // StartLoop() is the only public entry point and it's an
+        // infinite loop, so there's no way to drive a single
+        // connect/disconnect/auth cycle synchronously without direct
+        // access to ProcessMessage(). See
+        // tests/market_server/unit/test_client_request_processor.cpp.
+        // ProcessMessage() is private, and most test bodies drive it
+        // through the SubmitOne() helper below rather than repeating
+        // the enqueue+call boilerplate - so, same as EpollServerTest,
+        // the fixture class itself needs a plain friend declaration in
+        // addition to the individual FRIEND_TEST entries (friendship
+        // isn't inherited down to the TEST_F-generated subclasses'
+        // helper-method calls).
+        friend class ClientRequestProcessorTest;
+        FRIEND_TEST(ClientRequestProcessorTest, AcceptsValidConnectionRequest);
+        FRIEND_TEST(ClientRequestProcessorTest, RejectsWrongCredentials);
+        FRIEND_TEST(ClientRequestProcessorTest, RejectsUnauthorizedGateway);
+        FRIEND_TEST(ClientRequestProcessorTest, AllowsGatewayIdTenRegardlessOfAuthorization);
+        FRIEND_TEST(ClientRequestProcessorTest, UnrecognizedRequestTypeIsIgnoredWithoutCrashing);
+        FRIEND_TEST(ClientRequestProcessorTest, BatchOfMultipleRequestsAllProcessed);
 
     public:
         ClientRequestProcessor(

@@ -154,6 +154,7 @@ target_link_libraries(naoto_absl INTERFACE PkgConfig::ABSL)
 # Turn on with -DNAOTO_LTO=ON only when you actually want it (e.g. right
 # before a benchmarking pass), not for everyday iteration.
 option(NAOTO_LTO "Whole-program link-time optimization (slow, RAM-heavy link step)" OFF)
+option(NAOTO_BUILD_TESTS "Build the GoogleTest suite under tests/" OFF)
 
 if(NAOTO_LTO)
     include(CheckIPOSupported)
@@ -169,3 +170,8 @@ add_subdirectory(market_server/matching_engine)
 add_subdirectory(market_server/order_gateway)
 add_subdirectory(market_server/account_service)
 add_subdirectory(market_client)
+
+if(NAOTO_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()

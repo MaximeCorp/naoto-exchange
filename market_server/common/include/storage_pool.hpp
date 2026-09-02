@@ -86,7 +86,13 @@ namespace naoto
             return released;
         }
 
-        [[nodiscard]] bool getAvailable() const noexcept
+        // NOTE: dropped the `const` this had -- moodycamel's
+        // BlockingReaderWriterCircularBuffer::peek() is not a const
+        // method, so this couldn't compile as `const noexcept` in the
+        // first place (any caller that actually invoked it would fail
+        // to build). Looks like genuinely dead code prior to this: see
+        // tests/market_server/README.md and tests/market_server/unit/test_storage_pools.cpp.
+        [[nodiscard]] bool getAvailable() noexcept
         {
             return LocalReuseSize > 0 || Free.peek() != nullptr;
         }
