@@ -98,6 +98,31 @@ TEST(SequenceRingBufferTest, AcceptsSequenceIdAtWindowBoundary)
     EXPECT_TRUE(buf.AddSlot(&atBoundary));
 }
 
+TEST(SequenceRingBufferTest, StaleRejectionGuardIsDisabledRightAfterTailWraps)
+{
+    // Tail is uint32_t and AddSlot() sets `Tail = sequenceId + 1`. Once a
+    // slot with sequenceId == UINT32_MAX is added, Tail wraps around to
+    // 0. The stale-rejection guard is `if (Tail > Size && ...)`, so right
+    // after that wrap Tail(0) > Size is false again and the guard goes
+    // fully quiet - exactly the same as the very first few adds on a
+    // brand new buffer. A long-running receiver (this is exactly the
+    // DPDK market-data sequence id path) that's processed ~4.3 billion
+    // messages would briefly accept an arbitrarily stale/duplicate
+    // sequence id right at the wraparound point, instead of rejecting it
+    // as out-of-window.
+    constexpr size_t Size = 8;
+    SequenceRingBuffer<Slot, Size> buf;
+
+    Slot wrap{UINT32_MAX, 1};
+    ASSERT_TRUE(buf.AddSlot(&wrap)); // Tail wraps: UINT32_MAX + 1 -> 0
+
+    Slot arbitraryOld{5, 2};
+    EXPECT_TRUE(buf.AddSlot(&arbitraryOld))
+        << "documents current behavior: the stale-sequence-id guard is "
+           "briefly disabled immediately after Tail wraps around 32 "
+           "bits, the same way it is on a freshly constructed buffer";
+}
+
 TEST(SequenceRingBufferTest, TailAdvancesOnlyForwards)
 {
     SequenceRingBuffer<Slot, 8> buf;

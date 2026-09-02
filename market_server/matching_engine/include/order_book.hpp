@@ -9,7 +9,7 @@
 
 namespace naoto::matching_engine
 {
-    template <size_t FHMSize, size_t SkipListMaxLevel,
+    template <size_t FHMSize, size_t SkipListMaxLevel, size_t OrderMapSize,
               typename Compare = std::less<std::int64_t>>
     class OrderBook
     {
@@ -26,8 +26,8 @@ namespace naoto::matching_engine
         OrderBook(
             const size_t skipListNodesPoolSize,
             SingleThreadedStoragePool<OrderNode> &orderNodePool,
-            SingleThreadedStoragePool<PriceLevel> &priceLevelPool
-                FlatHashMap<uint64_t, OrderNode *, OrderMapSize> &orderMap)
+            SingleThreadedStoragePool<PriceLevel> &priceLevelPool,
+            FlatHashMap<uint64_t, OrderNode *, OrderMapSize> &orderMap)
             : BestPricesMap(skipListNodesPoolSize)
             , OrderNodePool(orderNodePool)
             , PriceLevelPool(priceLevelPool)

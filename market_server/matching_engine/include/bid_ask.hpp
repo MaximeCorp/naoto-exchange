@@ -71,8 +71,8 @@ namespace naoto::matching_engine
 
         FlatHashMap<uint64_t, OrderNode *, OrderMapSize> OrderMap;
 
-        OrderBook<FHMSize, SkipListMaxLevel, std::greater<int64_t>> Bid;
-        OrderBook<FHMSize, SkipListMaxLevel> Ask;
+        OrderBook<FHMSize, SkipListMaxLevel, OrderMapSize, std::greater<int64_t>> Bid;
+        OrderBook<FHMSize, SkipListMaxLevel, OrderMapSize> Ask;
 
         [[nodiscard]] bool IsMarketable(Order &order) const noexcept
         {

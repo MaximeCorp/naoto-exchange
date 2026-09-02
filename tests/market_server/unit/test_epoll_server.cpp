@@ -53,6 +53,54 @@ namespace naoto
                 BatchHandleCalls.emplace_back(fd, batch->getSize());
             }
         };
+
+        // A second msg type used as the handshake/"first message" for
+        // the fixture below - equal size to TestMsg so it satisfies
+        // EpollServer's `sizeof(T) >= sizeof(InitMessage)` static_assert
+        // with T=TestMsg.
+        struct InitMsg
+        {
+            uint64_t token;
+        };
+
+        // CRTP-derived server exercising the InitMessage/
+        // FirstMessageHandle path, which - unlike everything else in
+        // EpollServer - has no coverage anywhere else in this test
+        // suite.
+        class HandshakeServer
+            : public EpollServer<HandshakeServer, TestMsg, kBatchSize,
+                                  InitMsg>
+        {
+        public:
+            using Base =
+                EpollServer<HandshakeServer, TestMsg, kBatchSize, InitMsg>;
+            using Base::Base;
+
+            std::vector<uint32_t> AcceptedFds;
+            std::vector<uint32_t> ClosedFds;
+            std::vector<std::pair<uint32_t, size_t>> BatchHandleCalls;
+            std::vector<std::pair<uint32_t, uint64_t>> FirstMessages;
+
+            void AcceptHandle(uint32_t fd) noexcept
+            {
+                AcceptedFds.push_back(fd);
+            }
+
+            void CloseHandle(uint32_t fd) noexcept
+            {
+                ClosedFds.push_back(fd);
+            }
+
+            void BatchHandle(Batch *batch, uint32_t fd) noexcept
+            {
+                BatchHandleCalls.emplace_back(fd, batch->getSize());
+            }
+
+            void FirstMessageHandle(InitMsg *msg, uint32_t fd) noexcept
+            {
+                FirstMessages.emplace_back(fd, msg->token);
+            }
+        };
     } // namespace
 
     class EpollServerTest : public ::testing::Test
@@ -68,9 +116,21 @@ namespace naoto
                                 outgoing, kNbFds};
         std::vector<int> clientSockets;
 
+        StoragePool<Batch> handshakePool{32};
+        moodycamel::BlockingReaderWriterCircularBuffer<Batch *>
+            handshakeOutgoing{32};
+        HandshakeServer handshakeServer{/*port=*/0, kMaxEvents, kMaxPending,
+                                        handshakePool, handshakeOutgoing,
+                                        kNbFds};
+        std::vector<int> handshakeClientSockets;
+
         void TearDown() override
         {
             for (int fd : clientSockets)
+            {
+                close(fd);
+            }
+            for (int fd : handshakeClientSockets)
             {
                 close(fd);
             }
@@ -119,11 +179,77 @@ namespace naoto
             return server.AcceptedFds.back();
         }
 
+        void ReadMessage(uint32_t fd)
+        {
+            server.readMessage(fd);
+        }
+
         std::vector<Batch *> DrainOutgoing()
         {
             std::vector<Batch *> out;
             Batch *b = nullptr;
             while (outgoing.try_dequeue(b))
+            {
+                out.push_back(b);
+            }
+            return out;
+        }
+
+        // --- Same helpers, for the handshake-enabled server. Kept as
+        // fixture members (not free functions) so they inherit
+        // EpollServerTest's blanket `friend class EpollServerTest;`
+        // grant from epoll_server.hpp without needing their own
+        // per-test FRIEND_TEST entries added to the header.
+        int GetHandshakeBoundPort()
+        {
+            struct sockaddr_in addr{};
+            socklen_t len = sizeof(addr);
+            if (getsockname(handshakeServer.ListenFd,
+                             (struct sockaddr *)&addr, &len)
+                != 0)
+            {
+                return -1;
+            }
+            return ntohs(addr.sin_port);
+        }
+
+        int ConnectHandshakeClient()
+        {
+            int port = GetHandshakeBoundPort();
+            EXPECT_GT(port, 0);
+
+            int clientFd = socket(AF_INET, SOCK_STREAM, 0);
+            EXPECT_GE(clientFd, 0);
+
+            struct sockaddr_in addr{};
+            addr.sin_family = AF_INET;
+            addr.sin_port = htons(static_cast<uint16_t>(port));
+            addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+
+            int rc = connect(clientFd, (struct sockaddr *)&addr, sizeof(addr));
+            EXPECT_EQ(rc, 0) << "connect() failed: " << strerror(errno);
+
+            handshakeClientSockets.push_back(clientFd);
+            handshakeServer.clientAcceptLoop(handshakeServer.ListenFd);
+            return clientFd;
+        }
+
+        uint32_t LastHandshakeAcceptedServerFd()
+        {
+            EXPECT_FALSE(handshakeServer.AcceptedFds.empty());
+            return handshakeServer.AcceptedFds.back();
+        }
+
+        void ReadHandshakeMessage(uint32_t fd)
+        {
+            handshakeServer.readMessage(fd);
+        }
+
+        std::vector<Batch *> DrainHandshakeOutgoing()
+        {
+            std::vector<Batch *> out;
+            Batch *b = nullptr;
+            while (handshakeOutgoing.try_dequeue(b))
             {
                 out.push_back(b);
             }
@@ -267,6 +393,116 @@ TEST_F(EpollServerTest, BatchHandleHookFiresBeforeEnqueue)
     {
         (void)pool.release(b);
     }
+}
+
+TEST_F(EpollServerTest, MoreMessagesThanOneBatchHoldsProducesTwoBatches)
+{
+    // kBatchSize is 8: send 10 messages in one write() so they all
+    // arrive together, and confirm readMessage() (called once) drains
+    // the socket across multiple recv() iterations, producing a full
+    // 8-message batch followed by a second 2-message batch - not one
+    // truncated batch and two messages silently dropped.
+    int clientFd = ConnectClient();
+    uint32_t srvFd = LastAcceptedServerFd();
+
+    TestMsg msgs[10];
+    for (uint64_t i = 0; i < 10; ++i)
+    {
+        msgs[i].value = i + 1;
+    }
+    ASSERT_EQ(send(clientFd, msgs, sizeof(msgs), 0),
+              static_cast<ssize_t>(sizeof(msgs)));
+
+    ReadMessage(srvFd);
+
+    auto batches = DrainOutgoing();
+    ASSERT_EQ(batches.size(), 2u);
+    EXPECT_EQ(batches[0]->getSize(), 8u);
+    EXPECT_EQ(batches[1]->getSize(), 2u);
+    for (uint64_t i = 0; i < 8; ++i)
+    {
+        EXPECT_EQ((*batches[0])[i].value, i + 1);
+    }
+    for (uint64_t i = 0; i < 2; ++i)
+    {
+        EXPECT_EQ((*batches[1])[i].value, i + 9);
+    }
+
+    for (auto *b : batches)
+    {
+        (void)pool.release(b);
+    }
+}
+
+// --- InitMessage / FirstMessageHandle: the handshake path, untested
+// anywhere else in this suite --------------------------------------
+
+TEST_F(EpollServerTest, FirstMessageFiresHandshakeHandleAndThenReadsNormally)
+{
+    int clientFd = ConnectHandshakeClient();
+    uint32_t srvFd = LastHandshakeAcceptedServerFd();
+
+    InitMsg init{0xC0FFEE};
+    ASSERT_EQ(send(clientFd, &init, sizeof(init), 0),
+              static_cast<ssize_t>(sizeof(init)));
+
+    ReadHandshakeMessage(srvFd);
+
+    ASSERT_EQ(handshakeServer.FirstMessages.size(), 1u);
+    EXPECT_EQ(handshakeServer.FirstMessages[0].first, srvFd);
+    EXPECT_EQ(handshakeServer.FirstMessages[0].second, 0xC0FFEEu);
+
+    // The handshake bytes must not have been mistaken for a normal
+    // message batch.
+    EXPECT_TRUE(DrainHandshakeOutgoing().empty());
+
+    // A normal message sent afterward should be treated as an ordinary
+    // batch, not routed through FirstMessageHandle again.
+    TestMsg msg{99};
+    ASSERT_EQ(send(clientFd, &msg, sizeof(msg), 0),
+              static_cast<ssize_t>(sizeof(msg)));
+
+    ReadHandshakeMessage(srvFd);
+
+    ASSERT_EQ(handshakeServer.FirstMessages.size(), 1u)
+        << "FirstMessageHandle must fire exactly once per connection";
+    auto batches = DrainHandshakeOutgoing();
+    ASSERT_EQ(batches.size(), 1u);
+    EXPECT_EQ((*batches[0])[0].value, 99u);
+
+    for (auto *b : batches)
+    {
+        (void)handshakePool.release(b);
+    }
+}
+
+TEST_F(EpollServerTest, PartialFirstMessageWaitsForTheRestBeforeHandshaking)
+{
+    int clientFd = ConnectHandshakeClient();
+    uint32_t srvFd = LastHandshakeAcceptedServerFd();
+
+    // sizeof(InitMsg) is 8 bytes; send only 4.
+    uint8_t partial[4] = {1, 2, 3, 4};
+    ASSERT_EQ(send(clientFd, partial, sizeof(partial), 0),
+              static_cast<ssize_t>(sizeof(partial)));
+
+    ReadHandshakeMessage(srvFd);
+    EXPECT_TRUE(handshakeServer.FirstMessages.empty())
+        << "handshake must not fire on a partial first message";
+
+    uint8_t rest[4] = {5, 6, 7, 8};
+    ASSERT_EQ(send(clientFd, rest, sizeof(rest), 0),
+              static_cast<ssize_t>(sizeof(rest)));
+
+    ReadHandshakeMessage(srvFd);
+
+    ASSERT_EQ(handshakeServer.FirstMessages.size(), 1u)
+        << "the completed handshake message should fire once the rest "
+           "of its bytes arrive";
+    uint64_t expected;
+    std::memcpy(&expected, partial, 4);
+    std::memcpy(reinterpret_cast<uint8_t *>(&expected) + 4, rest, 4);
+    EXPECT_EQ(handshakeServer.FirstMessages[0].second, expected);
 }
 
 } // namespace naoto

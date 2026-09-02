@@ -1,4 +1,7 @@
 #include <gtest/gtest.h>
+
+#include <csignal>
+
 #include <order.hpp>
 #include <order_node.hpp>
 #include <price_level.hpp>
@@ -170,6 +173,116 @@ TEST_F(PriceLevelTest, DeleteOrderAtTailUpdatesTail)
     EXPECT_EQ(level.PeekOrder(), n1);
     (void)level.PopOrder();
     EXPECT_EQ(level.PeekOrder(), n3);
+}
+
+TEST_F(PriceLevelTest, GetKeyReturnsConstructedPrice)
+{
+    PriceLevel level(12345);
+    EXPECT_EQ(level.GetKey(), 12345);
+}
+
+TEST_F(PriceLevelTest, DefaultConstructedLevelHasZeroPrice)
+{
+    PriceLevel level;
+    EXPECT_EQ(level.GetKey(), 0);
+    EXPECT_EQ(level.PeekOrder(), nullptr);
+}
+
+TEST_F(PriceLevelTest, SetPriceChangesKey)
+{
+    PriceLevel level(100);
+    level.SetPrice(200);
+    EXPECT_EQ(level.GetKey(), 200);
+}
+
+TEST_F(PriceLevelTest, IncTotalAmountAppliesPositiveDelta)
+{
+    PriceLevel level(100);
+    OrderNode *n1 = MakeNode(1, 10);
+    level.AddOrder(n1);
+
+    // Used on the hot path when a resting order is partially filled:
+    // the order's own remaining amount is updated separately, and the
+    // level's aggregate TotalAmount is adjusted in lockstep rather than
+    // walking the list to resum it.
+    level.IncTotalAmount(5);
+    EXPECT_EQ(level.GetTotalAmount(), 15u);
+}
+
+TEST_F(PriceLevelTest, IncTotalAmountAppliesNegativeDelta)
+{
+    PriceLevel level(100);
+    OrderNode *n1 = MakeNode(1, 10);
+    level.AddOrder(n1);
+
+    // Negative delta: e.g. shrinking TotalAmount to reflect a partial
+    // fill on the resting order without popping/re-adding it.
+    level.IncTotalAmount(-4);
+    EXPECT_EQ(level.GetTotalAmount(), 6u);
+}
+
+TEST_F(PriceLevelTest, ClearPriceLevelOnAlreadyEmptyLevelIsANoOp)
+{
+    SingleThreadedStoragePool<OrderNode> smallPool(2);
+    PriceLevel level(100);
+
+    EXPECT_NO_FATAL_FAILURE(level.ClearPriceLevel(smallPool));
+    EXPECT_EQ(level.PeekOrder(), nullptr);
+    EXPECT_EQ(level.GetTotalAmount(), 0u);
+
+    // Pool must be untouched - clearing an empty level shouldn't
+    // consume/release anything.
+    EXPECT_NE(smallPool.acquire(), nullptr);
+    EXPECT_NE(smallPool.acquire(), nullptr);
+}
+
+TEST_F(PriceLevelTest, DeleteOrderOfLastOrderLeavesLevelReusable)
+{
+    // After the only order is deleted, Head/Tail must both be reset to
+    // nullptr (not just Head) - otherwise a subsequent AddOrder that
+    // takes the "list not empty" branch would corrupt the list off a
+    // stale Tail pointer. Exercise that by re-adding and checking FIFO
+    // order still holds with a fresh Tail.
+    PriceLevel level(100);
+    OrderNode *n1 = MakeNode(1, 10);
+    level.AddOrder(n1);
+    ASSERT_TRUE(level.DeleteOrder(n1));
+
+    OrderNode *n2 = MakeNode(2, 20);
+    OrderNode *n3 = MakeNode(3, 30);
+    level.AddOrder(n2);
+    level.AddOrder(n3);
+
+    EXPECT_EQ(level.GetTotalAmount(), 50u);
+    EXPECT_EQ(level.PeekOrder(), n2);
+    EXPECT_EQ(level.PopOrder(), n2);
+    EXPECT_EQ(level.PeekOrder(), n3);
+}
+
+TEST(PriceLevelDeathTest, ClearPriceLevelTerminatesIfPoolCannotAcceptReleases)
+{
+    // ClearPriceLevel() releases every node it holds back into the pool
+    // it's given. release() on SingleThreadedStoragePool only succeeds
+    // while FreeSize < Capacity - a freshly-constructed pool already
+    // has FreeSize == Capacity (everything is free), so calling
+    // ClearPriceLevel() with the *wrong* pool (anything other than the
+    // exact pool the nodes were acquired from) fails on the very first
+    // node and terminates the process. This documents that footgun:
+    // there is no ownership check, only a capacity check.
+    using naoto::matching_engine::PriceLevel;
+    SingleThreadedStoragePool<OrderNode> pool(2);
+    OrderNode *n1 = pool.acquire();
+    n1->SetOrder(MakeOrder(1, 10, 100));
+
+    EXPECT_EXIT(
+        {
+            PriceLevel level(100);
+            level.AddOrder(n1);
+            SingleThreadedStoragePool<OrderNode> freshPool(1);
+            level.ClearPriceLevel(freshPool);
+        },
+        ::testing::KilledBySignal(SIGABRT),
+        "Failed to release while clearing price level");
 }
 
 TEST_F(PriceLevelTest, ClearPriceLevelReturnsAllNodesToThePool)

@@ -230,6 +230,52 @@ TEST(ClientStatesTest, MultipleSequentialUpdatesAccumulateCorrectly)
     EXPECT_EQ(attempt, expectedAttempt);
 }
 
+// --- CONFIRMED bug: SetClientAssets() deltas are silently discarded if
+// SetClientState() lands in the same unflushed generation afterward ----
+//
+// SetClientAssets() accumulates into Deltas[clientId][complete] with
+// `+=`. SetClientState() writes into the *same* array slot
+// (Deltas[clientFd][complete]) but with a plain `=` - it always
+// recomputes the delta as `response->Confirmed[i] - ref.Confirmed[i]`
+// against the currently-visible (pre-update) state, with no idea that
+// SetClientAssets() already staged something there. So: risk-check (or
+// a fill) calls SetClientAssets() to bump attempt/confirmed, and before
+// the next flush a fresh account snapshot arrives via SetClientState()
+// (a perfectly normal race in a system where the account service can
+// push a snapshot at any time) - the SetClientAssets() delta is
+// overwritten, not merged, and that increment is gone for good; it
+// never reaches the reader.
+TEST(ClientStatesTest, SetClientStateAfterSetClientAssetsInSameGenerationDropsTheAssetsDelta)
+{
+    ClientStates<kMaxPositions> states(4);
+    auto snapshot =
+        MakeSnapshot(0, 42, {1, 2, 3}, {100, 0, 0}, {0, 0, 0});
+    states.SetClientState(&snapshot);
+    states.FlushTripleBuffer(0);
+
+    // A fill bumps attempt on asset 1 by 50, unflushed...
+    states.SetClientAssets(0, /*confirmed=*/0, /*attempt=*/50,
+                           /*assetId=*/1);
+
+    // ...then a fresh (otherwise identical) snapshot arrives before that
+    // gets flushed.
+    auto sameSnapshotAgain =
+        MakeSnapshot(0, 42, {1, 2, 3}, {100, 0, 0}, {0, 0, 0});
+    states.SetClientState(&sameSnapshotAgain);
+
+    states.FlushTripleBuffer(0);
+
+    int64_t confirmed = -1, attempt = -1;
+    ASSERT_TRUE(states.GetClientFunds(0, 1, &confirmed, &attempt));
+    EXPECT_EQ(attempt, 0)
+        << "documents current behavior: the +50 from SetClientAssets() "
+           "was silently lost because SetClientState() overwrote the "
+           "same delta slot instead of merging with it - if that's not "
+           "the intended tradeoff, SetClientState() needs to add its "
+           "delta rather than assign it, the same way SetClientAssets() "
+           "does";
+}
+
 TEST(ClientStatesTest, SetAuthStatusIsVisibleAfterFlush)
 {
     ClientStates<kMaxPositions> states(4);

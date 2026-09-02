@@ -170,6 +170,96 @@ TEST(FlatHashMapTest, WraparoundProbingWorks)
     }
 }
 
+// AddNode() has no resize/rehash path - Size is a fixed, compile-time
+// capacity. When the table is completely full, the probe loops in
+// AddNode() run out (`cur_dib` reaches total_size in both phases) and
+// the function just returns without writing anything - a *silent*
+// drop, no error, no exception, no [[nodiscard]] return value to check.
+// That's an important operational property to pin down: a caller
+// (e.g. the order book adding a new price level) gets no signal that
+// its insert was lost. Verify both halves: the failed insert really
+// doesn't take effect, and - just as important - a full table survives
+// the failed insert attempt without corrupting the entries already
+// there (AddNode's Robin Hood swapping runs right up to the point it
+// gives up).
+TEST(FlatHashMapTest, AddNodeOnFullTableSilentlyDropsWithoutCorrupting)
+{
+    constexpr size_t Size = 1; // 16 total slots
+    FlatHashMap<int64_t, int, Size> map;
+
+    std::vector<int64_t> keys;
+    for (int64_t k = 0; k < 16; ++k)
+    {
+        keys.push_back(k);
+        map.AddNode(k, static_cast<int>(k));
+    }
+
+    map.AddNode(100, 999); // table is full: this must be dropped
+
+    int out = -1;
+    EXPECT_FALSE(map.GetVal(100, out))
+        << "insert into a full table must not silently succeed";
+
+    for (auto k : keys)
+    {
+        out = -1;
+        ASSERT_TRUE(map.GetVal(k, out))
+            << "key " << k << " must survive a failed insert attempt "
+               "on a full table";
+        EXPECT_EQ(out, static_cast<int>(k));
+    }
+}
+
+// Mirror of WraparoundProbingWorks, but for DeleteNode()'s backward-shift
+// loop: deleting an entry whose probe chain crosses the end of the
+// physical array (idx 63 -> 0) must still shift the correct successors
+// back by one, without disturbing entries on the other side of the wrap
+// or entries elsewhere in the table.
+TEST(FlatHashMapTest, DeleteNodeAcrossWraparoundShiftsCorrectSuccessors)
+{
+    constexpr size_t Size = 4; // total_size = 64, last bucket starts at 48
+    FlatHashMap<int64_t, int, Size> map;
+
+    std::vector<int64_t> keys;
+    int64_t k = 3; // home bucket = 3<<4 = 48 (last bucket)
+    for (int i = 0; i < 20; ++i)
+    {
+        while (((k * 0x9E3779B97F4A7C15ULL) & (Size - 1)) != 3)
+        {
+            ++k;
+        }
+        keys.push_back(k);
+        ++k;
+    }
+
+    for (size_t i = 0; i < keys.size(); ++i)
+    {
+        map.AddNode(keys[i], static_cast<int>(i));
+    }
+
+    // keys[15] lands at physical slot 63, the very last slot before the
+    // wrap; its successor (keys[16]) lives at slot 0, just after the
+    // wrap. Deleting keys[15] forces the backward-shift to cross that
+    // boundary.
+    map.DeleteNode(keys[15]);
+
+    int out = -1;
+    EXPECT_FALSE(map.GetVal(keys[15], out));
+
+    for (size_t i = 0; i < keys.size(); ++i)
+    {
+        if (i == 15)
+        {
+            continue;
+        }
+        out = -1;
+        ASSERT_TRUE(map.GetVal(keys[i], out))
+            << "key " << keys[i] << " (index " << i
+            << ") should survive a delete that shifts across the wrap";
+        EXPECT_EQ(out, static_cast<int>(i));
+    }
+}
+
 // Cross-check against std::map with randomized insert/delete/lookup
 // sequences.
 TEST(FlatHashMapTest, MatchesStdMapUnderRandomOps)
@@ -197,6 +287,64 @@ TEST(FlatHashMapTest, MatchesStdMapUnderRandomOps)
             }
         }
         else if (op == 1) // delete
+        {
+            map.DeleteNode(key);
+            model.erase(key);
+        }
+        else // lookup
+        {
+            int64_t out = -1;
+            bool found = map.GetVal(key, out);
+            bool shouldFind = model.count(key) != 0;
+            ASSERT_EQ(found, shouldFind) << "key " << key << " at iter " << iter;
+            if (shouldFind)
+            {
+                EXPECT_EQ(out, model.at(key)) << "key " << key << " at iter " << iter;
+            }
+        }
+    }
+
+    for (auto &[key, val] : model)
+    {
+        int64_t out = -1;
+        ASSERT_TRUE(map.GetVal(key, out)) << "final check, key " << key;
+        EXPECT_EQ(out, val);
+    }
+}
+
+// Same randomized cross-check, but at a much higher load factor (keys
+// span a range only slightly larger than the table itself) so probe
+// chains routinely run long and cross bucket boundaries and the
+// physical-array wrap. This is where Robin Hood swapping and
+// backward-shift deletion earn their keep - the low-load-factor test
+// above mostly hits the empty-slot fast paths.
+TEST(FlatHashMapTest, MatchesStdMapUnderRandomOpsAtHighLoadFactor)
+{
+    constexpr size_t Size = 8; // 128 slots
+    FlatHashMap<int64_t, int64_t, Size> map;
+    std::map<int64_t, int64_t> model;
+
+    std::mt19937_64 rng(0xDEADBEEF);
+    // Key domain is only ~90% of capacity, and never-deleted-then-never-
+    // reinserted state keeps the live set bouncing around a high
+    // fraction of the table's capacity for most of the run.
+    std::uniform_int_distribution<int64_t> keyDist(0, 114);
+    std::uniform_int_distribution<int> opDist(0, 4); // biased towards insert
+
+    for (int iter = 0; iter < 8000; ++iter)
+    {
+        int64_t key = keyDist(rng);
+        int op = opDist(rng);
+
+        if (op <= 2) // insert (weighted so the table stays near-full)
+        {
+            if (!model.count(key))
+            {
+                model.emplace(key, key * 7 + 1);
+                map.AddNode(key, key * 7 + 1);
+            }
+        }
+        else if (op == 3) // delete
         {
             map.DeleteNode(key);
             model.erase(key);

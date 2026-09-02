@@ -354,6 +354,19 @@ TEST_F(BidAskTest, CancelOrderRemovesRestingBuyFromBook)
     ASSERT_EQ(reports.size(), 1u);
     EXPECT_EQ(reports[0].State, OrderState::CANCEL);
     EXPECT_EQ(reports[0].OrderId, 1u);
+
+    // OrderMap must have dropped the entry along with the book, so a
+    // second cancel of the same order id is rejected rather than
+    // matching a stale OrderNode* and generating a bogus second CANCEL.
+    OrderNode *stale = nullptr;
+    EXPECT_FALSE(engine->OrderMap.GetVal(1, stale));
+
+    Order secondCancel = MakeCancel(1, 42, OrderSide::BUY);
+    engine->CancelOrder<OrderSide::BUY>(secondCancel);
+
+    auto secondReports = DrainReports();
+    ASSERT_EQ(secondReports.size(), 1u);
+    EXPECT_EQ(secondReports[0].State, OrderState::REJECT);
 }
 
 TEST_F(BidAskTest, CancelOrderRemovesRestingSellFromBook)
@@ -370,6 +383,16 @@ TEST_F(BidAskTest, CancelOrderRemovesRestingSellFromBook)
     auto reports = DrainReports();
     ASSERT_EQ(reports.size(), 1u);
     EXPECT_EQ(reports[0].State, OrderState::CANCEL);
+
+    OrderNode *stale = nullptr;
+    EXPECT_FALSE(engine->OrderMap.GetVal(1, stale));
+
+    Order secondCancel = MakeCancel(1, 42, OrderSide::SELL);
+    engine->CancelOrder<OrderSide::SELL>(secondCancel);
+
+    auto secondReports = DrainReports();
+    ASSERT_EQ(secondReports.size(), 1u);
+    EXPECT_EQ(secondReports[0].State, OrderState::REJECT);
 }
 
 // --- CONFIRMED bug (crashed the process under ASan before the fix in
@@ -434,6 +457,21 @@ TEST_F(BidAskTest, ExactFillRemovesRestingOrderFromBook)
     auto reports = DrainReports();
     EXPECT_TRUE(HasState(reports, 1, OrderState::FILL));
     EXPECT_TRUE(HasState(reports, 2, OrderState::FILL));
+
+    // The resting sell (order 1) was fully consumed by the match, not
+    // cancelled - its OrderMap entry must be gone the same way it would
+    // be after an explicit cancel, otherwise a cancel request arriving
+    // late for an already-filled order would find a stale OrderNode*
+    // and get accepted instead of rejected. The aggressor (order 2)
+    // never rested, so it was never in OrderMap to begin with.
+    OrderNode *stale = nullptr;
+    EXPECT_FALSE(engine->OrderMap.GetVal(1, stale));
+
+    Order lateCancel = MakeCancel(1, 1, OrderSide::SELL);
+    engine->CancelOrder<OrderSide::SELL>(lateCancel);
+    auto lateReports = DrainReports();
+    ASSERT_EQ(lateReports.size(), 1u);
+    EXPECT_EQ(lateReports[0].State, OrderState::REJECT);
 }
 
 // --- Suspected bug: market orders with an unset/zero Price never match

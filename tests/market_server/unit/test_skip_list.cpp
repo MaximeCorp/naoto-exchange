@@ -100,6 +100,34 @@ TEST_F(SkipListTest, DeleteNodeThenGetValReportsNotFound)
     EXPECT_FALSE(found);
 }
 
+TEST_F(SkipListTest, GetHeadOnEmptyListReturnsNullptr)
+{
+    // Head->Forward[0] is initialized to Tail, and Tail->Value is
+    // nullptr, so GetHead() on an empty list should hand back nullptr
+    // rather than a dangling/garbage pointer. This matters directly for
+    // the order book: "no orders on this side" must be distinguishable
+    // from "orders exist starting at address 0".
+    EXPECT_EQ(list.GetHead(), nullptr);
+}
+
+TEST_F(SkipListTest, ReAddAfterDeleteSucceeds)
+{
+    // AddNode()'s duplicate-key guard compares against the immediate
+    // predecessor's key; make sure a key that was inserted, deleted,
+    // then re-inserted, is treated as a fresh insert rather than
+    // silently ignored as though it were still present.
+    int a = 1, b = 2;
+    list.AddNode(10, &a);
+    list.DeleteNode(10);
+    list.AddNode(10, &b);
+
+    bool found = false;
+    int *out = list.GetVal(10, found);
+    EXPECT_TRUE(found);
+    EXPECT_EQ(out, &b);
+    EXPECT_EQ(list.GetHead(), &b);
+}
+
 TEST_F(SkipListTest, DeleteNodeOnMissingKeyIsANoOp)
 {
     int a = 1;
@@ -209,4 +237,68 @@ TEST(SkipListDescendingTest, DeleteNodeTracksNewMaxUnderGreater)
 
     list.DeleteNode(30);
     EXPECT_EQ(list.GetHead(), &c); // 20 becomes the new max
+}
+
+TEST(SkipListDescendingTest, GetHeadOnEmptyListReturnsNullptr)
+{
+    SkipList<int64_t, int *, kMaxLevel, std::greater<int64_t>> list{64};
+    EXPECT_EQ(list.GetHead(), nullptr);
+}
+
+// ---------------------------------------------------------------------
+// Death tests: document current (crash-on-misuse) behavior at the two
+// boundaries the skip list doesn't defend against. Neither of these is
+// exercised by the "normal" tests above, but both are reachable if a
+// caller isn't careful, so they're worth pinning down rather than
+// leaving as silent assumptions.
+// ---------------------------------------------------------------------
+
+TEST(SkipListDeathTest, InsertingSentinelMaxKeyUnderLessCorruptsTraversal)
+{
+    // Under the default std::less<K>, Tail is seeded with
+    // Key = numeric_limits<K>::max(). AddNode()'s scan condition is
+    // `while (!comp(key, forward->Key))`, i.e. "keep advancing while
+    // key >= forward->Key". If the caller inserts a key exactly equal
+    // to numeric_limits<K>::max(), the scan advances *onto* Tail itself
+    // (key == Tail->Key satisfies key >= Tail->Key) and then
+    // dereferences Tail->Forward[level]->Key - but Tail->Forward
+    // entries are all nullptr, so this is a null-pointer dereference.
+    // In a real order book this would require a Price of INT64_MAX,
+    // which should never happen, but there is no guard against it here
+    // - flagging it as a hard boundary rather than an assumption.
+    SkipList<int64_t, int *, kMaxLevel> list{16};
+    int a = 1;
+    constexpr int64_t kSentinelMax = std::numeric_limits<int64_t>::max();
+
+    EXPECT_DEATH({ list.AddNode(kSentinelMax, &a); }, "");
+}
+
+TEST(SkipListDeathTest, InsertingSentinelMinKeyUnderGreaterCorruptsTraversal)
+{
+    // Mirror image of the above for the Bid side's std::greater<>
+    // instantiation: there, Tail is seeded with
+    // Key = numeric_limits<K>::min(), so a Price of INT64_MIN triggers
+    // the same null dereference.
+    SkipList<int64_t, int *, kMaxLevel, std::greater<int64_t>> list{16};
+    int a = 1;
+    constexpr int64_t kSentinelMin = std::numeric_limits<int64_t>::min();
+
+    EXPECT_DEATH({ list.AddNode(kSentinelMin, &a); }, "");
+}
+
+TEST(SkipListDeathTest, AddNodeTerminatesWhenNodePoolIsExhausted)
+{
+    // Capacity is nodesPoolSize + 2 (two slots reserved for the Head
+    // and Tail sentinels up front). With nodesPoolSize == 1, exactly
+    // one real AddNode() can succeed; the next one finds the pool
+    // empty and terminates rather than silently dropping the insert or
+    // corrupting the list. Good to know this is a hard-fail, not a
+    // no-op, since a matching engine hitting this in production would
+    // otherwise drop a resting order without any signal.
+    SkipList<int64_t, int *, kMaxLevel> list{1};
+    int a = 1, b = 2;
+    list.AddNode(10, &a);
+
+    EXPECT_DEATH({ list.AddNode(20, &b); },
+                 "Couldn't get a pointer from mempool");
 }

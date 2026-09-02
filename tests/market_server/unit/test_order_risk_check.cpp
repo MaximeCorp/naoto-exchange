@@ -134,7 +134,17 @@ TEST(OrderRiskCheckTest, RejectsSellExceedingConfirmedFunds)
 
 TEST(OrderRiskCheckTest, BuyLimitRiskIsAmountTimesPrice)
 {
-    ClientState<kMaxPositions> state = MakeState(1, 0, {1}, {1000});
+    // BUY orders always look up asset index 0 (the "currency you're
+    // paying with" - see MarketBuyOrdersAreRiskCheckedAgainstAssetZero
+    // below, and CheckOrderRisk's unconditional
+    // `order.Side == OrderSide::BUY ? 0 : order.AssetId`), regardless of
+    // OrderType. The ClientState's tracked position has to be asset id 0
+    // for a BUY LIMIT order to be checked against it - using an
+    // unrelated id here previously made this test silently check against
+    // whatever *other*, unintentionally zero-valued slot happened to
+    // match id 0 in the ClientState array, rather than the id(1000)
+    // position actually being set up.
+    ClientState<kMaxPositions> state = MakeState(1, 0, {0}, {1000});
     LocalAttempts<kMaxPositions> localAttempt;
     uint32_t localSession = 0;
     // amount(10) * price(50) = 500, within 1000 confirmed.
@@ -149,7 +159,9 @@ TEST(OrderRiskCheckTest, BuyLimitRiskIsAmountTimesPrice)
 
 TEST(OrderRiskCheckTest, BuyLimitExceedingFundsIsRejected)
 {
-    ClientState<kMaxPositions> state = MakeState(1, 0, {1}, {1000});
+    // Same asset-id-0 requirement as BuyLimitRiskIsAmountTimesPrice
+    // above.
+    ClientState<kMaxPositions> state = MakeState(1, 0, {0}, {1000});
     LocalAttempts<kMaxPositions> localAttempt;
     uint32_t localSession = 0;
     // amount(10) * price(101) = 1010 > 1000.
@@ -240,6 +252,74 @@ TEST(OrderRiskCheckTest, RemoteAttemptIsAddedToLocalAttempt)
 
     EXPECT_EQ(status, OrderConfirmationStatus::InsufficientFunds)
         << "400 (remote attempt) + 601 (this order) > 1000 confirmed";
+}
+
+TEST(OrderRiskCheckTest, BuyLimitOrderWithNegativePriceUnlocksExtraBuyingPower)
+{
+    // Nothing in CheckOrderRisk (or upstream of it - see order_router.hpp,
+    // there's no Price/Amount validation before this function is called)
+    // rejects a negative Price. For a BUY LIMIT order the reserved
+    // "amount" is order.Amount * order.Price, so a negative price makes
+    // that product negative - which always satisfies
+    // `amount > confirmed - attempt` as false (Accepted), and then gets
+    // *added* to localAttempt, driving it negative instead of reserving
+    // funds.
+    ClientState<kMaxPositions> state = MakeState(1, 0, {0}, {1000});
+    LocalAttempts<kMaxPositions> localAttempt;
+    uint32_t localSession = 0;
+
+    Order negPrice = MakeOrder(1, OrderSide::BUY, OrderType::LIMIT,
+                                /*price=*/-1'000'000, /*amount=*/1,
+                                /*assetId=*/0);
+    auto status1 = CheckOrderRisk<kMaxPositions, kMaxAsset>(
+        state, localAttempt, localSession, negPrice, 1);
+
+    EXPECT_EQ(status1, OrderConfirmationStatus::Accepted);
+    EXPECT_EQ(localAttempt[0], -1'000'000);
+
+    // With localAttempt[0] now deeply negative, a second order asking
+    // for far more than the client's real 1000 confirmed funds still
+    // clears the check: confirmed(1000) - attempt(-1,000,000) looks like
+    // ~1,001,000 of "available" funds that were never actually there.
+    Order overBudget = MakeOrder(1, OrderSide::BUY, OrderType::LIMIT,
+                                  /*price=*/1, /*amount=*/10'000,
+                                  /*assetId=*/0);
+    auto status2 = CheckOrderRisk<kMaxPositions, kMaxAsset>(
+        state, localAttempt, localSession, overBudget, 1);
+
+    EXPECT_EQ(status2, OrderConfirmationStatus::Accepted)
+        << "a single negative-price order lets a client reserve far more "
+           "than their real confirmed funds on every order after it";
+}
+
+TEST(OrderRiskCheckTest,
+     BuyLimitOrderAmountTimesPriceCanOverflowAndBypassInsufficientFunds)
+{
+    // order.Amount is uint32_t (up to ~4.29e9) and order.Price is
+    // int64_t; CheckOrderRisk computes order.Amount * order.Price with
+    // no bounds check on either input (OrderConfirmationStatus even has
+    // unused InvalidPrice/InvalidQuantity members that look like they
+    // were meant for exactly this, but nothing in the codebase ever
+    // returns them). A large-but-individually-plausible-looking Amount
+    // and Price multiply out to something past INT64_MAX, wraps to a
+    // large negative number, and the InsufficientFunds check
+    // (`amount > confirmed - attempt`) can't catch a negative "amount"
+    // no matter how little the client actually has confirmed.
+    ClientState<kMaxPositions> state = MakeState(1, 0, {0}, {100});
+    LocalAttempts<kMaxPositions> localAttempt;
+    uint32_t localSession = 0;
+
+    Order overflowing =
+        MakeOrder(1, OrderSide::BUY, OrderType::LIMIT,
+                  /*price=*/3'000'000'000LL, /*amount=*/4'000'000'000U,
+                  /*assetId=*/0);
+    auto status = CheckOrderRisk<kMaxPositions, kMaxAsset>(
+        state, localAttempt, localSession, overflowing, 1);
+
+    EXPECT_EQ(status, OrderConfirmationStatus::Accepted)
+        << "amount(4e9) * price(3e9) overflows int64_t and wraps negative, "
+           "so a client with only 100 confirmed clears the funds check for "
+           "an order that should cost far more than that";
 }
 
 TEST(OrderRiskCheckTest, SessionIdChangeClearsLocalAttempt)
