@@ -19,6 +19,9 @@ namespace naoto
         int64_t BoughtDelta;
         int64_t SoldDelta;
         int64_t SoldAttemptDelta;
+        uint64_t IngestedTimestamp;
+        uint64_t ReceivedTimestamp;
+        uint64_t UpdateTimestamp;
         uint32_t SequenceId;
         uint32_t ClientId;
         uint32_t OrderId;
@@ -28,14 +31,19 @@ namespace naoto
         OrderState State;
 
         void FillReport(int64_t boughtDelta, int64_t soldDelta,
-                        int64_t soldAttemptDelta, uint32_t sequenceId,
-                        uint32_t clientId, uint32_t orderId, uint32_t tradeId,
+                        int64_t soldAttemptDelta, uint64_t ingestedTimestamp,
+                        uint64_t receivedTimestamp, uint64_t updateTimestamp,
+                        uint32_t sequenceId, uint32_t clientId,
+                        uint32_t orderId, uint32_t tradeId,
                         uint16_t boughtAssetId, uint16_t soldAssetId,
                         OrderState state)
         {
             BoughtDelta = boughtDelta;
             SoldDelta = soldDelta;
             SoldAttemptDelta = soldAttemptDelta;
+            IngestedTimestamp = ingestedTimestamp;
+            ReceivedTimestamp = receivedTimestamp;
+            UpdateTimestamp = updateTimestamp;
             SequenceId = sequenceId;
             ClientId = clientId;
             OrderId = orderId;

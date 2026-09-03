@@ -1,15 +1,12 @@
 #pragma once
 
 #include <array>
-#include <bit>
-#include <concepts>
+#include <concepts.hpp>
 #include <cstddef>
+#include <cstdint>
 
 namespace naoto
 {
-    template <size_t Size>
-    concept PowerOfTwo = (Size > 0) && std::has_single_bit(Size);
-
     template <typename T>
     concept HasSequenceId = requires(T t) {
         { t.SequenceId } -> std::convertible_to<uint32_t>;

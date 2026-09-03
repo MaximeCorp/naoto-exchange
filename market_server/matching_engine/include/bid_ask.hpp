@@ -13,6 +13,7 @@
 #include <storage_pool.hpp>
 #include <string>
 #include <thread>
+#include <timestamps.hpp>
 #include <vector>
 
 namespace naoto::matching_engine
@@ -71,7 +72,9 @@ namespace naoto::matching_engine
 
         FlatHashMap<uint64_t, OrderNode *, OrderMapSize> OrderMap;
 
-        OrderBook<FHMSize, SkipListMaxLevel, OrderMapSize, std::greater<int64_t>> Bid;
+        OrderBook<FHMSize, SkipListMaxLevel, OrderMapSize,
+                  std::greater<int64_t>>
+            Bid;
         OrderBook<FHMSize, SkipListMaxLevel, OrderMapSize> Ask;
 
         [[nodiscard]] bool IsMarketable(Order &order) const noexcept
@@ -96,13 +99,16 @@ namespace naoto::matching_engine
             OrderNode *toCancel = nullptr;
             bool found = OrderMap.GetVal(order.Amount, toCancel);
 
+            uint64_t now = now_tsc();
+
             if (!found || toCancel->GetClientId() != order.ClientId)
                 [[unlikely]]
             {
                 OrderStateReport *rejectReport = OrderReportsPool.acquire();
-                rejectReport->FillReport(0, 0, 0, ReportSequenceId++,
-                                         order.ClientId, order.OrderId, 0, 0, 0,
-                                         OrderState::REJECT);
+                rejectReport->FillReport(
+                    0, 0, 0, order.IngestedTimestamp, order.ReceivedTimestamp,
+                    now, ReportSequenceId++, order.ClientId, order.OrderId, 0,
+                    0, 0, OrderState::REJECT);
                 OutgoingOrders.try_enqueue(rejectReport);
 
                 std::cout << "Rejected a cancel request";
@@ -130,6 +136,7 @@ namespace naoto::matching_engine
                 OrderStateReport *cancelReport = OrderReportsPool.acquire();
                 cancelReport->FillReport(
                     0, 0, toCancel->GetAmount() * toCancel->GetPrice(),
+                    order.IngestedTimestamp, order.ReceivedTimestamp, now,
                     ReportSequenceId++, toCancel->GetClientId(),
                     toCancel->GetId(), 0, MarketAssetId, 0, OrderState::CANCEL);
                 OutgoingOrders.try_enqueue(cancelReport);
@@ -140,7 +147,7 @@ namespace naoto::matching_engine
                     OrderBookUpdatesPool.acquire();
 
                 curOrderBookUpdate->FillUpdate(
-                    OrderBookSequenceId++,
+                    now, OrderBookSequenceId++,
                     curLevel ? curLevel->GetTotalAmount() : 0, curPrice,
                     MarketAssetId, ORDER_BOOK_UPDATE_BUY);
 
@@ -150,7 +157,8 @@ namespace naoto::matching_engine
             {
                 OrderStateReport *cancelReport = OrderReportsPool.acquire();
                 cancelReport->FillReport(
-                    0, 0, toCancel->GetAmount(), ReportSequenceId++,
+                    0, 0, toCancel->GetAmount(), order.IngestedTimestamp,
+                    order.ReceivedTimestamp, now, ReportSequenceId++,
                     toCancel->GetClientId(), toCancel->GetId(), 0, 0,
                     MarketAssetId, OrderState::CANCEL);
                 OutgoingOrders.try_enqueue(cancelReport);
@@ -161,7 +169,7 @@ namespace naoto::matching_engine
                     OrderBookUpdatesPool.acquire();
 
                 curOrderBookUpdate->FillUpdate(
-                    OrderBookSequenceId++,
+                    now, OrderBookSequenceId++,
                     curLevel ? curLevel->GetTotalAmount() : 0, curPrice,
                     MarketAssetId, ORDER_BOOK_UPDATE_SELL);
 
@@ -225,10 +233,13 @@ namespace naoto::matching_engine
 
                     totalLocked += soldDelta * BestAskPrice;
 
+                    uint64_t now = now_tsc();
+
                     OrderStateReport *orderReport = OrderReportsPool.acquire();
                     orderReport->FillReport(
                         tradedAmount, soldDelta * BestAskPrice,
-                        soldDelta * BestAskPrice, ReportSequenceId++,
+                        soldDelta * BestAskPrice, order.IngestedTimestamp,
+                        order.ReceivedTimestamp, now, ReportSequenceId++,
                         order.ClientId, order.OrderId, 0, MarketAssetId, 0,
                         order.Amount > 0 ? OrderState::PARTIAL_FILL
                                          : OrderState::FILL);
@@ -237,8 +248,10 @@ namespace naoto::matching_engine
                     OrderStateReport *offerReport = OrderReportsPool.acquire();
                     offerReport->FillReport(
                         tradedAmount * BestAskPrice, soldDelta, soldDelta,
-                        ReportSequenceId++, bestOffer->GetClientId(),
-                        bestOffer->GetId(), 0, 0, MarketAssetId,
+                        bestOffer->IngestedTimestamp,
+                        bestOffer->ReceivedTimestamp, now, ReportSequenceId++,
+                        bestOffer->GetClientId(), bestOffer->GetId(), 0, 0,
+                        MarketAssetId,
                         bestOffer->GetAmount() > 0 ? OrderState::PARTIAL_FILL
                                                    : OrderState::FILL);
                     OutgoingOrders.try_enqueue(offerReport);
@@ -246,7 +259,7 @@ namespace naoto::matching_engine
                     OrderBookUpdate *curOrderBookUpdate =
                         OrderBookUpdatesPool.acquire();
                     curOrderBookUpdate->FillUpdate(
-                        OrderBookSequenceId++, bestLevel->GetTotalAmount(),
+                        now, OrderBookSequenceId++, bestLevel->GetTotalAmount(),
                         BestAskPrice, MarketAssetId, ORDER_BOOK_UPDATE_SELL);
                     OutgoingBook.try_enqueue(curOrderBookUpdate);
 
@@ -267,10 +280,14 @@ namespace naoto::matching_engine
 
             if (order.Amount > 0) [[unlikely]]
             {
+                uint64_t now = now_tsc();
+
                 OrderStateReport *orderReport = OrderReportsPool.acquire();
-                orderReport->FillReport(0, 0, -totalLocked, ReportSequenceId++,
-                                        order.ClientId, order.OrderId, 0,
-                                        MarketAssetId, 0, OrderState::CANCEL);
+                orderReport->FillReport(
+                    0, 0, -totalLocked, order.IngestedTimestamp,
+                    order.ReceivedTimestamp, now, ReportSequenceId++,
+                    order.ClientId, order.OrderId, 0, MarketAssetId, 0,
+                    OrderState::CANCEL);
                 OutgoingOrders.try_enqueue(orderReport);
             }
         }
@@ -332,9 +349,12 @@ namespace naoto::matching_engine
                     int64_t soldDelta = -static_cast<int64_t>(tradedAmount);
                     totalLocked += soldDelta;
 
+                    uint64_t now = now_tsc();
+
                     OrderStateReport *orderReport = OrderReportsPool.acquire();
                     orderReport->FillReport(
                         tradedAmount * BestBidPrice, soldDelta, soldDelta,
+                        order.IngestedTimestamp, order.ReceivedTimestamp, now,
                         ReportSequenceId++, order.ClientId, order.OrderId, 0, 0,
                         MarketAssetId,
                         order.Amount > 0 ? OrderState::PARTIAL_FILL
@@ -346,7 +366,8 @@ namespace naoto::matching_engine
                     OrderStateReport *offerReport = OrderReportsPool.acquire();
                     offerReport->FillReport(
                         tradedAmount, soldDelta * BestBidPrice,
-                        soldDelta * BestBidPrice, ReportSequenceId++,
+                        soldDelta * BestBidPrice, bestOffer->IngestedTimestamp,
+                        bestOffer->ReceivedTimestamp, now, ReportSequenceId++,
                         bestOffer->GetClientId(), bestOffer->GetId(), 0,
                         MarketAssetId, 0,
                         bestOffer->GetAmount() > 0 ? OrderState::PARTIAL_FILL
@@ -356,7 +377,7 @@ namespace naoto::matching_engine
                     OrderBookUpdate *curOrderBookUpdate =
                         OrderBookUpdatesPool.acquire();
                     curOrderBookUpdate->FillUpdate(
-                        OrderBookSequenceId++, bestLevel->GetTotalAmount(),
+                        now, OrderBookSequenceId++, bestLevel->GetTotalAmount(),
                         BestBidPrice, MarketAssetId, ORDER_BOOK_UPDATE_BUY);
                     OutgoingBook.try_enqueue(curOrderBookUpdate);
 
@@ -377,10 +398,12 @@ namespace naoto::matching_engine
 
             if (order.Amount > 0) [[unlikely]]
             {
+                uint now = now_tsc();
+
                 OrderStateReport *orderReport = OrderReportsPool.acquire();
-                orderReport->FillReport(0, 0, -totalLocked, ReportSequenceId++,
-                                        order.ClientId, order.OrderId, 0, 0,
-                                        MarketAssetId, OrderState::CANCEL);
+                orderReport->FillReport(
+                    now, 0, 0, -totalLocked, ReportSequenceId++, order.ClientId,
+                    order.OrderId, 0, 0, MarketAssetId, OrderState::CANCEL);
                 OutgoingOrders.try_enqueue(orderReport);
             }
         }
@@ -420,11 +443,15 @@ namespace naoto::matching_engine
 
             OrderStateReport *addReport = OrderReportsPool.acquire();
 
+            uint64_t now = now_tsc();
+
             if (addReport) [[likely]]
             {
-                addReport->FillReport(0, 0, order.Amount, ReportSequenceId++,
-                                      order.ClientId, order.OrderId, 0, 0,
-                                      MarketAssetId, OrderState::ADD);
+                addReport->FillReport(
+                    0, 0, order.Amount, order.IngestedTimestamp,
+                    order.ReceivedTimestamp, now, ReportSequenceId++,
+                    order.ClientId, order.OrderId, 0, 0, MarketAssetId,
+                    OrderState::ADD);
                 OutgoingOrders.try_enqueue(addReport);
                 // TODO : try_enqueue failure handling
             }
@@ -440,7 +467,7 @@ namespace naoto::matching_engine
             if (curOrderBookUpdate) [[likely]]
             {
                 curOrderBookUpdate->FillUpdate(
-                    OrderBookSequenceId++, curLevel->GetTotalAmount(),
+                    now, OrderBookSequenceId++, curLevel->GetTotalAmount(),
                     curLevel->GetKey(), MarketAssetId, ORDER_BOOK_UPDATE_SELL);
                 OutgoingBook.try_enqueue(curOrderBookUpdate);
             }
@@ -472,12 +499,15 @@ namespace naoto::matching_engine
 
             OrderStateReport *addReport = OrderReportsPool.acquire();
 
+            uint64_t now = now_tsc();
+
             if (addReport) [[likely]]
             {
-                addReport->FillReport(0, 0, order.Amount * order.Price,
-                                      ReportSequenceId++, order.ClientId,
-                                      order.OrderId, 0, MarketAssetId, 0,
-                                      OrderState::ADD);
+                addReport->FillReport(
+                    0, 0, order.Amount * order.Price, order.IngestedTimestamp,
+                    order.ReceivedTimestamp, now, ReportSequenceId++,
+                    order.ClientId, order.OrderId, 0, MarketAssetId, 0,
+                    OrderState::ADD);
                 OutgoingOrders.try_enqueue(addReport);
                 // TODO : try_enqueue failure handling
             }
@@ -493,7 +523,7 @@ namespace naoto::matching_engine
             if (curOrderBookUpdate) [[likely]]
             {
                 curOrderBookUpdate->FillUpdate(
-                    OrderBookSequenceId++, curLevel->GetTotalAmount(),
+                    now, OrderBookSequenceId++, curLevel->GetTotalAmount(),
                     curLevel->GetKey(), MarketAssetId, ORDER_BOOK_UPDATE_BUY);
                 OutgoingBook.try_enqueue(curOrderBookUpdate);
             }

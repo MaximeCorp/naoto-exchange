@@ -8,6 +8,7 @@
 #include <readerwritercircularbuffer.h>
 #include <routed_auth_request.hpp>
 #include <string>
+#include <timestamps.hpp>
 #include <versioned_fd.hpp>
 
 namespace naoto::order_gateway
@@ -90,12 +91,19 @@ namespace naoto::order_gateway
         void BatchHandle(ObjectBatch<Order, BatchSize> *batch,
                          uint32_t fd) noexcept
         {
+            uint64_t now = now_tsc();
+
             std::cout << "Checking auth from gateway\nClient state:\n\n";
 
             States.GetClientState(fd).log();
 
             batch->Fd = fd;
             batch->Auth = States.GetClientAuth(fd);
+
+            for (size_t i = 0; i < batch->Size; ++i)
+            {
+                batch[i].IngestedTimestamp = now;
+            }
         }
 
         void CloseHandle(uint32_t fd) noexcept

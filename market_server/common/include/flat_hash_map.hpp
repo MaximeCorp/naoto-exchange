@@ -2,14 +2,15 @@
 
 #include <array>
 #include <concepts>
+#include <concepts.hpp>
 #include <cstdint>
 #include <immintrin.h>
 #include <iostream>
 
 namespace naoto
 {
-    template <std::integral K, typename V,
-              size_t Size> // CRITICAL: Size MUST be a power of 2
+    template <std::integral K, typename V, size_t Size>
+        requires PowerOfTwo<Size>
     class FlatHashMap
     {
     private:
