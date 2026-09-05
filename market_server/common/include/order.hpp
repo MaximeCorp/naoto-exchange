@@ -27,8 +27,10 @@ namespace naoto
     struct Order
     {
         int64_t Price;
+#ifdef NAOTO_PERF
         uint64_t IngestedTimestamp;
         uint64_t ReceivedTimestamp;
+#endif
         uint64_t OrderId;
         uint32_t ClientOrderId;
         uint32_t ClientId;

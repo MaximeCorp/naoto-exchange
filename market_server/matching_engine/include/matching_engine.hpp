@@ -12,6 +12,7 @@
 #include <pthread.h>
 #include <readerwritercircularbuffer.h>
 #include <string>
+#include <system_conf.hpp>
 #include <thread>
 
 namespace naoto::matching_engine
@@ -107,11 +108,13 @@ namespace naoto::matching_engine
                         skipListNodesPoolSize)
             , Server(port, maxEvents, maxPending, OrdersPool, IncomingOrders,
                      nb_fds)
-            , Emitters(
-                  argc, argv, OutgoingOrders, OutgoingBook, OrderStatesPool,
-                  OrderBookUpdatesPool, portId, nbTxQueueSlots, poolSize, srcIp,
-                  srcPort, dstOrderIp, dstOrderPort, dstBookIp, dstBookPort)
-        {}
+            , Emitters(argc, argv, OutgoingOrders, OutgoingBook,
+                       OrderStatesPool, OrderBookUpdatesPool, portId,
+                       nbTxQueueSlots, poolSize, srcIp, srcPort, dstOrderIp,
+                       dstOrderPort, dstBookIp, dstBookPort)
+        {
+            FileDescriptorsOps::setMaxFd(nb_fds);
+        }
 
         ~MatchingEngine()
         {

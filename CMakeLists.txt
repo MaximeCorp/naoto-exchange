@@ -155,6 +155,7 @@ target_link_libraries(naoto_absl INTERFACE PkgConfig::ABSL)
 # before a benchmarking pass), not for everyday iteration.
 option(NAOTO_LTO "Whole-program link-time optimization (slow, RAM-heavy link step)" OFF)
 option(NAOTO_BUILD_TESTS "Build the GoogleTest suite under tests/" OFF)
+option(NAOTO_TIMESTAMPS "Turn on performances measurement with timestamps" OFF)
 
 if(NAOTO_LTO)
     include(CheckIPOSupported)
@@ -162,6 +163,10 @@ if(NAOTO_LTO)
     if(NAOTO_IPO_OK AND CMAKE_BUILD_TYPE STREQUAL "Release")
         set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
     endif()
+endif()
+
+if (NAOTO_TIMESTAMPS)
+    add_compile_definitions(NAOTO_PERF)
 endif()
 
 add_subdirectory(third_party)

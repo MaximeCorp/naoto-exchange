@@ -1,8 +1,8 @@
 #pragma once
 
 #include <atomic>
-#include <client_delta.hpp>
 #include <client_account_snapshot.hpp>
+#include <client_delta.hpp>
 #include <client_state.hpp>
 #include <readerwritercircularbuffer.h>
 #include <vector>

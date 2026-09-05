@@ -67,6 +67,17 @@ namespace naoto::matching_engine
             return NodeOrder.Price;
         }
 
+#ifdef NAOTO_PERF
+        [[nodiscard]] uint64_t GetIngested(void) const noexcept
+        {
+            return NodeOrder.IngestedTimestamp;
+        }
+
+        [[nodiscard]] uint64_t GetReceived(void) const noexcept
+        {
+            return NodeOrder.ReceivedTimestamp;
+        }
+#endif
         void log(void) noexcept
         {
             NodeOrder.log();
