@@ -98,10 +98,6 @@ namespace naoto::order_gateway
             uint64_t now = now_tsc();
 #endif
 
-            std::cout << "Checking auth from gateway\nClient state:\n\n";
-
-            States.GetClientState(fd).log();
-
             batch->Fd = fd;
             batch->Auth = States.GetClientAuth(fd);
 

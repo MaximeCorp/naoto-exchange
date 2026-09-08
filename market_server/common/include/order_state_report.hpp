@@ -21,6 +21,7 @@ namespace naoto
         int64_t SoldAttemptDelta;
 #ifdef NAOTO_PERF
         uint64_t IngestedTimestamp;
+        uint64_t RoutedTimestamp;
         uint64_t ReceivedTimestamp;
         uint64_t UpdateTimestamp;
 #endif
@@ -35,8 +36,8 @@ namespace naoto
         void FillReport(int64_t boughtDelta, int64_t soldDelta,
                         int64_t soldAttemptDelta,
 #ifdef NAOTO_PERF
-                        uint64_t ingestedTimestamp, uint64_t receivedTimestamp,
-                        uint64_t updateTimestamp,
+                        uint64_t ingestedTimestamp, uint64_t routedTimestamp,
+                        uint64_t receivedTimestamp, uint64_t updateTimestamp,
 #endif
                         uint32_t sequenceId, uint32_t clientId,
                         uint32_t orderId, uint32_t tradeId,
@@ -48,6 +49,7 @@ namespace naoto
             SoldAttemptDelta = soldAttemptDelta;
 #ifdef NAOTO_PERF
             IngestedTimestamp = ingestedTimestamp;
+            RoutedTimestamp = routedTimestamp;
             ReceivedTimestamp = receivedTimestamp;
             UpdateTimestamp = updateTimestamp;
 #endif

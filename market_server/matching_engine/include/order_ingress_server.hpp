@@ -29,7 +29,7 @@ namespace naoto::matching_engine
 
             for (size_t i = 0; i < batch->Size; ++i)
             {
-                (*batch)[i].IngestedTimestamp = now;
+                (*batch)[i].ReceivedTimestamp = now;
             }
         }
 #endif

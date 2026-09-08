@@ -180,7 +180,6 @@ public:
 
         Gateways::Order order{};
         order.Price = price;
-        order.Timestamp = static_cast<uint64_t>(now_ms());
         order.OrderId = local_order_id;
         order.ClientOrderId =
             local_order_id; // see ASSUMPTION note in wire_formats.hpp
@@ -229,7 +228,6 @@ public:
 
         Gateways::Order order{};
         order.Price = 0;
-        order.Timestamp = static_cast<uint64_t>(now_ms());
         order.OrderId = local_order_id;
         order.ClientOrderId = local_order_id;
         order.ClientId = client_id_;

@@ -87,6 +87,16 @@ namespace Gateways
     // from AssetId onward by 6 bytes, which is exactly why AssetId was
     // showing up as 0 on the gateway's side even though this dashboard
     // was sending the right value at the wrong offset).
+    //
+    // Timestamp fields (Ingested/Routed/Received) are gated by NAOTO_PERF
+    // on the real header -- they are NOT unconditionally present. Same
+    // NAOTO_PERF coordination requirement as naoto::OrderStateReport /
+    // naoto::OrderBookUpdate in this file: if this ever drifts out of
+    // sync with the sending build, the symptom is a struct SIZE
+    // mismatch, not a subtle field issue. Never explicitly written by
+    // TradingSession::send_order/send_cancel_order (order{} value-inits
+    // them to zero either way), so gating them doesn't change behavior,
+    // only wire layout.
     enum class OrderType : uint8_t
     {
         LIMIT = 0,
@@ -114,8 +124,11 @@ namespace Gateways
     struct Order
     {
         int64_t Price;
-        uint64_t Timestamp; // units unconfirmed (assumed ms since epoch);
-                            // purely informational, not relied on here.
+#ifdef NAOTO_PERF
+        uint64_t IngestedTimestamp;
+        uint64_t RoutedTimestamp;
+        uint64_t ReceivedTimestamp;
+#endif
         uint64_t OrderId;
         uint32_t ClientOrderId;
         uint32_t ClientId;
@@ -129,8 +142,15 @@ namespace Gateways
                                         // zeroed via the `{}` init used
                                         // at every construction site.
     };
-    static_assert(sizeof(Order) == 48,
-                  "Order layout drifted from spec (expected 48 bytes)");
+#ifdef NAOTO_PERF
+    static_assert(sizeof(Order) == 64,
+                  "Order (NAOTO_PERF) layout drifted from spec "
+                  "(expected 64 bytes)");
+#else
+    static_assert(sizeof(Order) == 40,
+                  "Order (no NAOTO_PERF) layout drifted from spec "
+                  "(expected 40 bytes)");
+#endif
 
     enum class OrderConfirmationStatus : uint8_t
     {
@@ -201,7 +221,27 @@ namespace Gateways
 
 } // namespace Gateways
 
-namespace MarketExecution
+// NAOTO_PERF is a legitimate, sometimes-off build option (see
+// CMakeLists.txt's NAOTO_TIMESTAMPS, which mirrors the real project's
+// own option and defaults OFF, same as it does there). This dashboard
+// handles both states: with it, naoto::OrderStateReport/OrderBookUpdate
+// carry the extra timestamp fields the Price History and Trade Feed
+// latency features need; without it, those features simply have no
+// data to show (see AppState::record_book_update and
+// draw_trade_feed_panel in main.cpp for exactly where each is guarded).
+// The one thing that DOES matter: whichever way this is set, it must
+// match whatever the real gateway/matching-engine build sets, or the
+// struct SIZE itself mismatches at runtime -- watch this dashboard's own
+// "dropped packet: got N bytes, not a multiple of M" log lines if that
+// ever happens.
+
+// ORDER_BOOK_UPDATE_BUY/SELL are plain macros (not scoped constants) in
+// the real header -- matched exactly here, not "improved" into an enum,
+// since the whole point is matching what's actually on the wire.
+#define ORDER_BOOK_UPDATE_BUY 0
+#define ORDER_BOOK_UPDATE_SELL 1
+
+namespace naoto
 {
 #pragma pack(push, 1)
     enum class OrderState : uint32_t
@@ -214,11 +254,19 @@ namespace MarketExecution
     };
 
     // Received via UDP multicast: one per leg of an order-state change.
-    // NOT always a completed trade anymore -- State says what actually
-    // happened (a new resting order being added to the book looks very
-    // different from a fill, a cancel, or a rejection, even though all
-    // five share this same struct). Deltas are applied DIRECTLY (add, no
-    // subtraction) -- sign is already correct for that leg/client.
+    // NOT always a completed trade -- State says what actually happened.
+    // Deltas are applied DIRECTLY (add, no subtraction) -- sign is
+    // already correct for that leg/client.
+    //
+    // *** NAOTO_PERF must be defined here IF AND ONLY IF it's also
+    // defined on whatever machine/build actually sends these structs.
+    // Unlike a field being in the wrong ORDER (which at least produces
+    // a struct of the same total size, sometimes catchable by inspection),
+    // a mismatch here silently changes the struct's SIZE, and every
+    // multi-field UDP packet already gets rejected outright by the
+    // "not a multiple of sizeof(...)" check at the call site if that
+    // happens -- watch the logs for that specific message after
+    // rebuilding if timestamps ever look wrong or data stops arriving. ***
     struct OrderStateReport
     {
         int64_t BoughtDelta;
@@ -226,10 +274,15 @@ namespace MarketExecution
         int64_t SoldAttemptDelta; // change to the SOLD asset's pending/
                                   // reserved ("Attempt") balance --
                                   // apply directly, like the others.
-                                  // No bought-side equivalent is sent
-                                  // (only what you're spending/offering
-                                  // gets a pending reservation, not what
-                                  // you'd receive).
+                                  // No bought-side equivalent is sent.
+#ifdef NAOTO_PERF
+        uint64_t IngestedTimestamp; // gateway received the order (raw
+                                    // rtcd units, NOT necessarily ns --
+                                    // see kNsPerRawTimeUnit in main.cpp)
+        uint64_t RoutedTimestamp;
+        uint64_t ReceivedTimestamp; // matching engine received it
+        uint64_t UpdateTimestamp; // market update created / execution time
+#endif
         uint32_t SequenceId;
         uint32_t ClientId;
         uint32_t OrderId;
@@ -238,28 +291,43 @@ namespace MarketExecution
         uint16_t SoldAssetId;
         OrderState State;
     };
-    static_assert(
-        sizeof(OrderStateReport) == 48,
-        "OrderStateReport layout drifted from spec (expected 48 bytes)");
-
-    constexpr uint8_t ORDER_BOOK_UPDATE_BUY = 0;
-    constexpr uint8_t ORDER_BOOK_UPDATE_SELL = 1;
+#ifdef NAOTO_PERF
+    static_assert(sizeof(OrderStateReport) == 80,
+                  "OrderStateReport (NAOTO_PERF) layout drifted from spec "
+                  "(expected 80 bytes)");
+#else
+    static_assert(sizeof(OrderStateReport) == 48,
+                  "OrderStateReport (no NAOTO_PERF) layout drifted from spec "
+                  "(expected 48 bytes)");
+#endif
 
     // Received via UDP multicast: NEW ABSOLUTE depth at a given
     // (AssetId, Side, Price). Depth == 0 means "remove this price
     // level". No snapshot on connect -- must listen from startup to
     // stay consistent (or bootstrap via some future snapshot API).
+    //
+    // Same NAOTO_PERF coordination requirement as OrderStateReport above.
     struct OrderBookUpdate
     {
+#ifdef NAOTO_PERF
+        uint64_t UpdateTimestamp; // when this market update was created
+                                  // (raw rtcd units -- see OrderStateReport)
+#endif
+        int64_t Price;
         uint32_t SequenceId;
         uint32_t Depth;
-        int64_t Price;
         uint16_t AssetId;
         uint8_t Side; // 0 = buy, 1 = sell
     };
-    static_assert(
-        sizeof(OrderBookUpdate) == 19,
-        "OrderBookUpdate layout drifted from spec (expected 19 bytes)");
+#ifdef NAOTO_PERF
+    static_assert(sizeof(OrderBookUpdate) == 27,
+                  "OrderBookUpdate (NAOTO_PERF) layout drifted from spec "
+                  "(expected 27 bytes)");
+#else
+    static_assert(sizeof(OrderBookUpdate) == 19,
+                  "OrderBookUpdate (no NAOTO_PERF) layout drifted from spec "
+                  "(expected 19 bytes)");
+#endif
 #pragma pack(pop)
 
-} // namespace MarketExecution
+} // namespace naoto

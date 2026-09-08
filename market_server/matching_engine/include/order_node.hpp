@@ -73,6 +73,11 @@ namespace naoto::matching_engine
             return NodeOrder.IngestedTimestamp;
         }
 
+        [[nodiscard]] uint64_t GetRouted(void) const noexcept
+        {
+            return NodeOrder.RoutedTimestamp;
+        }
+
         [[nodiscard]] uint64_t GetReceived(void) const noexcept
         {
             return NodeOrder.ReceivedTimestamp;

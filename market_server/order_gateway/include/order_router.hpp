@@ -21,6 +21,10 @@
 #include <vector>
 #include <versioned_fd.hpp>
 
+#ifdef NAOTO_PERF
+#    include <timestamps.hpp>
+#endif
+
 namespace naoto::order_gateway
 {
     template <size_t BatchSize, size_t MaxAsset, size_t MaxPositions,
@@ -413,10 +417,6 @@ namespace naoto::order_gateway
                 ssize_t sent = send(curFd, (uint8_t *)(&curOrder) + totalSent,
                                     sizeof(Order) - totalSent, MSG_NOSIGNAL);
 
-                std::cerr << "Sending order to fd " << curFd
-                          << ", size=" << sizeof(Order) << ", sent=" << sent
-                          << "\n";
-
                 if (sent <= 0) [[unlikely]]
                 {
                     if (errno == EINTR)
@@ -481,33 +481,13 @@ namespace naoto::order_gateway
         CheckOrderRisk(const uint32_t fd, const Order &order,
                        const uint8_t auth) noexcept
         {
-            // The actual risk-check logic now lives in
-            // order_risk_check.hpp as a free function with zero
-            // etcd/socket dependencies, specifically so it can be unit
-            // tested without OrderRouter's mandatory live-etcd
-            // constructor - see that header's comment and
-            // tests/market_server/unit/test_order_risk_check.cpp. This wrapper
-            // keeps the two pieces of behavior that genuinely belong to
-            // OrderRouter itself rather than to the risk check: the
-            // early auth short-circuit (preserved here, before curState
-            // is even fetched, to avoid a pointless GetClientState()
-            // call when auth is false - matches the original's
-            // behavior/cost exactly) and clearing this fd's
-            // ConfirmationBuffer on a client-id mismatch (a resend-buffer
-            // concern, not a risk-check concern).
             if (!auth) [[unlikely]]
             {
-                std::cerr
-                    << "Order refused: Client was not authentificated yet\n\n";
-
                 return OrderConfirmationStatus::UserNotConnected;
             }
 
             ClientState<MaxPositions> curState =
                 clientStates.GetClientState(fd);
-
-            std::cout << "Risk check going on:\n";
-            curState.log();
 
             OrderConfirmationStatus status =
                 naoto::order_gateway::CheckOrderRisk<MaxPositions, MaxAsset>(
@@ -517,7 +497,6 @@ namespace naoto::order_gateway
             if (status == OrderConfirmationStatus::BadClientId) [[unlikely]]
             {
                 ConfirmationBuffer[fd].Clear();
-                std::cout << "ClientId mismatch.\n\n";
             }
 
             return status;
@@ -531,18 +510,11 @@ namespace naoto::order_gateway
             // connection comes
             if (Orders.try_dequeue(curBatch)) [[likely]]
             {
-                std::cout << "Received order batch of size " << curBatch->Size
-                          << " at risk service\n\n";
-
                 const uint32_t curFd = curBatch->Fd;
 
                 for (size_t i = 0; i < curBatch->Size; ++i)
                 {
-                    std::cout << "Risk checking an order\n";
-
                     Order &curOrder = (*curBatch)[i];
-
-                    curOrder.log();
 
                     VersionedFd &curSlot = MatchingEngines[curOrder.AssetId];
                     uint64_t curVal = curSlot.load(std::memory_order_acquire);
@@ -551,8 +523,6 @@ namespace naoto::order_gateway
 
                     if (VersionedFd::Fd(curVal) == -1) [[unlikely]]
                     {
-                        std::cout << "no matching engine at asset id "
-                                  << curOrder.AssetId << "\n";
                         curConfirmation.Status =
                             OrderConfirmationStatus::TechnicalFailure;
                     }
@@ -573,17 +543,11 @@ namespace naoto::order_gateway
                     if (curConfirmation.Status
                         == OrderConfirmationStatus::Accepted) [[likely]]
                     {
-                        std::cout
-                            << "Order Accepted, sending to matching engine\n\n";
-
                         bool drained = DrainBuffer<Order>(
                             OrderBuffer[curOrder.AssetId], curFd);
 
                         if (!drained) [[unlikely]]
                         {
-                            std::cout << "Failed draining orders resend buffer "
-                                         "before sending order\n\n";
-
                             if (!OrderBuffer[curOrder.AssetId].CanAdd(
                                     sizeof(Order))) [[unlikely]]
                             {
@@ -595,6 +559,10 @@ namespace naoto::order_gateway
                                 (uint8_t *)&curOrder, sizeof(Order));
                             continue;
                         }
+
+#ifdef NAOTO_PERF
+                        curOrder.RoutedTimestamp = now_tsc();
+#endif
 
                         if (SendOrder(curOrder, curVal))
                         {
@@ -619,8 +587,6 @@ namespace naoto::order_gateway
                     }
                     else
                     {
-                        std::cout << "Order Rejected\n\n";
-
                         bool drained = DrainBuffer<OrderConfirmation>(
                             ConfirmationBuffer[curFd], curFd);
 

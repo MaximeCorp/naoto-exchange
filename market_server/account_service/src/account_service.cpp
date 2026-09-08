@@ -1,5 +1,4 @@
 #include <account_service.hpp>
-
 #include <cassert>
 #include <cstdlib>
 #include <iostream>
@@ -30,8 +29,7 @@ namespace naoto::account_service
     void AccountService::EtcdClientSetUp(void)
     {
         const char *etcd_addr = std::getenv("ETCD_ADDR") ?: "localhost:2379";
-        const char *listen =
-            std::getenv("LISTEN_ADDR") ?: "127.0.0.1:8082";
+        const char *listen = std::getenv("LISTEN_ADDR") ?: "127.0.0.1:8082";
 
         EtcdClient = std::make_unique<etcd::SyncClient>(etcd_addr);
 
@@ -52,8 +50,7 @@ namespace naoto::account_service
                                    const uint16_t portId,
                                    const uint16_t nbRxQueueSlots,
                                    const size_t dpdkPoolSize,
-                                   const uint32_t dstIp,
-                                   const uint16_t dstPort)
+                                   const uint32_t dstIp, const uint16_t dstPort)
         : States(MaxClients)
         , RequestPool(MaxClients)
         , ReportPool(MaxClients * MaxTradeClient)
@@ -73,8 +70,8 @@ namespace naoto::account_service
     AccountService::AccountService(
         int argc, char **argv, int serverPort, int maxEvents, int maxPending,
         const uint16_t portId, const uint16_t nbRxQueueSlots,
-        const size_t dpdkPoolSize, const uint32_t dstIp,
-        const uint16_t dstPort, std::vector<ClientState<MaxPositions>> &clients)
+        const size_t dpdkPoolSize, const uint32_t dstIp, const uint16_t dstPort,
+        std::vector<ClientState<MaxPositions>> &clients)
         : States(MaxClients, clients)
         , RequestPool(MaxClients)
         , ReportPool(MaxClients * MaxTradeClient)
@@ -127,9 +124,9 @@ namespace naoto::account_service
                                 ClientStatesSwapBatchSize>::StartLoop,
             &Writer);
 
-        setAffinity(serverThread, 7);
-        setAffinity(keeperThread, 8);
-        setAffinity(dispatcherThread, 9);
+        setAffinity(serverThread, 10);
+        setAffinity(keeperThread, 11);
+        setAffinity(dispatcherThread, 11);
         setAffinity(writerThread, 10);
 
         ReportReceiver.StartReceiversLoop();

@@ -195,6 +195,7 @@ namespace naoto::order_gateway
                         != response.SequenceId
                     && response.SequenceId != LastSeq) [[unlikely]]
                 {
+                    continue;
                     // Resend the request
                     RoutedAuthRequest *gatewayRequest =
                         GatewayReqPool.acquire();

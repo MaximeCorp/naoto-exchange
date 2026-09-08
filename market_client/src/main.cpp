@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -22,6 +23,7 @@
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
+#include <implot.h>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -79,7 +81,7 @@ namespace config
     // veth0, traffic landing on veth1), set this to "veth1" or wherever the
     // traffic actually lands, or the receiver may simply never see packets
     // regardless of any rp_filter setting.
-    constexpr const char *kMcastLocalInterface = "veth1";
+    constexpr const char *kMcastLocalInterface = "";
 } // namespace config
 
 // The multicast interface tends to change across test environments (a
@@ -161,7 +163,7 @@ namespace theme
         return ImVec4(r / 255.0f, g / 255.0f, b / 255.0f, a / 255.0f);
     }
 
-    // Light palette, ported from the Meridian HTML/CSS design.
+    // Light palette, ported from the naoto HTML/CSS design.
     const ImVec4 kBg = rgba(244, 245, 248); // page background
     const ImVec4 kBgPanel = rgba(255, 255, 255); // card/surface white -- also
                                                  // the DEFAULT ChildBg, so
@@ -358,7 +360,9 @@ enum class Page
 {
     Trading,
     OrderBooks,
+    PriceHistory,
     TradeFeed,
+    LatencyStats,
     ServiceDiscovery,
     ClientLookup,
 };
@@ -372,7 +376,9 @@ struct NavItem
 constexpr NavItem kNavItems[] = {
     { Page::Trading, "Trading" },
     { Page::OrderBooks, "Order Books" },
+    { Page::PriceHistory, "Price History" },
     { Page::TradeFeed, "Trade Feed" },
+    { Page::LatencyStats, "Latency Stats" },
     { Page::ServiceDiscovery, "Service Discovery" },
     { Page::ClientLookup, "Client Lookup" },
 };
@@ -1340,9 +1346,382 @@ static void draw_order_book_panel(const AppState &app_state,
     }
 }
 
+// Approximate TradingView-style price/volume view, built ONLY from
+// order book updates -- see AssetPriceHistory's own comment in
+// app_state.hpp for exactly what "volume" means here and its real
+// limitations. This is a deliberate stand-in, not authoritative.
+static void draw_price_history_panel(AppState &app_state, const AppFonts &fonts)
+{
+    struct Timeframe
+    {
+        const char *label;
+        uint64_t bucket_ms;
+    };
+    static const Timeframe kTimeframes[] = {
+        { "1s", 1000 },
+        { "5s", 5000 },
+        { "15s", 15000 },
+        { "1m", 60000 },
+    };
+
+    ImGui::Text("Timeframe");
+    ImGui::SameLine();
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10, 6));
+    for (auto &tf : kTimeframes)
+    {
+        bool selected = app_state.price_history_bucket_ms == tf.bucket_ms;
+        ImGui::PushStyleColor(ImGuiCol_Button,
+                              selected ? theme::kAccent : theme::kBgElevated);
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                              selected ? theme::kAccentHover
+                                       : theme::rgba(242, 243, 246));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                              selected ? theme::kAccentActive
+                                       : theme::rgba(236, 237, 246));
+        ImGui::PushStyleColor(ImGuiCol_Text,
+                              selected ? theme::rgba(255, 255, 255)
+                                       : theme::kTextDim);
+        if (ImGui::Button(tf.label, ImVec2(50, 0)))
+        {
+            app_state.price_history_bucket_ms = tf.bucket_ms;
+            // Clear immediately, for every asset -- without this, the
+            // OLD bucket size's candles stay fully displayed (just
+            // silently mislabeled) until fresh data happens to arrive
+            // and lazily triggers AssetPriceHistory's own clear-on-
+            // bucket-change logic. An empty "no candles yet" state is
+            // a much more honest interim result than stale data.
+            for (auto &[asset_id, h] : app_state.price_history)
+            {
+                (void)asset_id;
+                h.candles.clear();
+                h.active_bucket_ms = tf.bucket_ms;
+            }
+        }
+        ImGui::PopStyleColor(4);
+        ImGui::SameLine(0, 4);
+    }
+    ImGui::PopStyleVar();
+    ImGui::NewLine();
+    ImGui::Dummy(ImVec2(0, 8));
+
+    if (app_state.price_history.empty())
+    {
+        ImGui::TextDisabled("No price history yet -- built from order book "
+                            "updates as they arrive");
+        return;
+    }
+
+    static uint16_t selected_asset = 0;
+    if (app_state.price_history.find(selected_asset)
+        == app_state.price_history.end())
+        selected_asset = app_state.price_history.begin()->first;
+
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(12, 7));
+    for (auto &[asset_id, hist_entry] : app_state.price_history)
+    {
+        (void)hist_entry;
+        bool selected = asset_id == selected_asset;
+        ImGui::PushStyleColor(ImGuiCol_Button,
+                              selected ? theme::kAccentSoft : theme::kBgPanel);
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                              selected ? theme::kAccentSoft
+                                       : theme::rgba(242, 243, 246));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                              selected ? theme::kAccentSoft
+                                       : theme::rgba(236, 237, 246));
+        ImGui::PushStyleColor(ImGuiCol_Text,
+                              selected ? theme::kAccent : theme::kTextDim);
+        char label[32];
+        std::snprintf(label, sizeof(label), "Asset %u", asset_id);
+        if (ImGui::Button(label))
+            selected_asset = asset_id;
+        ImGui::PopStyleColor(4);
+        ImGui::SameLine(0, 4);
+    }
+    ImGui::PopStyleVar();
+    ImGui::NewLine();
+    ImGui::Dummy(ImVec2(0, 8));
+
+    AssetPriceHistory &hist = app_state.price_history[selected_asset];
+    if (hist.candles.empty())
+    {
+        ImGui::TextDisabled("No candles yet for this asset");
+        return;
+    }
+
+    size_t n = hist.candles.size();
+    std::vector<double> xs(n), opens(n), highs(n), lows(n), closes(n),
+        volumes(n);
+    double y_min = hist.candles[0].low, y_max = hist.candles[0].high;
+    // X-axis is seconds RELATIVE to the first visible candle, not raw
+    // epoch time -- epoch-seconds-since-1970 is too large a number for
+    // default axis-label formatting to show second-level differences
+    // between adjacent buckets (confirmed visually: every label
+    // rendered as the same "1.78845e+09", indistinguishable).
+    uint64_t t0_ms = hist.candles.front().bucket_start_ms;
+    for (size_t i = 0; i < n; ++i)
+    {
+        const PriceVolumeCandle &c = hist.candles[i];
+        xs[i] = static_cast<double>(c.bucket_start_ms - t0_ms) / 1000.0;
+        opens[i] = c.open;
+        highs[i] = c.high;
+        lows[i] = c.low;
+        closes[i] = c.close;
+        volumes[i] = c.volume;
+        y_min = std::min(y_min, c.low);
+        y_max = std::max(y_max, c.high);
+    }
+    double bucket_s = static_cast<double>(hist.active_bucket_ms) / 1000.0;
+    double x_min = xs.front() - bucket_s * 0.5;
+    double x_max = xs.back() + bucket_s * 0.5;
+    double y_pad = (y_max - y_min) * 0.08;
+    if (y_pad <= 0.0)
+        y_pad = std::max(1.0, y_max * 0.01);
+
+    ImGui::PushFont(fonts.mono);
+    ImGui::TextColored(theme::kTextFaint, "%zu candles", n);
+    ImGui::PopFont();
+
+    if (ImPlot::BeginPlot("##price_chart", ImVec2(-1, 320),
+                          ImPlotFlags_NoLegend))
+    {
+        ImPlot::SetupAxis(ImAxis_X1, "Time (s, relative)");
+        ImPlot::SetupAxis(ImAxis_Y1, "Price");
+        ImPlot::SetupAxisLimits(ImAxis_X1, x_min, x_max, ImPlotCond_Always);
+        ImPlot::SetupAxisLimits(ImAxis_Y1, y_min - y_pad, y_max + y_pad,
+                                ImPlotCond_Always);
+
+        ImDrawList *draw_list = ImPlot::GetPlotDrawList();
+        double half_width = bucket_s * 0.35;
+        for (size_t i = 0; i < n; ++i)
+        {
+            bool bullish = closes[i] >= opens[i];
+            ImU32 color = ImGui::GetColorU32(bullish ? theme::kPositive
+                                                     : theme::kNegative);
+            ImVec2 p_low = ImPlot::PlotToPixels(xs[i], lows[i]);
+            ImVec2 p_high = ImPlot::PlotToPixels(xs[i], highs[i]);
+            draw_list->AddLine(p_high, p_low, color, 1.5f);
+            ImVec2 p_open = ImPlot::PlotToPixels(xs[i] - half_width, opens[i]);
+            ImVec2 p_close =
+                ImPlot::PlotToPixels(xs[i] + half_width, closes[i]);
+            draw_list->AddRectFilled(p_open, p_close, color);
+        }
+        ImPlot::EndPlot();
+    }
+
+    double max_vol = *std::max_element(volumes.begin(), volumes.end());
+    if (max_vol <= 0.0)
+        max_vol = 1.0;
+    if (ImPlot::BeginPlot("##volume_chart", ImVec2(-1, 140),
+                          ImPlotFlags_NoLegend))
+    {
+        ImPlot::SetupAxis(ImAxis_X1, "Time (s, relative)");
+        ImPlot::SetupAxis(ImAxis_Y1, "Volume (approx.)");
+        ImPlot::SetupAxisLimits(ImAxis_X1, x_min, x_max, ImPlotCond_Always);
+        ImPlot::SetupAxisLimits(ImAxis_Y1, 0.0, max_vol * 1.1,
+                                ImPlotCond_Always);
+        ImPlotSpec vol_spec;
+        vol_spec.FillColor = theme::kAccent;
+        ImPlot::PlotBars("Volume", xs.data(), volumes.data(),
+                         static_cast<int>(n), bucket_s * 0.7, vol_spec);
+        ImPlot::EndPlot();
+    }
+
+    ImGui::Dummy(ImVec2(0, 6));
+    ImGui::TextColored(
+        theme::kTextFaint,
+        "Volume is approximate: derived only from order book depth decreases, "
+        "which can't distinguish a real fill from a cancellation. Treat this "
+        "as "
+        "a rough stand-in until a dedicated historical-data service exists.");
+}
+
+// Formats a nanosecond duration using whichever unit reads most
+// naturally at that magnitude. Negative durations are shown with an
+// explicit sign rather than clamped to zero -- a negative gap (e.g.
+// ReceivedTimestamp before IngestedTimestamp) is a real, useful signal
+// that the two clocks aren't synchronized, not something to hide.
+//
+// The microsecond tier only fires when the value is a CLEAN whole
+// number of microseconds -- a fractional us figure (e.g. "1.8us") is
+// silently rounding away real sub-microsecond precision that's exactly
+// the thing worth seeing on a latency page. Falls back to nanoseconds
+// (always exact, no rounding) whenever that's not the case, even though
+// the raw number ends up larger.
+static std::string format_duration_ns(double ns)
+{
+    char buf[32];
+    double abs_ns = ns < 0 ? -ns : ns;
+    const char *sign = ns < 0 ? "-" : "";
+    if (abs_ns < 1000.0)
+    {
+        std::snprintf(buf, sizeof(buf), "%s%.0fns", sign, abs_ns);
+    }
+    else if (abs_ns < 1000000.0)
+    {
+        double us = abs_ns / 1000.0;
+        double us_rounded = std::round(us);
+        bool is_whole_us = std::fabs(us - us_rounded) < 1e-9;
+        if (is_whole_us)
+            std::snprintf(buf, sizeof(buf), "%s%.0fus", sign, us_rounded);
+        else
+            std::snprintf(buf, sizeof(buf), "%s%.0fns", sign, abs_ns);
+    }
+    else
+    {
+        std::snprintf(buf, sizeof(buf), "%s%.2fms", sign, abs_ns / 1000000.0);
+    }
+    return buf;
+}
+
+// Picks a display unit for a whole series at once (not per-point) using
+// the same ns/us/ms thresholds as format_duration_ns() above, based on
+// the series' own peak magnitude -- so e.g. "gateway internal" (often
+// sub-microsecond) and "gateway->engine" (a real network hop, routinely
+// into the tens/hundreds of microseconds or worse) each land on the
+// unit that actually reads sensibly for them, independently, rather
+// than sharing one scale that makes one of them either unreadable or a
+// flat line at the bottom.
+//
+// Same "no fractional microseconds" rule as format_duration_ns(), but
+// applied across the WHOLE series rather than one scalar: the
+// microsecond tier only fires when EVERY value in the series is a
+// clean whole number of them. In practice this means most real
+// latency data (RDTSC cycles run through a non-integer ns_per_raw_unit
+// conversion factor) will land on nanoseconds rather than microseconds
+// -- that's intentional, not a bug: a chart axis showing "0.4, 0.6,
+// 0.8us" is quietly rounding away exactly the sub-microsecond spread
+// these histograms exist to show, in favor of a smaller-looking
+// number. Numbers get bigger on-axis as a result, but stay exact.
+struct DurationUnit
+{
+    double divisor;
+    const char *suffix;
+};
+static DurationUnit pick_duration_unit(const std::vector<double> &values_ns)
+{
+    double max_abs = 0.0;
+    for (double v : values_ns)
+        max_abs = std::max(max_abs, std::fabs(v));
+    if (max_abs < 1000.0)
+        return {1.0, "ns"};
+    if (max_abs < 1000000.0)
+    {
+        bool all_whole_us = true;
+        for (double v : values_ns)
+        {
+            double us = std::fabs(v) / 1000.0;
+            if (std::fabs(us - std::round(us)) >= 1e-9)
+            {
+                all_whole_us = false;
+                break;
+            }
+        }
+        if (all_whole_us)
+            return {1000.0, "us"};
+        return {1.0, "ns"};
+    }
+    return {1000000.0, "ms"};
+}
+
+// Latency breakdown line, shared across every OrderState -- all five
+// report types carry the same four timestamps, so this isn't specific
+// to fills. Skipped entirely if all four are zero (either NAOTO_PERF
+// wasn't compiled in on one or both sides, or a real mismatch between
+// this dashboard and the sender -- see wire_formats.hpp).
+//
+// ns_per_raw_unit converts the raw wire values to nanoseconds. These are
+// confirmed to be RDTSC cycle counts, not nanoseconds -- RDTSC ticks at
+// the CPU's TSC frequency (commonly ~2-4 GHz on modern x86_64, but not
+// guaranteed, and this dashboard has no way to query the frequency of
+// whatever machine actually generated these timestamps). Defaults to
+// 1.0 (wrong by whatever that machine's actual GHz is) purely so
+// something reasonable renders before the real factor is known -- set
+// this to (1e9 / measured_tsc_hz) once you've calibrated the sending
+// machine's actual TSC rate. Adjustable live in the UI, no rebuild
+// needed.
+static void draw_latency_line(const TradeFeedEntry &e, double ns_per_raw_unit,
+                              float indent, const AppFonts &fonts)
+{
+    if (e.ingested_ts == 0 && e.routed_ts == 0 && e.received_ts == 0
+        && e.update_ts == 0)
+        return;
+
+    // Four raw timestamps now split what used to be a single collapsed
+    // "gateway->engine" span into the two real hops it was always hiding:
+    //   ingested->routed   gateway-internal processing before it hands
+    //                      the order off (risk checks, queueing, etc.)
+    //   routed->received   the actual wire hop from gateway to the
+    //                      matching engine
+    //   received->update   engine->exec, i.e. tick-to-trade
+    //   ingested->update   total, unchanged
+    double gw_internal =
+        static_cast<double>(static_cast<int64_t>(e.routed_ts)
+                            - static_cast<int64_t>(e.ingested_ts))
+        * ns_per_raw_unit;
+    double gw_to_engine =
+        static_cast<double>(static_cast<int64_t>(e.received_ts)
+                            - static_cast<int64_t>(e.routed_ts))
+        * ns_per_raw_unit;
+    double engine_to_exec =
+        static_cast<double>(static_cast<int64_t>(e.update_ts)
+                            - static_cast<int64_t>(e.received_ts))
+        * ns_per_raw_unit;
+    double total = static_cast<double>(static_cast<int64_t>(e.update_ts)
+                                       - static_cast<int64_t>(e.ingested_ts))
+        * ns_per_raw_unit;
+
+    ImGui::Dummy(ImVec2(indent, 0));
+    ImGui::SameLine(0, 0);
+    ImGui::PushFont(fonts.mono);
+    ImGui::TextDisabled("gateway internal");
+    ImGui::SameLine();
+    ImGui::TextColored(gw_internal < 0 ? theme::kWarning : theme::kTextDim,
+                       "%s", format_duration_ns(gw_internal).c_str());
+    ImGui::SameLine();
+    ImGui::TextDisabled("|  gateway->engine");
+    ImGui::SameLine();
+    ImGui::TextColored(gw_to_engine < 0 ? theme::kWarning : theme::kTextDim,
+                       "%s", format_duration_ns(gw_to_engine).c_str());
+    ImGui::SameLine();
+    ImGui::TextDisabled("|  engine->exec (tick-to-trade)");
+    ImGui::SameLine();
+    ImGui::TextColored(engine_to_exec < 0 ? theme::kWarning : theme::kTextDim,
+                       "%s", format_duration_ns(engine_to_exec).c_str());
+    ImGui::SameLine();
+    ImGui::TextDisabled("|  total");
+    ImGui::SameLine();
+    ImGui::TextColored(total < 0 ? theme::kWarning : theme::kTextDim, "%s",
+                       format_duration_ns(total).c_str());
+    ImGui::PopFont();
+}
+
 static void draw_trade_feed_panel(const AppState &app_state,
                                   const AppFonts &fonts)
 {
+    static float ns_per_raw_unit = 1.0f;
+    ImGui::Text("Timestamp unit");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(110);
+    ImGui::InputFloat("ns per RDTSC cycle##ns_conv", &ns_per_raw_unit, 0.0f,
+                      0.0f, "%.4f");
+    ImGui::SameLine();
+    ImGui::TextDisabled("(?)");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip(
+            "Timestamps are raw RDTSC cycle counts, not nanoseconds -- this\n"
+            "dashboard has no way to know the TSC frequency of whichever\n"
+            "machine actually generated them. Set this to (1e9 / "
+            "measured_tsc_hz)\n"
+            "once you've calibrated that machine's real TSC rate. Default 1.0\n"
+            "assumes a 1 GHz TSC, which is almost certainly wrong for real\n"
+            "hardware (commonly 2-4 GHz) -- it's just a placeholder so "
+            "something\n"
+            "renders before the real factor is known. Only affects display, "
+            "not\n"
+            "what's stored.");
+    ImGui::Dummy(ImVec2(0, 8));
+
     ImGui::BeginChild("feed_scroll", ImVec2(0, 0), false);
     if (app_state.trade_feed.empty())
         ImGui::TextDisabled("No trades yet");
@@ -1352,14 +1731,15 @@ static void draw_trade_feed_panel(const AppState &app_state,
         float dot_r = 4.0f;
         float line_h = ImGui::GetTextLineHeight();
         ImVec2 p = ImGui::GetCursorScreenPos();
+        float row_indent = dot_r * 2 + 10;
 
         // A report is no longer always a completed trade -- State says
         // what actually happened, and that changes how this line should
         // read, not just its color.
         switch (e.state)
         {
-        case MarketExecution::OrderState::FILL:
-        case MarketExecution::OrderState::PARTIAL_FILL: {
+        case naoto::OrderState::FILL:
+        case naoto::OrderState::PARTIAL_FILL: {
             // Every report has one leg in the settlement currency (asset
             // 0) and one leg in the actual traded asset -- pick whichever
             // leg ISN'T asset 0 as "the trade", and read bought/sold off
@@ -1378,7 +1758,7 @@ static void draw_trade_feed_panel(const AppState &app_state,
 
             draw_list->AddCircleFilled(ImVec2(p.x + dot_r, p.y + line_h * 0.5f),
                                        dot_r, ImGui::GetColorU32(color));
-            ImGui::Dummy(ImVec2(dot_r * 2 + 10, 0));
+            ImGui::Dummy(ImVec2(row_indent, 0));
             ImGui::SameLine(0, 0);
             ImGui::Text("Client %u", e.client_id);
             ImGui::SameLine();
@@ -1389,7 +1769,7 @@ static void draw_trade_feed_panel(const AppState &app_state,
             ImGui::PopFont();
             ImGui::SameLine();
             ImGui::TextDisabled("of asset %u", asset);
-            if (e.state == MarketExecution::OrderState::PARTIAL_FILL)
+            if (e.state == naoto::OrderState::PARTIAL_FILL)
             {
                 ImGui::SameLine();
                 ImGui::TextDisabled("(partial)");
@@ -1398,14 +1778,14 @@ static void draw_trade_feed_panel(const AppState &app_state,
             ImGui::TextDisabled("#%u", e.trade_id);
             break;
         }
-        case MarketExecution::OrderState::ADD: {
+        case naoto::OrderState::ADD: {
             // A new resting order, not a trade -- Confirmed balance
             // hasn't moved, but SoldAttemptDelta reflects funds just
             // reserved against it.
             draw_list->AddCircleFilled(ImVec2(p.x + dot_r, p.y + line_h * 0.5f),
                                        dot_r,
                                        ImGui::GetColorU32(theme::kAccent));
-            ImGui::Dummy(ImVec2(dot_r * 2 + 10, 0));
+            ImGui::Dummy(ImVec2(row_indent, 0));
             ImGui::SameLine(0, 0);
             ImGui::Text("Client %u", e.client_id);
             ImGui::SameLine();
@@ -1428,11 +1808,11 @@ static void draw_trade_feed_panel(const AppState &app_state,
             ImGui::TextDisabled("#%u", e.order_id);
             break;
         }
-        case MarketExecution::OrderState::CANCEL: {
+        case naoto::OrderState::CANCEL: {
             draw_list->AddCircleFilled(ImVec2(p.x + dot_r, p.y + line_h * 0.5f),
                                        dot_r,
                                        ImGui::GetColorU32(theme::kTextFaint));
-            ImGui::Dummy(ImVec2(dot_r * 2 + 10, 0));
+            ImGui::Dummy(ImVec2(row_indent, 0));
             ImGui::SameLine(0, 0);
             ImGui::Text("Client %u", e.client_id);
             ImGui::SameLine();
@@ -1452,11 +1832,11 @@ static void draw_trade_feed_panel(const AppState &app_state,
             ImGui::TextDisabled("#%u", e.order_id);
             break;
         }
-        case MarketExecution::OrderState::REJECT: {
+        case naoto::OrderState::REJECT: {
             draw_list->AddCircleFilled(ImVec2(p.x + dot_r, p.y + line_h * 0.5f),
                                        dot_r,
                                        ImGui::GetColorU32(theme::kNegative));
-            ImGui::Dummy(ImVec2(dot_r * 2 + 10, 0));
+            ImGui::Dummy(ImVec2(row_indent, 0));
             ImGui::SameLine(0, 0);
             ImGui::Text("Client %u", e.client_id);
             ImGui::SameLine();
@@ -1466,10 +1846,442 @@ static void draw_trade_feed_panel(const AppState &app_state,
             break;
         }
         }
+        draw_latency_line(e, static_cast<double>(ns_per_raw_unit), row_indent,
+                          fonts);
     }
     if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 1.0f)
         ImGui::SetScrollHereY(1.0f);
     ImGui::EndChild();
+}
+
+// ---------------------------------------------------------------------
+// Latency statistics -- aggregates the same four spans draw_latency_line
+// shows per-entry (gateway internal, gateway->engine, engine->exec,
+// total) into percentile summaries across the whole trade feed buffer.
+// ---------------------------------------------------------------------
+struct LatencyStats
+{
+    size_t count = 0;
+    double min_ns = 0, p50_ns = 0, mean_ns = 0, p95_ns = 0, p99_ns = 0, max_ns = 0;
+};
+
+// Percentiles via linear interpolation between the two nearest ranks --
+// the standard simple approach, no extra library needed. Sorts `values`
+// in place.
+static LatencyStats compute_latency_stats(std::vector<double> &values)
+{
+    LatencyStats s;
+    if (values.empty())
+        return s;
+    std::sort(values.begin(), values.end());
+    s.count = values.size();
+    s.min_ns = values.front();
+    s.max_ns = values.back();
+    double sum = 0.0;
+    for (double v : values)
+        sum += v;
+    s.mean_ns = sum / static_cast<double>(values.size());
+    auto percentile = [&](double p) -> double
+    {
+        if (values.size() == 1)
+            return values[0];
+        double idx = p * static_cast<double>(values.size() - 1);
+        size_t lo = static_cast<size_t>(idx);
+        size_t hi = std::min(lo + 1, values.size() - 1);
+        double frac = idx - static_cast<double>(lo);
+        return values[lo] * (1.0 - frac) + values[hi] * frac;
+    };
+    s.p50_ns = percentile(0.50);
+    s.p95_ns = percentile(0.95);
+    s.p99_ns = percentile(0.99);
+    return s;
+}
+
+static void draw_latency_stats_row(const char *label, const LatencyStats &s,
+                                    const AppFonts &fonts)
+{
+    ImGui::TableNextRow();
+    ImGui::TableNextColumn();
+    ImGui::TextUnformatted(label);
+    ImGui::PushFont(fonts.mono);
+    ImGui::TableNextColumn();
+    ImGui::Text("%zu", s.count);
+    if (s.count > 0)
+    {
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted(format_duration_ns(s.min_ns).c_str());
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted(format_duration_ns(s.p50_ns).c_str());
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted(format_duration_ns(s.mean_ns).c_str());
+        ImGui::TableNextColumn();
+        ImGui::TextColored(theme::kAccent, "%s",
+                           format_duration_ns(s.p95_ns).c_str());
+        ImGui::TableNextColumn();
+        ImGui::TextColored(theme::kAccent, "%s",
+                           format_duration_ns(s.p99_ns).c_str());
+        ImGui::TableNextColumn();
+        ImGui::TextColored(theme::kNegative, "%s",
+                           format_duration_ns(s.max_ns).c_str());
+    }
+    else
+    {
+        for (int i = 0; i < 6; ++i)
+        {
+            ImGui::TableNextColumn();
+            ImGui::TextDisabled("--");
+        }
+    }
+    ImGui::PopFont();
+}
+
+// The resting-order filter is the actual point of this page:
+// IngestedTimestamp/RoutedTimestamp/ReceivedTimestamp are set once,
+// near-immediately, when an order is first submitted -- they don't
+// change if the order later rests in the book before matching. Only
+// UpdateTimestamp reflects the real fill time. So a limit order that
+// sits for tens of seconds before matching has completely normal
+// "gateway internal"/"gateway->engine" values, but an enormous "total"
+// (and "engine->exec") -- 1000x+ anything a genuine processing delay
+// produces. That gap is large enough that a plain threshold on "total"
+// is sufficient -- no need to correlate ADD/FILL events by OrderId.
+static void draw_latency_stats_panel(const AppState &app_state, const AppFonts &fonts)
+{
+    static float ns_per_raw_unit = 1.0f;
+    static float resting_threshold_ms = 500.0f;
+
+    ImGui::Text("Timestamp unit");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(110);
+    ImGui::InputFloat("ns per RDTSC cycle##stats_ns_conv", &ns_per_raw_unit, 0.0f,
+                      0.0f, "%.4f");
+    ImGui::SameLine();
+    ImGui::TextDisabled("(independent of the Trade Feed page's own setting)");
+
+    ImGui::Dummy(ImVec2(0, 4));
+    ImGui::Text("Exclude resting orders above");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(110);
+    ImGui::InputFloat("ms##resting_threshold", &resting_threshold_ms, 0.0f, 0.0f,
+                      "%.0f");
+    ImGui::SameLine();
+    ImGui::TextDisabled("(?)");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip(
+            "IngestedTimestamp/RoutedTimestamp/ReceivedTimestamp are set\n"
+            "once, near-immediately, when an order is first submitted --\n"
+            "they don't change if the order later rests in the book.\n"
+            "Only UpdateTimestamp reflects the actual fill time. So a\n"
+            "limit order that sits for tens of seconds before matching\n"
+            "shows a completely normal gateway-internal/gateway->engine\n"
+            "time, but an enormous 'total' and 'engine->exec' -- easily\n"
+            "1000x anything a real processing delay would produce. A\n"
+            "simple threshold on 'total' is enough to catch these; no\n"
+            "need to correlate ADD/FILL events by OrderId.");
+
+    static bool ignore_negative = true;
+    ImGui::Checkbox("Ignore negative latency values", &ignore_negative);
+    ImGui::SameLine();
+    ImGui::TextDisabled("(?)");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip(
+            "A negative span means the wire clocks aren't agreeing with\n"
+            "each other for that entry (e.g. the known ReceivedTimestamp\n"
+            "~0 issue would make 'gateway->engine' go negative and\n"
+            "'engine->exec' balloon in the opposite direction) -- not a\n"
+            "real processing time. Filtered independently per metric, so\n"
+            "one bad span on an entry doesn't throw away its other three\n"
+            "valid ones. Off by default assumption would be to trust raw\n"
+            "data, but ON here since outliers are actively being\n"
+            "investigated -- turn off to see the raw picture again.");
+
+    static int histogram_bins = 60;
+    ImGui::SetNextItemWidth(110);
+    ImGui::InputInt("Histogram bins", &histogram_bins);
+    histogram_bins = std::clamp(histogram_bins, 2, 500);
+    ImGui::SameLine();
+    ImGui::TextDisabled("(?)");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip(
+            "Number of bars each histogram below is divided into, spread "
+            "across its (P99-trimmed) x-axis range. Higher = finer detail "
+            "-- useful when the bulk of values sit in a narrow band and a "
+            "handful of auto-picked bins blend them into one solid block. "
+            "Auto-picked bin counts (via Sturges' rule) tend to run low "
+            "for large, tightly-clustered samples specifically because "
+            "they're sized for the sample COUNT, not the actual shape of "
+            "the distribution -- this overrides that with a fixed count "
+            "you control directly.");
+
+    ImGui::Dummy(ImVec2(0, 10));
+
+    if (app_state.trade_feed.empty())
+    {
+        ImGui::TextDisabled("No trade feed data yet");
+        return;
+    }
+
+    double threshold_ns = static_cast<double>(resting_threshold_ms) * 1.0e6;
+    std::vector<double> gw_internal, gw_to_engine, engine_to_exec, total;
+    size_t no_data_count = 0, resting_count = 0;
+    size_t neg_gw_internal_count = 0, neg_gw_to_engine_count = 0,
+           neg_engine_to_exec_count = 0, neg_total_count = 0;
+
+    for (auto &e : app_state.trade_feed)
+    {
+        if (e.ingested_ts == 0 && e.routed_ts == 0 && e.received_ts == 0
+            && e.update_ts == 0)
+        {
+            ++no_data_count;
+            continue;
+        }
+        double total_ns =
+            static_cast<double>(static_cast<int64_t>(e.update_ts)
+                                - static_cast<int64_t>(e.ingested_ts))
+            * static_cast<double>(ns_per_raw_unit);
+        if (total_ns > threshold_ns)
+        {
+            ++resting_count;
+            continue;
+        }
+        double gwi_ns =
+            static_cast<double>(static_cast<int64_t>(e.routed_ts)
+                                - static_cast<int64_t>(e.ingested_ts))
+            * static_cast<double>(ns_per_raw_unit);
+        double gte_ns =
+            static_cast<double>(static_cast<int64_t>(e.received_ts)
+                                - static_cast<int64_t>(e.routed_ts))
+            * static_cast<double>(ns_per_raw_unit);
+        double ete_ns =
+            static_cast<double>(static_cast<int64_t>(e.update_ts)
+                                - static_cast<int64_t>(e.received_ts))
+            * static_cast<double>(ns_per_raw_unit);
+
+        // Filtered independently per metric rather than dropping the
+        // whole entry on any single negative span -- see the checkbox's
+        // own tooltip above for why (one bad hop on an entry shouldn't
+        // discard its other three legitimate measurements).
+        if (ignore_negative && gwi_ns < 0)
+            ++neg_gw_internal_count;
+        else
+            gw_internal.push_back(gwi_ns);
+
+        if (ignore_negative && gte_ns < 0)
+            ++neg_gw_to_engine_count;
+        else
+            gw_to_engine.push_back(gte_ns);
+
+        if (ignore_negative && ete_ns < 0)
+            ++neg_engine_to_exec_count;
+        else
+            engine_to_exec.push_back(ete_ns);
+
+        if (ignore_negative && total_ns < 0)
+            ++neg_total_count;
+        else
+            total.push_back(total_ns);
+    }
+
+    // Stats computed once, up front, shared by both the histograms below
+    // (for the median reference line) and the table further down --
+    // compute_latency_stats() sorts its argument in place, which used to
+    // have to happen AFTER the old per-entry line-over-time chart (which
+    // needed chronological order); a distribution histogram doesn't
+    // care about order, so there's no reason to compute this twice
+    // anymore.
+    LatencyStats s_gw_internal = compute_latency_stats(gw_internal);
+    LatencyStats s_gw_to_engine = compute_latency_stats(gw_to_engine);
+    LatencyStats s_engine_to_exec = compute_latency_stats(engine_to_exec);
+    LatencyStats s_total = compute_latency_stats(total);
+
+    // ---- Latency distribution -----------------------------------------
+    // One histogram per metric rather than sharing an axis: total is the
+    // sum of the other three, so it dwarfs them on a shared linear
+    // scale, and each of the four has its own realistic magnitude anyway
+    // -- "gateway internal" is often sub-microsecond, while "gateway->
+    // engine" is a real network hop and routinely lands in the tens/
+    // hundreds of microseconds (or worse), nowhere near the same scale.
+    // Each histogram picks its own ns/us/ms unit from pick_duration_unit()
+    // based on its own data. Bin count is the user-adjustable
+    // histogram_bins above, not ImPlotBin_Sturges' auto-picked count --
+    // Sturges sizes bins off the SAMPLE COUNT (k = 1 + log2(n)), which
+    // has nothing to do with the actual SHAPE of the distribution: a
+    // large, tightly-clustered sample with a thin tail (exactly what
+    // per-order latencies tend to look like) still only gets Sturges'
+    // same low bin count, blending the entire interesting cluster into
+    // one or two solid bars. The median (P50, already computed above
+    // for the table) is
+    // drawn as a vertical reference line via PlotInfLines, in a fixed
+    // neutral color rather than reusing any of the four bar colors, so
+    // it reads as "reference marker" regardless of which metric it's on.
+    //
+    // Bin RANGE is deliberately clamped to [min, P99] rather than the
+    // full [min, max] -- ImPlot::PlotHistogram spends its (Sturges-
+    // determined) bin count across whatever range it's given, so a
+    // handful of far outliers stretching the true max out
+    // silently starves the bulk of the distribution of resolution: most
+    // bins end up empty in the outlier's shadow, and everything that
+    // actually matters gets crushed into one or two bars at the left
+    // edge. Confirmed directly in ImPlot's own PlotHistogram source
+    // (implot_items.cpp): passing an explicit range bins ONLY values
+    // inside it -- anything above range.Max is silently not counted at
+    // all (not clamped into the last bin, just dropped from the plot).
+    // That's exactly the tradeoff wanted here (by definition ~1% of
+    // values sit above P99), but it must be disclosed, not hidden --
+    // hence the caption noting it, with the real max/P99 still visible
+    // in the table below untouched.
+    if (!gw_internal.empty() || !gw_to_engine.empty()
+        || !engine_to_exec.empty() || !total.empty())
+    {
+        auto draw_metric_histogram = [&](const char *plot_id,
+                                         const char *title,
+                                         const std::vector<double> &values_ns,
+                                         const LatencyStats &s,
+                                         ImVec4 bar_color)
+        {
+            if (values_ns.empty())
+            {
+                ImGui::TextColored(theme::kTextDim, "%s", title);
+                ImGui::TextDisabled("No non-negative entries for this metric");
+                ImGui::Dummy(ImVec2(0, 8));
+                return;
+            }
+
+            DurationUnit unit = pick_duration_unit(values_ns);
+            std::vector<double> scaled(values_ns.size());
+            for (size_t i = 0; i < scaled.size(); ++i)
+                scaled[i] = values_ns[i] / unit.divisor;
+            double median_scaled = s.p50_ns / unit.divisor;
+            double min_scaled = s.min_ns / unit.divisor;
+            double p99_scaled = s.p99_ns / unit.divisor;
+
+            char x_axis_label[32];
+            std::snprintf(x_axis_label, sizeof(x_axis_label),
+                         "Duration (%s)", unit.suffix);
+
+            ImGui::TextColored(theme::kTextDim, "%s", title);
+            ImGui::SameLine();
+            ImGui::PushFont(fonts.mono);
+            ImGui::TextColored(theme::kTextFaint, " -- median %s",
+                               format_duration_ns(s.p50_ns).c_str());
+            ImGui::PopFont();
+            if (s.count >= 10)
+            {
+                ImGui::SameLine();
+                ImGui::TextDisabled(
+                    "(x-axis trimmed to P99 for readability -- top ~1%% "
+                    "not shown here, see table for real max)");
+            }
+
+            // Degenerate case: with very few samples (or many identical
+            // values), P99 can equal (or fall below, with interpolation)
+            // min, which would give PlotHistogram a zero/negative-width
+            // range -- fall back to the untrimmed default range there
+            // rather than divide by zero.
+            bool use_full_range = (s.count < 10) || (p99_scaled <= min_scaled);
+
+            // Same SetNextAxesToFit() + ImPlotAxisFlags_AutoFit belt-and-
+            // suspenders approach as elsewhere in this file -- forces a
+            // fresh fit to this frame's actual bin/count range rather
+            // than depending on any state persisted across frames.
+            ImPlot::SetNextAxesToFit();
+            if (ImPlot::BeginPlot(plot_id, ImVec2(-1, 150), ImPlotFlags_NoLegend))
+            {
+                ImPlot::SetupAxis(ImAxis_X1, x_axis_label,
+                                  ImPlotAxisFlags_AutoFit);
+                ImPlot::SetupAxis(ImAxis_Y1, "Count", ImPlotAxisFlags_AutoFit);
+
+                ImPlotSpec hist_spec;
+                hist_spec.FillColor = bar_color;
+                ImPlotRange bin_range = use_full_range
+                    ? ImPlotRange()
+                    : ImPlotRange(min_scaled, p99_scaled);
+                ImPlot::PlotHistogram(title, scaled.data(),
+                                      static_cast<int>(scaled.size()),
+                                      histogram_bins, 1.0, bin_range,
+                                      hist_spec);
+
+                ImPlotSpec median_spec;
+                median_spec.LineColor = theme::kText;
+                double median_arr[1] = {median_scaled};
+                ImPlot::PlotInfLines("median", median_arr, 1, median_spec);
+
+                ImPlot::EndPlot();
+            }
+            ImGui::Dummy(ImVec2(0, 8));
+        };
+
+        draw_metric_histogram("##gw_internal_hist", "Gateway internal",
+                              gw_internal, s_gw_internal, theme::kAccent);
+        draw_metric_histogram("##gw_to_engine_hist", "Gateway -> engine",
+                              gw_to_engine, s_gw_to_engine,
+                              theme::kPositive);
+        draw_metric_histogram("##engine_to_exec_hist",
+                              "Engine -> exec (tick-to-trade)",
+                              engine_to_exec, s_engine_to_exec,
+                              theme::kNegative);
+        draw_metric_histogram("##total_hist", "Total", total,
+                              s_total, theme::kWarning);
+    }
+
+    if (ImGui::BeginTable("latency_stats", 8,
+                          ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg
+                              | ImGuiTableFlags_SizingStretchSame))
+    {
+        ImGui::TableSetupColumn("Metric");
+        ImGui::TableSetupColumn("Count");
+        ImGui::TableSetupColumn("Min");
+        ImGui::TableSetupColumn("P50 (median)");
+        ImGui::TableSetupColumn("Mean");
+        ImGui::TableSetupColumn("P95");
+        ImGui::TableSetupColumn("P99");
+        ImGui::TableSetupColumn("Max");
+        ImGui::TableHeadersRow();
+
+        draw_latency_stats_row("gateway internal", s_gw_internal, fonts);
+        draw_latency_stats_row("gateway->engine", s_gw_to_engine, fonts);
+        draw_latency_stats_row("engine->exec (tick-to-trade)", s_engine_to_exec,
+                               fonts);
+        draw_latency_stats_row("total", s_total, fonts);
+
+        ImGui::EndTable();
+    }
+
+    ImGui::Dummy(ImVec2(0, 10));
+    ImGui::PushFont(fonts.mono);
+    // Per-metric counts are already visible in the table's own "Count"
+    // column above -- no longer a single shared number now that
+    // negative-value filtering is independent per metric (see the
+    // checkbox), so this footer only reports the filters that apply
+    // uniformly across all four (resting/no-data) plus the per-metric
+    // negative-exclusion breakdown.
+    size_t evaluated = app_state.trade_feed.size() - no_data_count - resting_count;
+    ImGui::TextDisabled("%zu entries evaluated (per-metric counts in table above)",
+                        evaluated);
+    if (resting_count > 0)
+    {
+        ImGui::SameLine();
+        ImGui::TextColored(theme::kWarning,
+                           "  |  %zu excluded as resting orders (total > %.0fms)",
+                           resting_count, static_cast<double>(resting_threshold_ms));
+    }
+    if (no_data_count > 0)
+    {
+        ImGui::SameLine();
+        ImGui::TextDisabled("  |  %zu had no timestamp data", no_data_count);
+    }
+    if (ignore_negative
+        && (neg_gw_internal_count + neg_gw_to_engine_count
+            + neg_engine_to_exec_count + neg_total_count) > 0)
+    {
+        ImGui::TextColored(
+            theme::kWarning,
+            "negative-latency entries ignored -- gateway internal: %zu, "
+            "gateway->engine: %zu, engine->exec: %zu, total: %zu",
+            neg_gw_internal_count, neg_gw_to_engine_count,
+            neg_engine_to_exec_count, neg_total_count);
+    }
+    ImGui::PopFont();
 }
 
 // Non-interactive rounded status badge (e.g. "active"), drawn manually
@@ -1790,7 +2602,7 @@ int main()
     }
 
     GLFWwindow *window =
-        glfwCreateWindow(1600, 1000, "Meridian", nullptr, nullptr);
+        glfwCreateWindow(1600, 1000, "naoto", nullptr, nullptr);
     if (!window)
     {
         std::fprintf(stderr, "glfwCreateWindow failed\n");
@@ -1801,6 +2613,7 @@ int main()
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
+    ImPlot::CreateContext(); // requires an ImGui context to already exist
     ImGui::StyleColorsDark();
     theme::apply();
     ImGui_ImplGlfw_InitForOpenGL(window, true);
@@ -1817,7 +2630,7 @@ int main()
         etcd_watcher.start_watch();
     }).detach();
 
-    MpscQueue<MarketExecution::OrderStateReport> trade_events;
+    MpscQueue<naoto::OrderStateReport> trade_events;
     std::string mcast_iface = resolve_mcast_interface();
     auto [order_state_group, order_state_port] = resolve_mcast_endpoint(
         "MCAST_ORDER_STATE_ADDR", config::kOrderStateMcastGroup,
@@ -1843,8 +2656,7 @@ int main()
             // for two 36-byte reports) rather than a corrupted/mismatched
             // size. Loop over however many whole structs fit instead of
             // requiring an exact one-report-per-packet match.
-            constexpr size_t kReportSize =
-                sizeof(MarketExecution::OrderStateReport);
+            constexpr size_t kReportSize = sizeof(naoto::OrderStateReport);
             if (len == 0 || len % kReportSize != 0)
             {
                 DASHBOARD_LOG(
@@ -1856,7 +2668,7 @@ int main()
             size_t count = len / kReportSize;
             for (size_t i = 0; i < count; ++i)
             {
-                MarketExecution::OrderStateReport r;
+                naoto::OrderStateReport r;
                 std::memcpy(&r, data + i * kReportSize, kReportSize);
                 trade_events.push(r);
             }
@@ -1864,7 +2676,7 @@ int main()
         mcast_iface);
     order_state_receiver.start();
 
-    MpscQueue<MarketExecution::OrderBookUpdate> book_events;
+    MpscQueue<naoto::OrderBookUpdate> book_events;
     MulticastReceiver order_book_receiver(
         order_book_group, order_book_port,
         [&book_events](const uint8_t *data, size_t len) {
@@ -1872,8 +2684,7 @@ int main()
             // not yet observed batched on this feed, but it's the same
             // underlying sender architecture, so handled the same way
             // defensively rather than waiting to hit it in the wild too.
-            constexpr size_t kUpdateSize =
-                sizeof(MarketExecution::OrderBookUpdate);
+            constexpr size_t kUpdateSize = sizeof(naoto::OrderBookUpdate);
             if (len == 0 || len % kUpdateSize != 0)
             {
                 DASHBOARD_LOG(
@@ -1885,7 +2696,7 @@ int main()
             size_t count = len / kUpdateSize;
             for (size_t i = 0; i < count; ++i)
             {
-                MarketExecution::OrderBookUpdate u;
+                naoto::OrderBookUpdate u;
                 std::memcpy(&u, data + i * kUpdateSize, kUpdateSize);
                 book_events.push(u);
             }
@@ -1918,11 +2729,24 @@ int main()
 
         for (auto &r : trade_events.drain_all())
         {
-            TradeFeedEntry entry{ r.SequenceId,       r.TradeId,
-                                  r.ClientId,         r.OrderId,
-                                  r.BoughtAssetId,    r.SoldAssetId,
-                                  r.BoughtDelta,      r.SoldDelta,
-                                  r.SoldAttemptDelta, r.State };
+#ifdef NAOTO_PERF
+            uint64_t ingested_ts = r.IngestedTimestamp;
+            uint64_t routed_ts = r.RoutedTimestamp;
+            uint64_t received_ts = r.ReceivedTimestamp;
+            uint64_t update_ts = r.UpdateTimestamp;
+#else
+            // Fields don't exist on the wire without NAOTO_PERF -- zero
+            // is exactly what draw_latency_line() already checks for to
+            // skip rendering, so this needs no further special-casing.
+            uint64_t ingested_ts = 0, routed_ts = 0, received_ts = 0,
+                     update_ts = 0;
+#endif
+            TradeFeedEntry entry{
+                r.SequenceId,       r.TradeId,     r.ClientId,    r.OrderId,
+                r.BoughtAssetId,    r.SoldAssetId, r.BoughtDelta, r.SoldDelta,
+                r.SoldAttemptDelta, r.State,       ingested_ts,   routed_ts,
+                received_ts,        update_ts
+            };
             app_state.push_trade(entry);
             app_state.apply_trade_to_balance(r); // optimistic local update
         }
@@ -1932,7 +2756,7 @@ int main()
             if (u.AssetId == 0)
                 continue; // asset 0 is settlement currency, not shown in book
                           // view
-            app_state.order_books[u.AssetId].apply(u);
+            app_state.record_book_update(u);
         }
 
         panel_a.drain_confirmations();
@@ -1975,7 +2799,7 @@ int main()
         ImGui::BeginChild("##TopBar", ImVec2(0, kTopBarHeight), true);
         ImGui::AlignTextToFramePadding();
         ImGui::PushFont(fonts.header);
-        ImGui::TextColored(theme::kAccent, "Meridian");
+        ImGui::TextColored(theme::kAccent, "naoto");
         ImGui::PopFont();
         ImGui::SameLine(0, 28);
         for (auto &item : kNavItems)
@@ -2041,9 +2865,17 @@ int main()
             page_header("Order Books");
             draw_order_book_panel(app_state, fonts);
             break;
+        case Page::PriceHistory:
+            page_header("Price History");
+            draw_price_history_panel(app_state, fonts);
+            break;
         case Page::TradeFeed:
             page_header("Trade Feed");
             draw_trade_feed_panel(app_state, fonts);
+            break;
+        case Page::LatencyStats:
+            page_header("Latency Stats");
+            draw_latency_stats_panel(app_state, fonts);
             break;
         case Page::ServiceDiscovery:
             page_header("Service Discovery (etcd)");
@@ -2076,6 +2908,7 @@ int main()
 
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
+    ImPlot::DestroyContext(); // must precede ImGui::DestroyContext()
     ImGui::DestroyContext();
     glfwDestroyWindow(window);
     glfwTerminate();

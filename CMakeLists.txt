@@ -156,6 +156,7 @@ target_link_libraries(naoto_absl INTERFACE PkgConfig::ABSL)
 option(NAOTO_LTO "Whole-program link-time optimization (slow, RAM-heavy link step)" OFF)
 option(NAOTO_BUILD_TESTS "Build the GoogleTest suite under tests/" OFF)
 option(NAOTO_TIMESTAMPS "Turn on performances measurement with timestamps" OFF)
+option(NAOTO_ELASTIC "Scalable order gateways and matching engines." OFF)
 
 if(NAOTO_LTO)
     include(CheckIPOSupported)

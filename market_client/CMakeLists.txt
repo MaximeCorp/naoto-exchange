@@ -8,11 +8,14 @@ find_package(OpenGL REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(GLFW REQUIRED glfw3)
 
-# etcd-cpp-apiv3 is NOT assumed system-wide here — this project builds it
-# from source into artifacts/ (see bootstrap/03-build-etcd-cpp.sh and the
-# root CMakeLists.txt), same as every other service. EtcdCpp::EtcdCpp is
-# defined there; this file must be add_subdirectory()'d from the root
-# project, not configured fully standalone, for that target to exist.
+# etcd-cpp-apiv3 and its dependencies. Assumed already installed system-
+# wide on this project's build machines (as noted in the project context
+# doc). Adjust find_library paths if they live somewhere non-standard.
+find_library(ETCD_CPP_API_LIB etcd-cpp-api REQUIRED)
+find_library(GRPCPP_LIB grpc++ REQUIRED)
+find_library(GRPC_LIB grpc REQUIRED)
+find_library(PROTOBUF_LIB protobuf REQUIRED)
+find_library(CPPREST_LIB cpprest REQUIRED)
 
 include(FetchContent)
 
@@ -21,12 +24,14 @@ include(FetchContent)
 # control and point CMake at the local copy instead:
 #   git clone --depth 1 --branch v1.90.9 https://github.com/ocornut/imgui.git /tmp/deps/imgui
 #   git clone --depth 1 --branch v3.11.3 https://github.com/nlohmann/json.git /tmp/deps/json
+#   git clone --depth 1 --branch v1.0 https://github.com/epezent/implot.git /tmp/deps/implot
 #   cmake -DLOCAL_DEPS_DIR=/tmp/deps ..
-set(LOCAL_DEPS_DIR "" CACHE PATH "If set, use pre-cloned imgui/json from here instead of fetching")
+set(LOCAL_DEPS_DIR "" CACHE PATH "If set, use pre-cloned imgui/json/implot from here instead of fetching")
 
 if(LOCAL_DEPS_DIR)
   FetchContent_Declare(imgui SOURCE_DIR "${LOCAL_DEPS_DIR}/imgui")
   FetchContent_Declare(json SOURCE_DIR "${LOCAL_DEPS_DIR}/json")
+  FetchContent_Declare(implot SOURCE_DIR "${LOCAL_DEPS_DIR}/implot")
 else()
   FetchContent_Declare(
     imgui
@@ -42,10 +47,23 @@ else()
     GIT_SHALLOW TRUE
     GIT_PROGRESS TRUE
   )
+  # Pinned to v1.0 specifically, not just "latest" -- the API changed
+  # between v1.0 and its current unreleased master (SetNextFillStyle
+  # etc. were replaced by ImPlotSpec), confirmed by actually building
+  # against both while developing the Price History page. Bump this
+  # deliberately, not accidentally, if you ever want the newer API.
+  FetchContent_Declare(
+    implot
+    GIT_REPOSITORY https://github.com/epezent/implot.git
+    GIT_TAG v1.0
+    GIT_SHALLOW TRUE
+    GIT_PROGRESS TRUE
+  )
 endif()
 
 FetchContent_MakeAvailable(imgui)
 FetchContent_MakeAvailable(json)
+FetchContent_MakeAvailable(implot)
 
 add_library(imgui STATIC
   ${imgui_SOURCE_DIR}/imgui.cpp
@@ -63,6 +81,18 @@ target_include_directories(imgui PUBLIC
 )
 target_link_libraries(imgui PUBLIC ${GLFW_LIBRARIES} OpenGL::GL)
 
+# ImPlot needs ImGui's headers (not the demo file -- we don't use
+# ShowDemoWindow, and it pulls in extra date/time formatting code we
+# don't need).
+add_library(implot STATIC
+  ${implot_SOURCE_DIR}/implot.cpp
+  ${implot_SOURCE_DIR}/implot_items.cpp
+)
+target_include_directories(implot PUBLIC
+  ${implot_SOURCE_DIR}
+)
+target_link_libraries(implot PUBLIC imgui)
+
 add_executable(trading_dashboard
   src/main.cpp
 )
@@ -74,9 +104,14 @@ target_include_directories(trading_dashboard PRIVATE
 
 target_link_libraries(trading_dashboard PRIVATE
   imgui
+  implot
   ${GLFW_LIBRARIES}
   OpenGL::GL
-  EtcdCpp::EtcdCpp
+  ${ETCD_CPP_API_LIB}
+  ${GRPCPP_LIB}
+  ${GRPC_LIB}
+  ${PROTOBUF_LIB}
+  ${CPPREST_LIB}
   nlohmann_json::nlohmann_json
   pthread
 )

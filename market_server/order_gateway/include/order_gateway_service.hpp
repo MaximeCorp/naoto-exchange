@@ -6,16 +6,16 @@
 #include <client_states.hpp>
 #include <client_states_writer.hpp>
 #include <file_descriptors_ops.hpp>
-#include <routed_auth_request.hpp>
 #include <gateway_server.hpp>
-#include <trade_report_receiver.hpp>
 #include <netinet/tcp.h>
 #include <object_batch.hpp>
 #include <order.hpp>
+#include <order_router.hpp>
 #include <pthread.h>
 #include <readerwritercircularbuffer.h>
-#include <order_router.hpp>
+#include <routed_auth_request.hpp>
 #include <thread>
+#include <trade_report_receiver.hpp>
 
 namespace naoto::order_gateway
 {
@@ -58,8 +58,7 @@ namespace naoto::order_gateway
                            UpdatesBufferSize>
             StatesWriter;
         TradeReportReceiver<ReceiveRingBufferSize, BatchSize> UpdatesReceiver;
-        AccountServiceResponseReceiver<BatchSize, MaxPositions>
-            AccountReceiver;
+        AccountServiceResponseReceiver<BatchSize, MaxPositions> AccountReceiver;
         AccountRequestSender RequestSender;
 
         void setAffinity(std::thread &t, const int core_id)
@@ -84,10 +83,11 @@ namespace naoto::order_gateway
 
     public:
         OrderGatewayService(int argc, char **argv, const uint16_t portId,
-                      const uint16_t nbRxQueueSlots, const size_t poolSize,
-                      const uint32_t dstIp, const uint16_t dstPort,
-                      const size_t queue_size, const int port,
-                      const int maxEvents, const int maxPending)
+                            const uint16_t nbRxQueueSlots,
+                            const size_t poolSize, const uint32_t dstIp,
+                            const uint16_t dstPort, const size_t queue_size,
+                            const int port, const int maxEvents,
+                            const int maxPending)
             : OrdersPool(poolSize)
             , ReportsPool(poolSize)
             , ResponsesPool(poolSize)
@@ -127,27 +127,31 @@ namespace naoto::order_gateway
                 &Router);
             std::thread serverThread(
                 &GatewayServer<BatchSize, MaxPositions>::startServer, &Server);
-            std::thread StatesWriterThread(
+            std::thread statesWriterThread(
                 &ClientStatesWriter<MaxClients, MaxPositions, BatchSize,
                                     UpdatesBufferSize>::StartLoop,
                 &StatesWriter);
 
-            std::thread UpdatesReceiverThread(
+            std::thread updatesReceiverThread(
                 &TradeReportReceiver<ReceiveRingBufferSize,
-                               BatchSize>::StartReceiversLoop,
+                                     BatchSize>::StartReceiversLoop,
                 &UpdatesReceiver);
 
-            std::thread AccountReceiverThread(
+            std::thread accountReceiverThread(
                 &AccountServiceResponseReceiver<BatchSize,
                                                 MaxPositions>::StartLoop,
                 &AccountReceiver);
 
-            std::thread RequestSenderThread(&AccountRequestSender::StartLoop,
+            std::thread requestSenderThread(&AccountRequestSender::StartLoop,
                                             &RequestSender);
 
             // TODO: Set affinity and thread names
-            setAffinity(riskThread, 2); // Hard coded for local tests
-            setAffinity(serverThread, 4);
+            setAffinity(riskThread, 4); // Hard coded for local tests
+            setAffinity(serverThread, 2);
+            setAffinity(statesWriterThread, 10);
+            setAffinity(updatesReceiverThread, 11);
+            setAffinity(accountReceiverThread, 10);
+            setAffinity(requestSenderThread, 11);
 
             pthread_setname_np(riskThread.native_handle(), "RiskEngine");
             pthread_setname_np(serverThread.native_handle(), "EpollServer");

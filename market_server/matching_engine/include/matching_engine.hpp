@@ -140,7 +140,7 @@ namespace naoto::matching_engine
             std::thread serverThread(
                 &OrderIngressServer<BatchSize>::startServer, &Server);
 
-            setAffinity(matchingThread, 5);
+            setAffinity(matchingThread, 8);
             setAffinity(serverThread, 6);
 
             pthread_setname_np(matchingThread.native_handle(),

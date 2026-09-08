@@ -144,18 +144,11 @@ namespace naoto
                             recv(curFd, &firstMessage,
                                  sizeof(InitMessage) - buffer.BufferSize, 0);
 
-                        std::cout << "Read " << nread
-                                  << " bytes at epoll server (binary size = "
-                                  << sizeof(InitMessage) << ")\n\n";
-
                         if (nread > 0)
                         {
                             if (!buffer.addBytes((T *)&firstMessage, nread))
                                 [[unlikely]]
                             {
-                                std::cerr << "First-message buffer overflow "
-                                             "on FD "
-                                          << curFd << ", dropping connection\n";
                                 removeClient(curFd);
                                 return;
                             }
@@ -217,10 +210,6 @@ namespace naoto
                              (char *)(batch->Data.data()) + buffer.BufferSize,
                              sizeof(T) * BatchSize - buffer.BufferSize, 0);
 
-                std::cout << "Read " << nread
-                          << " bytes at epoll server (binary size = "
-                          << sizeof(T) << ")\n\n";
-
                 if (nread <= 0) [[unlikely]]
                 {
                     if (Pool.localRelease(batch)) [[unlikely]]
@@ -248,9 +237,8 @@ namespace naoto
                 if (!buffer.addBytes(batch->Data.data() + sizeof(T) * batchSize,
                                      bufferSize)) [[unlikely]]
                 {
-                    std::cerr << "Unexpected buffer overflow while storing "
-                                 "leftover bytes on FD "
-                              << curFd << "\n";
+                    // TODO : see if there's something to do here or if it can
+                    // happen
                 }
 
                 if (batchSize > 0) [[likely]]

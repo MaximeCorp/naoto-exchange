@@ -121,6 +121,7 @@ namespace naoto
             udp->dst_port = rte_cpu_to_be_16(DstPort);
             udp->dgram_len =
                 rte_cpu_to_be_16(sizeof(rte_udp_hdr) + sizeof(T) * curStep);
+            udp->dgram_cksum = 0;
         }
 
         void CopyPayload(uint8_t *payload, const T *const *items,

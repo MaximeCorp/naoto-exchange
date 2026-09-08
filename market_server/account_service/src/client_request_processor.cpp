@@ -38,8 +38,9 @@ namespace naoto::account_service
 
                     // TODO : Remove the hardcoded gateway
 
-                    if ((curClient.GetAuthorized() != gatewayId
-                         || curClient.GetConnected() != -1)
+                    if ((curClient.GetAuthorized() != gatewayId)
+                        // || curClient.GetConnected() != -1) // TODO : Add the
+                        // disconnect message to handle this
                         && gatewayId != 10)
                     {
                         // Client connection denied

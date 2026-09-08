@@ -29,6 +29,7 @@ namespace naoto
         int64_t Price;
 #ifdef NAOTO_PERF
         uint64_t IngestedTimestamp;
+        uint64_t RoutedTimestamp;
         uint64_t ReceivedTimestamp;
 #endif
         uint64_t OrderId;

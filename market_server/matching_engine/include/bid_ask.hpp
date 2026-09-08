@@ -113,23 +113,12 @@ namespace naoto::matching_engine
                     0, 0, 0,
 
 #ifdef NAOTO_PERF
-                    order.IngestedTimestamp, order.ReceivedTimestamp, now,
+                    order.IngestedTimestamp, order.RoutedTimestamp,
+                    order.ReceivedTimestamp, now,
 #endif
                     ReportSequenceId++, order.ClientId, order.OrderId, 0, 0, 0,
                     OrderState::REJECT);
                 OutgoingOrders.try_enqueue(rejectReport);
-
-                std::cout << "Rejected a cancel request";
-
-                if (found && toCancel->GetClientId() != order.ClientId)
-                {
-                    std::cout << " because of wrong client id.\n\n";
-                }
-                else
-                {
-                    std::cout
-                        << " because the referenced order was not found.\n\n";
-                }
 
                 return;
             }
@@ -146,7 +135,8 @@ namespace naoto::matching_engine
                     0, 0, toCancel->GetAmount() * toCancel->GetPrice(),
 
 #ifdef NAOTO_PERF
-                    order.IngestedTimestamp, order.ReceivedTimestamp, now,
+                    order.IngestedTimestamp, order.RoutedTimestamp,
+                    order.ReceivedTimestamp, now,
 #endif
                     ReportSequenceId++, toCancel->GetClientId(),
                     toCancel->GetId(), 0, MarketAssetId, 0, OrderState::CANCEL);
@@ -175,7 +165,8 @@ namespace naoto::matching_engine
                     0, 0, toCancel->GetAmount(),
 
 #ifdef NAOTO_PERF
-                    order.IngestedTimestamp, order.ReceivedTimestamp, now,
+                    order.IngestedTimestamp, order.RoutedTimestamp,
+                    order.ReceivedTimestamp, now,
 #endif
                     ReportSequenceId++, toCancel->GetClientId(),
                     toCancel->GetId(), 0, 0, MarketAssetId, OrderState::CANCEL);
@@ -228,10 +219,6 @@ namespace naoto::matching_engine
 
                 while (order.Amount > 0 && IsMarketable(order) && bestOffer)
                 {
-                    std::cout << "Matching the following orders:\n";
-                    order.log();
-                    bestOffer->log();
-
                     const std::uint32_t curOrderAmount = order.Amount;
                     const std::uint32_t curOfferAmount = bestOffer->GetAmount();
 
@@ -265,7 +252,8 @@ namespace naoto::matching_engine
                         soldDelta * BestAskPrice,
 
 #ifdef NAOTO_PERF
-                        order.IngestedTimestamp, order.ReceivedTimestamp, now,
+                        order.IngestedTimestamp, order.RoutedTimestamp,
+                        order.ReceivedTimestamp, now,
 #endif
                         ReportSequenceId++, order.ClientId, order.OrderId, 0,
                         MarketAssetId, 0,
@@ -278,7 +266,8 @@ namespace naoto::matching_engine
                         tradedAmount * BestAskPrice, soldDelta, soldDelta,
 
 #ifdef NAOTO_PERF
-                        bestOffer->GetIngested(), bestOffer->GetReceived(), now,
+                        bestOffer->GetIngested(), bestOffer->GetRouted(),
+                        bestOffer->GetReceived(), now,
 #endif
                         ReportSequenceId++, bestOffer->GetClientId(),
                         bestOffer->GetId(), 0, 0, MarketAssetId,
@@ -296,12 +285,6 @@ namespace naoto::matching_engine
                         OrderBookSequenceId++, bestLevel->GetTotalAmount(),
                         BestAskPrice, MarketAssetId, ORDER_BOOK_UPDATE_SELL);
                     OutgoingBook.try_enqueue(curOrderBookUpdate);
-
-                    std::cout << "Orders after matching\n:";
-                    order.log();
-                    bestOffer->log();
-
-                    std::cout << "New market price:\n" << MarketPrice << "\n";
 
                     if (bestOffer->GetAmount() == 0)
                     {
@@ -322,7 +305,8 @@ namespace naoto::matching_engine
                 orderReport->FillReport(
                     0, 0, -totalLocked,
 #ifdef NAOTO_PERF
-                    order.IngestedTimestamp, order.ReceivedTimestamp, now,
+                    order.IngestedTimestamp, order.RoutedTimestamp,
+                    order.ReceivedTimestamp, now,
 #endif
                     ReportSequenceId++, order.ClientId, order.OrderId, 0,
                     MarketAssetId, 0, OrderState::CANCEL);
@@ -361,10 +345,6 @@ namespace naoto::matching_engine
 
                 while (order.Amount > 0 && IsMarketable(order) && bestOffer)
                 {
-                    std::cout << "Matching the following orders:\n";
-                    order.log();
-                    bestOffer->log();
-
                     const std::uint32_t curOrderAmount = order.Amount;
                     const std::uint32_t curOfferAmount = bestOffer->GetAmount();
 
@@ -395,7 +375,8 @@ namespace naoto::matching_engine
                     orderReport->FillReport(
                         tradedAmount * BestBidPrice, soldDelta, soldDelta,
 #ifdef NAOTO_PERF
-                        order.IngestedTimestamp, order.ReceivedTimestamp, now,
+                        order.IngestedTimestamp, order.RoutedTimestamp,
+                        order.ReceivedTimestamp, now,
 #endif
                         ReportSequenceId++, order.ClientId, order.OrderId, 0, 0,
                         MarketAssetId,
@@ -410,7 +391,8 @@ namespace naoto::matching_engine
                         tradedAmount, soldDelta * BestBidPrice,
                         soldDelta * BestBidPrice,
 #ifdef NAOTO_PERF
-                        bestOffer->GetIngested(), bestOffer->GetReceived(), now,
+                        bestOffer->GetIngested(), bestOffer->GetRouted(),
+                        bestOffer->GetReceived(), now,
 #endif
                         ReportSequenceId++, bestOffer->GetClientId(),
                         bestOffer->GetId(), 0, MarketAssetId, 0,
@@ -427,12 +409,6 @@ namespace naoto::matching_engine
                         OrderBookSequenceId++, bestLevel->GetTotalAmount(),
                         BestBidPrice, MarketAssetId, ORDER_BOOK_UPDATE_BUY);
                     OutgoingBook.try_enqueue(curOrderBookUpdate);
-
-                    std::cout << "Orders after matching\n:";
-                    order.log();
-                    bestOffer->log();
-
-                    std::cout << "New market price:\n" << MarketPrice << "\n";
 
                     if (bestOffer->GetAmount() == 0)
                     {
@@ -453,7 +429,8 @@ namespace naoto::matching_engine
                 orderReport->FillReport(
                     0, 0, -totalLocked,
 #ifdef NAOTO_PERF
-                    order.IngestedTimestamp, order.ReceivedTimestamp, now,
+                    order.IngestedTimestamp, order.RoutedTimestamp,
+                    order.ReceivedTimestamp, now,
 #endif
                     ReportSequenceId++, order.ClientId, order.OrderId, 0, 0,
                     MarketAssetId, OrderState::CANCEL);
@@ -464,7 +441,6 @@ namespace naoto::matching_engine
         void ExecuteMarketableOrder(
             Order &order) noexcept // assumption: the order IS marketable
         {
-            std::cout << "Executing marketable order.\n\n";
             if (order.Side == OrderSide::BUY)
             {
                 FillBuyOrder(order);
@@ -481,8 +457,6 @@ namespace naoto::matching_engine
 
             if (!toAdd) [[unlikely]]
             {
-                std::cout << "Matching engine failed getting an order node "
-                             "from pool, dropping order.\n\n";
                 return;
             }
 
@@ -505,17 +479,13 @@ namespace naoto::matching_engine
                 addReport->FillReport(
                     0, 0, order.Amount,
 #ifdef NAOTO_PERF
-                    order.IngestedTimestamp, order.ReceivedTimestamp, now,
+                    order.IngestedTimestamp, order.RoutedTimestamp,
+                    order.ReceivedTimestamp, now,
 #endif
                     ReportSequenceId++, order.ClientId, order.OrderId, 0, 0,
                     MarketAssetId, OrderState::ADD);
                 OutgoingOrders.try_enqueue(addReport);
                 // TODO : try_enqueue failure handling
-            }
-            else [[unlikely]]
-            {
-                std::cout << "Matching engine failed getting an order state "
-                             "report from pool, skipping report.\n\n";
             }
 
             OrderBookUpdate *curOrderBookUpdate =
@@ -531,11 +501,6 @@ namespace naoto::matching_engine
                     curLevel->GetKey(), MarketAssetId, ORDER_BOOK_UPDATE_SELL);
                 OutgoingBook.try_enqueue(curOrderBookUpdate);
             }
-            else [[unlikely]]
-            {
-                std::cout << "Matching engine failed getting an order book "
-                             "update from pool, skipping update.\n\n";
-            }
         }
 
         void AddBuyLimitOrder(Order &order)
@@ -544,8 +509,6 @@ namespace naoto::matching_engine
 
             if (!toAdd) [[unlikely]]
             {
-                std::cout << "Matching engine failed getting an order node "
-                             "from pool, dropping order.\n\n";
                 return;
             }
 
@@ -568,17 +531,13 @@ namespace naoto::matching_engine
                 addReport->FillReport(
                     0, 0, order.Amount * order.Price,
 #ifdef NAOTO_PERF
-                    order.IngestedTimestamp, order.ReceivedTimestamp, now,
+                    order.IngestedTimestamp, order.RoutedTimestamp,
+                    order.ReceivedTimestamp, now,
 #endif
                     ReportSequenceId++, order.ClientId, order.OrderId, 0,
                     MarketAssetId, 0, OrderState::ADD);
                 OutgoingOrders.try_enqueue(addReport);
                 // TODO : try_enqueue failure handling
-            }
-            else [[unlikely]]
-            {
-                std::cout << "Matching engine failed getting an order state "
-                             "report from pool, skipping report.\n\n";
             }
 
             OrderBookUpdate *curOrderBookUpdate =
@@ -594,18 +553,12 @@ namespace naoto::matching_engine
                     curLevel->GetKey(), MarketAssetId, ORDER_BOOK_UPDATE_BUY);
                 OutgoingBook.try_enqueue(curOrderBookUpdate);
             }
-            else [[unlikely]]
-            {
-                std::cout << "Matching engine failed getting an order book "
-                             "update from pool, skipping update.\n\n";
-            }
             // TODO : failure handling
         }
 
         void AddLimitOrder(
             Order &order) noexcept // assumption: the order is not marketable
         {
-            std::cout << "Adding to order book\n";
             const bool isBuy = order.Side == OrderSide::BUY;
 
             if (isBuy)
@@ -671,19 +624,13 @@ namespace naoto::matching_engine
 
                 if (IncomingOrders.try_dequeue(batch)) [[likely]]
                 {
-                    std::cout << "batch of size " << batch->getSize() << "\n";
-
                     for (size_t i = 0; i < batch->getSize(); ++i)
                     {
                         Order &curOrder = batch->Data[i];
 
-                        std::cout << "Received the order:\n";
-                        curOrder.log();
-
                         if (curOrder.Action == OrderAction::EXECUTE)
                         {
                             executeOrder(curOrder);
-                            std::cout << "finished execution\n";
                         }
                         else if (curOrder.Action == OrderAction::CANCEL)
                             [[likely]]
