@@ -155,7 +155,7 @@ target_link_libraries(naoto_absl INTERFACE PkgConfig::ABSL)
 # before a benchmarking pass), not for everyday iteration.
 option(NAOTO_LTO "Whole-program link-time optimization (slow, RAM-heavy link step)" OFF)
 option(NAOTO_BUILD_TESTS "Build the GoogleTest suite under tests/" OFF)
-option(NAOTO_TIMESTAMPS "Turn on performances measurement with timestamps" OFF)
+option(NAOTO_PERF "Turn on performances measurement with timestamps" OFF)
 option(NAOTO_ELASTIC "Scalable order gateways and matching engines." OFF)
 
 if(NAOTO_LTO)
@@ -166,8 +166,12 @@ if(NAOTO_LTO)
     endif()
 endif()
 
-if (NAOTO_TIMESTAMPS)
+if (NAOTO_PERF)
     add_compile_definitions(NAOTO_PERF)
+endif()
+
+if (NAOTO_ELASTIC)
+    add_compile_definitions(NAOTO_ELASTIC)
 endif()
 
 add_subdirectory(third_party)
