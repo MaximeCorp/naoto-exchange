@@ -15,19 +15,23 @@ namespace naoto::matching_engine
     {
     private:
         FlatHashMap<int64_t, PriceLevel *, FHMSize> FastMap;
-        SkipList<int64_t, PriceLevel *, SkipListMaxLevel, Compare>
+        SkipList<int64_t, PriceLevel *, MeSkipListNodePoolSize,
+                 SkipListMaxLevel, Compare>
             BestPricesMap;
-        SingleThreadedStoragePool<OrderNode> &OrderNodePool;
-        SingleThreadedStoragePool<PriceLevel> &PriceLevelPool;
+        SingleThreadedStoragePool<OrderNode, MeOrderNodePoolSize>
+            &OrderNodePool;
+        SingleThreadedStoragePool<PriceLevel, MePriceLevelPoolSize>
+            &PriceLevelPool;
 
         FlatHashMap<uint64_t, OrderNode *, OrderMapSize> &OrderMap;
 
     public:
-        OrderBook(
-            const size_t skipListNodesPoolSize,
-            SingleThreadedStoragePool<OrderNode> &orderNodePool,
-            SingleThreadedStoragePool<PriceLevel> &priceLevelPool,
-            FlatHashMap<uint64_t, OrderNode *, OrderMapSize> &orderMap)
+        OrderBook(const size_t skipListNodesPoolSize,
+                  SingleThreadedStoragePool<OrderNode, MeOrderNodePoolSize>
+                      &orderNodePool,
+                  SingleThreadedStoragePool<PriceLevel, MePriceLevelPoolSize>
+                      &priceLevelPool,
+                  FlatHashMap<uint64_t, OrderNode *, OrderMapSize> &orderMap)
             : BestPricesMap(skipListNodesPoolSize)
             , OrderNodePool(orderNodePool)
             , PriceLevelPool(priceLevelPool)
@@ -60,7 +64,7 @@ namespace naoto::matching_engine
 
             if (!found) [[unlikely]]
             {
-                curPrice = PriceLevelPool.acquire();
+                curPrice = PriceLevelPool.Acquire();
 
                 if (!curPrice) [[unlikely]]
                 {
@@ -93,7 +97,7 @@ namespace naoto::matching_engine
             {
                 std::cerr << "tried deleting node with no price level\n";
 
-                bool released = OrderNodePool.release(order);
+                bool released = OrderNodePool.Release(order);
 
                 if (!released) [[unlikely]]
                 {
@@ -109,7 +113,7 @@ namespace naoto::matching_engine
             {
                 FastMap.DeleteNode(key);
                 BestPricesMap.DeleteNode(key);
-                bool released = PriceLevelPool.release(curPrice);
+                bool released = PriceLevelPool.Release(curPrice);
 
                 if (!released) [[unlikely]]
                 {
@@ -118,7 +122,7 @@ namespace naoto::matching_engine
                                  "delete an order.\n\n";
                 }
 
-                released = OrderNodePool.release(order);
+                released = OrderNodePool.Release(order);
 
                 if (!released) [[unlikely]]
                 {
@@ -130,7 +134,7 @@ namespace naoto::matching_engine
                 return nullptr;
             }
 
-            bool released = OrderNodePool.release(order);
+            bool released = OrderNodePool.Release(order);
 
             if (!released) [[unlikely]]
             {

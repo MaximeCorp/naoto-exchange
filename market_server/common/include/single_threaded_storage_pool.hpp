@@ -6,40 +6,28 @@
 
 namespace naoto
 {
-    template <typename T>
+    template <typename T, size_t Size>
     class SingleThreadedStoragePool
     {
     private:
-        std::vector<T> Storage;
-        const size_t Capacity;
+        std::array<T, Size> Storage;
+        std::array<T *, Size> FreeQueue;
         size_t FreeSize;
-        std::vector<T *> FreeQueue;
 
     public:
-        SingleThreadedStoragePool(size_t capacity)
-            : Capacity(capacity)
-            , FreeSize(capacity)
+        SingleThreadedStoragePool(void)
         {
-            if (capacity == 0)
-            {
-                throw std::invalid_argument(
-                    "Pool size must be greater than zero.");
-            }
+            std::cout << "Initializing storage pool with capacity: " << Size
+                      << " objects.\n";
 
-            std::cout << "Initializing storage pool with capacity: "
-                      << Capacity << " objects.\n";
-
-            Storage.resize(Capacity);
-            FreeQueue.resize(Capacity);
-
-            for (size_t i = 0; i < Capacity; ++i)
+            for (size_t i = 0; i < Size; ++i)
             {
                 T *curElement = &Storage[i];
                 FreeQueue[i] = curElement;
             }
         }
 
-        [[nodiscard]] T *acquire() noexcept
+        [[nodiscard]] T *Acquire() noexcept
         {
             T *res = nullptr;
 
@@ -51,9 +39,9 @@ namespace naoto
             return res;
         }
 
-        [[nodiscard]] bool release(T *toRelease) noexcept
+        [[nodiscard]] bool Release(T *toRelease) noexcept
         {
-            if (toRelease && FreeSize < Capacity) [[likely]]
+            if (toRelease && FreeSize < Size) [[likely]]
             {
                 FreeQueue[FreeSize++] = toRelease;
                 return true;

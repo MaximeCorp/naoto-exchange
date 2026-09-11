@@ -4,6 +4,8 @@
 #include <consumer.hpp>
 #include <cstddef>
 #include <order_book_update.hpp>
+#include <spsc_queue.hpp>
+#include <system_conf.hpp>
 #include <udp_multicast_emitter.hpp>
 
 namespace naoto::matching_engine
@@ -11,25 +13,28 @@ namespace naoto::matching_engine
     template <size_t BatchSize = 0>
     class OrderBookEmitter
         : public Consumer<OrderBookEmitter<BatchSize>, OrderBookUpdate,
+                          MeOrderBookUpdateQueueSize, MeOrderBookUpdatePoolSize,
                           BatchSize>
         , public UdpMulticastEmitter<OrderBookEmitter<BatchSize>,
                                      OrderBookUpdate, BatchSize>
     {
         using UpdatesQueue =
-            moodycamel::BlockingReaderWriterCircularBuffer<OrderBookUpdate *>;
+            SpscQueue<OrderBookUpdate *, MeOrderBookUpdateQueueSize>;
         using EmitterBase = UdpMulticastEmitter<OrderBookEmitter<BatchSize>,
                                                 OrderBookUpdate, BatchSize>;
 
     public:
-        OrderBookEmitter(UpdatesQueue &incoming,
-                         StoragePool<OrderBookUpdate> &mempool,
-                         const uint16_t portId, const uint16_t nbTxQueueSlots,
-                         const uint16_t queueId, const unsigned lcoreId,
-                         const char *poolName, const size_t poolSize,
-                         const uint32_t srcIp, const uint32_t dstIp,
-                         const uint16_t srcPort, const uint16_t dstPort)
-            : Consumer<OrderBookEmitter<BatchSize>, OrderBookUpdate, BatchSize>(
-                  incoming, mempool)
+        OrderBookEmitter(
+            UpdatesQueue *incoming,
+            StoragePool<OrderBookUpdate, MeOrderBookUpdatePoolSize> &mempool,
+            const uint16_t portId, const uint16_t nbTxQueueSlots,
+            const uint16_t queueId, const unsigned lcoreId,
+            const char *poolName, const size_t poolSize, const uint32_t srcIp,
+            const uint32_t dstIp, const uint16_t srcPort,
+            const uint16_t dstPort)
+            : Consumer<OrderBookEmitter<BatchSize>, OrderBookUpdate,
+                       MeOrderBookUpdateQueueSize, MeOrderBookUpdatePoolSize,
+                       BatchSize>(incoming, mempool)
             , UdpMulticastEmitter<OrderBookEmitter<BatchSize>, OrderBookUpdate,
                                   BatchSize>(portId, nbTxQueueSlots, queueId,
                                              lcoreId, poolName, poolSize, srcIp,
@@ -53,6 +58,7 @@ namespace naoto::matching_engine
             while (true)
             {
                 Consumer<OrderBookEmitter, OrderBookUpdate,
+                         MeOrderBookUpdateQueueSize, MeOrderBookUpdatePoolSize,
                          BatchSize>::TryConsume();
             }
         }

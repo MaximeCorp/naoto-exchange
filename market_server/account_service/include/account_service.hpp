@@ -13,6 +13,7 @@
 #include <order_state_report.hpp>
 #include <readerwritercircularbuffer.h>
 #include <routed_auth_request.hpp>
+#include <spsc_queue.hpp>
 #include <storage_pool.hpp>
 #include <system_conf.hpp>
 #include <thread>
@@ -22,30 +23,35 @@ namespace naoto::account_service
 {
     class AccountService
     {
-        using RequestQueue = moodycamel::BlockingReaderWriterCircularBuffer<
-            ObjectBatch<RoutedAuthRequest, AccountEpollReceiveBatchSize> *>;
+        using RequestQueue = SpscQueue<
+            ObjectBatch<RoutedAuthRequest, AccountEpollReceiveBatchSize> *,
+            MaxClients>;
         using ReportQueue =
-            moodycamel::BlockingReaderWriterCircularBuffer<OrderStateReport *>;
-        using ResponseQueue = moodycamel::BlockingReaderWriterCircularBuffer<
-            RoutedMessage<ClientAccountSnapshot<MaxPositions>>>;
+            SpscQueue<OrderStateReport *, TradeReportReceiveQueueSize>;
+        using ResponseQueue =
+            SpscQueue<RoutedMessage<ClientAccountSnapshot<MaxPositions>>,
+                      MaxClients>;
 
     private:
         ClientStates<MaxPositions> States;
         StoragePool<
-            ObjectBatch<RoutedAuthRequest, AccountEpollReceiveBatchSize>>
+            ObjectBatch<RoutedAuthRequest, AccountEpollReceiveBatchSize>,
+            AccountRequestPoolSize>
             RequestPool;
-        StoragePool<OrderStateReport> ReportPool;
-        StoragePool<ClientAccountSnapshot<MaxPositions>> ResponsePool;
+        StoragePool<OrderStateReport, TradeReportReceivePoolSize> ReportPool;
+        StoragePool<ClientAccountSnapshot<MaxPositions>,
+                    AccountResponsePoolSize>
+            ResponsePool;
         RequestQueue Requests;
         ReportQueue Reports;
         ResponseQueue Responses;
         std::array<VersionedFd, MaxGateways> GatewayFd;
-        GatewayEpollServer<AccountEpollReceiveBatchSize, MaxGateways> Server;
+        GatewayEpollServer Server;
         ClientRequestProcessor Processor;
         GatewayResponseDispatcher<MaxPositions, AccountResponseBatchSize,
                                   MaxGateways, AccountResponsesResendBufferSize>
             Dispatcher;
-        ClientStatesWriter<MaxPositions, ClientStatesSwapBatchSize> Writer;
+        ClientStatesWriter Writer;
         TradeReportReceiver<TradeReportReceiveBufferSize,
                             TradeReportReceiveBatchSize>
             ReportReceiver;

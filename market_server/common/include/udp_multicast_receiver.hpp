@@ -13,6 +13,7 @@
 #include <rte_mbuf.h>
 #include <rte_udp.h>
 #include <sequence_ring_buffer.hpp>
+#include <spsc_queue.hpp>
 #include <storage_pool.hpp>
 #include <string>
 #include <variant>
@@ -27,8 +28,8 @@ namespace naoto
         { t.SequenceId } -> std::convertible_to<uint32_t>;
     };
 
-    template <typename T, size_t RingBufferSize, size_t BatchSize = 0,
-              size_t MTU = 1500>
+    template <typename T, size_t RingBufferSize, size_t QueueSize,
+              size_t PoolSize, size_t BatchSize = 0, size_t MTU = 1500>
         requires HasSequenceIdLocal<T>
     class UdpMulticastReceiver
     {
@@ -42,7 +43,7 @@ namespace naoto
         static constexpr size_t MaxPackets =
             BatchSize / ObjectsPerPacket + (BatchSize % ObjectsPerPacket != 0);
 
-        using TQueue = moodycamel::BlockingReaderWriterCircularBuffer<T *>;
+        using TQueue = SpscQueueProducer<T *, QueueSize>;
         using PacketsBuffer =
             std::conditional_t<(BatchSize > 0),
                                std::array<rte_mbuf *, MaxPackets>,
@@ -50,8 +51,8 @@ namespace naoto
 
     protected:
         [[no_unique_address]] PacketsBuffer Packets;
-        TQueue &Outgoing;
-        StoragePool<T> &TPool;
+        TQueue Outgoing;
+        StoragePool<T, PoolSize> &TPool;
         uint16_t PortId;
         uint16_t QueueId;
         unsigned LcoreId;
@@ -62,11 +63,11 @@ namespace naoto
         uint16_t DstPort;
 
     public:
-        UdpMulticastReceiver(TQueue &outgoing, StoragePool<T> &pool,
-                             uint16_t portId, uint16_t nbRxQueueSlots,
-                             uint16_t queueId, unsigned lcoreId,
-                             const char *poolName, size_t poolSize,
-                             uint32_t dstIp, uint32_t dstPort)
+        UdpMulticastReceiver(SpscQueue<T *, QueueSize> *outgoing,
+                             StoragePool<T, PoolSize> &pool, uint16_t portId,
+                             uint16_t nbRxQueueSlots, uint16_t queueId,
+                             unsigned lcoreId, const char *poolName,
+                             size_t poolSize, uint32_t dstIp, uint32_t dstPort)
             : Outgoing(outgoing)
             , TPool(pool)
             , PortId(portId)
@@ -196,7 +197,7 @@ namespace naoto
                 for (size_t consumed = 0; consumed < payloadSize;
                      consumed += sizeof(T))
                 {
-                    T *curObj = TPool.acquire();
+                    T *curObj = TPool.Acquire();
 
                     if (!curObj) [[unlikely]]
                     {
@@ -218,7 +219,7 @@ namespace naoto
                         std::cerr << "Failed adding to ring buffer, "
                                      "releasing object back to pool\n\n";
 
-                        if (!TPool.localRelease(curObj)) [[unlikely]]
+                        if (!TPool.LocalRelease(curObj)) [[unlikely]]
                         {
                             std::cerr << "Failed releasing object back to "
                                          "pool after failed ring buffer "
@@ -231,14 +232,14 @@ namespace naoto
 
                 while ((readSlot = ReceiveBuffer.GetSlot(NextToRead)))
                 {
-                    bool pushed = Outgoing.try_enqueue(readSlot);
+                    bool pushed = Outgoing.TryPush(readSlot);
 
                     if (!pushed) [[unlikely]]
                     {
                         std::cerr << "Failed enqueueing to consumer, "
                                      "releasing object back to pool\n\n";
 
-                        if (!TPool.localRelease(readSlot)) [[unlikely]]
+                        if (!TPool.LocalRelease(readSlot)) [[unlikely]]
                         {
                             std::cerr << "Failed releasing object back to "
                                          "pool after failed enqueue\n\n";

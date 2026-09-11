@@ -5,9 +5,10 @@
 #include <client_states.hpp>
 #include <epoll_server.hpp>
 #include <order.hpp>
-#include <readerwritercircularbuffer.h>
 #include <routed_auth_request.hpp>
+#include <spsc_queue.hpp>
 #include <string>
+#include <system_conf.hpp>
 #include <versioned_fd.hpp>
 
 #ifdef NAOTO_PERF
@@ -23,29 +24,29 @@ namespace naoto::order_gateway
     {
         using Base = EpollServer<GatewayServer<BatchSize, MaxPositions>, Order,
                                  BatchSize, ClientAuthRequest>;
-        using DisconnectQueue =
-            moodycamel::BlockingReaderWriterCircularBuffer<uint32_t>;
+        using DisconnectQueue = SpscQueueProducer<uint32_t, GatewayMaxClients>;
         using GatewayRequestQueue =
-            moodycamel::BlockingReaderWriterCircularBuffer<RoutedAuthRequest *>;
-        using OrderQueue = moodycamel::BlockingReaderWriterCircularBuffer<
-            ObjectBatch<Order, BatchSize> *>;
+            SpscQueueProducer<RoutedAuthRequest *, GatewayMaxClients>;
+        using OrderQueue = SpscQueue<ObjectBatch<Order, BatchSize> *,
+                                     GatewayEpollReceiveQueueSize>;
 
     private:
         VersionedFd &AccountFd;
         uint16_t GatewayId;
         ClientStates<MaxPositions> &States;
-        DisconnectQueue &OutgoingDisconnects;
+        DisconnectQueue OutgoingDisconnects;
         StoragePool<RoutedAuthRequest> &GatewayReqPool;
-        GatewayRequestQueue &OutgoingRequests;
+        GatewayRequestQueue OutgoingRequests;
 
     public:
-        GatewayServer(const int port, const int maxEvents, const int maxPending,
-                      StoragePool<ObjectBatch<Order, BatchSize>> &pool,
-                      OrderQueue &orders, ClientStates<MaxPositions> &states,
-                      VersionedFd &accountFd,
-                      DisconnectQueue &outgoingDisconnects,
-                      StoragePool<RoutedAuthRequest> &gatewayReqPool,
-                      GatewayRequestQueue &outgoingRequests)
+        GatewayServer(
+            const int port, const int maxEvents, const int maxPending,
+            StoragePool<ObjectBatch<Order, BatchSize>> &pool,
+            OrderQueue *orders, ClientStates<MaxPositions> &states,
+            VersionedFd &accountFd,
+            SpscQueue<uint32_t, GatewayMaxClients> *outgoingDisconnects,
+            StoragePool<RoutedAuthRequest> &gatewayReqPool,
+            SpscQueue<RoutedAuthRequest *, GatewayMaxClients> *outgoingRequests)
             : Base(port, maxEvents, maxPending, pool, orders)
             , AccountFd(accountFd)
             , GatewayId(std::stoul(std::getenv("GATEWAY_ID") ?: "0"))
@@ -72,7 +73,7 @@ namespace naoto::order_gateway
             finalRequest->ClientFd = fd;
             finalRequest->GatewayId = GatewayId;
 
-            bool enqueued = OutgoingRequests.try_enqueue(finalRequest);
+            bool enqueued = OutgoingRequests.TryPush(finalRequest);
 
             if (!enqueued) [[unlikely]]
             {
@@ -111,7 +112,7 @@ namespace naoto::order_gateway
 
         void CloseHandle(uint32_t fd) noexcept
         {
-            bool enqueued = OutgoingDisconnects.try_enqueue(fd);
+            bool enqueued = OutgoingDisconnects.TryPush(fd);
 
             if (!enqueued) [[unlikely]]
             {

@@ -18,6 +18,7 @@
 #include <order_risk_check.hpp>
 #include <readerwritercircularbuffer.h>
 #include <storage_pool.hpp>
+#include <system_conf.hpp>
 #include <vector>
 #include <versioned_fd.hpp>
 
@@ -31,8 +32,8 @@ namespace naoto::order_gateway
               size_t MaxClients>
     class OrderRouter
     {
-        using OrderQueue = moodycamel::BlockingReaderWriterCircularBuffer<
-            ObjectBatch<Order, BatchSize> *>;
+        using OrderQueue = SpscQueueConsumer<ObjectBatch<Order, BatchSize> *,
+                                             GatewayEpollReceiveQueueSize>;
 
     private:
         ClientStates<MaxPositions>
@@ -50,7 +51,7 @@ namespace naoto::order_gateway
                    MaxClients>
             ConfirmationBuffer;
         VersionedFd &AccountFd;
-        OrderQueue &Orders;
+        OrderQueue Orders;
         std::shared_ptr<etcd::KeepAlive> KeepAlive;
         std::unique_ptr<etcd::SyncClient> EtcdClient;
         std::unique_ptr<etcd::Watcher> EtcdMEWatcher;
@@ -508,7 +509,7 @@ namespace naoto::order_gateway
 
             // TODO : find a way to clear confirmation resend buffer when new
             // connection comes
-            if (Orders.try_dequeue(curBatch)) [[likely]]
+            if (Orders.TryPop(curBatch)) [[likely]]
             {
                 const uint32_t curFd = curBatch->Fd;
 

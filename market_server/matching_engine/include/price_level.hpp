@@ -4,6 +4,7 @@
 #include <iostream>
 #include <order_node.hpp>
 #include <single_threaded_storage_pool.hpp>
+#include <system_conf.hpp>
 
 namespace naoto::matching_engine
 {
@@ -117,8 +118,9 @@ namespace naoto::matching_engine
             return res;
         }
 
-        void
-        ClearPriceLevel(SingleThreadedStoragePool<OrderNode> &orderNodePool)
+        void ClearPriceLevel(
+            SingleThreadedStoragePool<OrderNode, MeOrderNodePoolSize>
+                &orderNodePool)
         {
             Size = 0;
             TotalAmount = 0;
@@ -130,7 +132,7 @@ namespace naoto::matching_engine
                 OrderNode *toRelease = curNode;
                 curNode = curNode->GetNext();
 
-                bool released = orderNodePool.release(toRelease);
+                bool released = orderNodePool.Release(toRelease);
 
                 if (!released) [[unlikely]]
                 {

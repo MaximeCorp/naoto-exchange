@@ -3,6 +3,7 @@
 // TODO : update theinclude for moodycamel spsc queue
 #include <array>
 #include <readerwritercircularbuffer.h>
+#include <spsc_queue.hpp>
 #include <storage_pool.hpp>
 #include <variant>
 
@@ -24,28 +25,29 @@ namespace naoto
         ((BatchSize == 0 && HasHandle<DerivedConsumer, T>)
          || (BatchSize > 0 && HasBatchHandle<DerivedConsumer, T, BatchSize>));
 
-    template <typename DerivedConsumer, typename T, size_t BatchSize = 0,
-              size_t Tag = 0>
+    template <typename DerivedConsumer, typename T, size_t QueueSize,
+              size_t PoolSize, size_t BatchSize = 0, size_t Tag = 0>
     class Consumer
     {
-        using TQueue = moodycamel::BlockingReaderWriterCircularBuffer<T *>;
+        using TQueue = SpscQueueConsumer<T *, QueueSize>;
         using BufferType =
             std::conditional_t<(BatchSize > 0), std::array<T *, BatchSize>,
                                std::monostate>;
 
     protected:
-        TQueue &Incoming;
-        StoragePool<T> &Mempool;
+        TQueue Incoming;
+        StoragePool<T, PoolSize> &Mempool;
         [[no_unique_address]] BufferType Buffer{};
 
         [[nodiscard]] bool FreeElement(
             T *element) noexcept // Caller"s responsability to check pointer
         {
-            return Mempool.release(element);
+            return Mempool.Release(element);
         }
 
     public:
-        Consumer(TQueue &incoming, StoragePool<T> &mempool)
+        Consumer(SpscQueue<T *, QueueSize> *incoming,
+                 StoragePool<T, PoolSize> &mempool)
             : Incoming(incoming)
             , Mempool(mempool)
         {}
@@ -59,7 +61,7 @@ namespace naoto
                 T *curElement = nullptr;
                 size_t curSize = 0;
 
-                while (curSize < BatchSize && Incoming.try_dequeue(curElement))
+                while (curSize < BatchSize && Incoming.TryPop(curElement))
                 {
                     Buffer[curSize++] = curElement;
                 }
@@ -86,7 +88,7 @@ namespace naoto
             {
                 T *curElement = nullptr;
 
-                if (!Incoming.try_dequeue(curElement)) [[unlikely]]
+                if (!Incoming.TryPop(curElement)) [[unlikely]]
                 {
                     return;
                 }
@@ -114,7 +116,7 @@ namespace naoto
 
                 while (curSize < BatchSize)
                 {
-                    Incoming.wait_dequeue(curElement);
+                    Incoming.Pop(curElement);
                     Buffer[curSize++] = curElement;
                 }
 
@@ -135,7 +137,7 @@ namespace naoto
             {
                 T *curElement = nullptr;
 
-                Incoming.wait_dequeue(curElement);
+                Incoming.Pop(curElement);
 
                 static_cast<DerivedConsumer *>(this)->Handle(curElement);
 
@@ -149,7 +151,7 @@ namespace naoto
             }
         }
 
-        void ConsumeTimed(const uint16_t delayMs) noexcept
+        void ConsumeTimed(const uint32_t delay_us) noexcept
         {
             static_assert(ValidConsumerHandler<DerivedConsumer, T, BatchSize>,
                           "DerivedConsumer must provide a matching Handle()");
@@ -160,9 +162,7 @@ namespace naoto
 
                 while (curSize < BatchSize)
                 {
-                    if (!Incoming.wait_dequeue_timed(
-                            curElement, std::chrono::milliseconds(delayMs)))
-                        [[unlikely]]
+                    if (!Incoming.TimedPop(curElement, delay_us)) [[unlikely]]
                     {
                         break;
                     }
@@ -187,9 +187,7 @@ namespace naoto
             {
                 T *curElement = nullptr;
 
-                if (!Incoming.wait_dequeue_timed(
-                        curElement, std::chrono::milliseconds(delayMs)))
-                    [[unlikely]]
+                if (!Incoming.TimedPop(curElement, delay_us)) [[unlikely]]
                 {
                     return;
                 }

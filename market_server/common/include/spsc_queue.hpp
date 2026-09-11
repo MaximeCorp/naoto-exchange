@@ -2,12 +2,14 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <concepts.hpp>
 #include <cstddef>
+#include <cstdint>
 
 namespace naoto
 {
-    template <size_t Size, typename T>
+    template <typename T, size_t Size>
         requires PowerOfTwo<Size>
     struct SpscQueue
     {
@@ -19,6 +21,14 @@ namespace naoto
             : Head(0)
             , Tail(0)
         {}
+
+        [[nodiscard]] size_t GetSize(void) const noexcept
+        {
+            size_t head = Head.load(std::memory_order_relaxed);
+            size_t tail = Tail.load(std::memory_order_relaxed);
+
+            return tail - head;
+        }
 
         [[nodiscard]] bool TryPush(const T &item, size_t &localHead) noexcept
         {
@@ -59,6 +69,34 @@ namespace naoto
             Tail.store(localTail + 1, std::memory_order_release);
         };
 
+        [[nodiscard]] bool TimedPush(const T &item, size_t &localHead,
+                                     const uint64_t timeout_us) noexcept
+        {
+            const size_t localTail = Tail.load(std::memory_order_relaxed);
+
+            auto timeout = std::chrono::microseconds(timeout_us);
+            auto deadline = std::chrono::high_resolution_clock::now() + timeout;
+
+            while (localTail - localHead >= Size) [[unlikely]]
+            {
+                if (std::chrono::high_resolution_clock::now() >= deadline)
+                    [[unlikely]]
+                {
+                    return false;
+                }
+
+                localHead = Head.load(std::memory_order_acquire);
+            }
+
+            const size_t idx = localTail & (Size - 1);
+
+            Buffer[idx] = item;
+
+            Tail.store(localTail + 1, std::memory_order_release);
+
+            return true;
+        }
+
         [[nodiscard]] bool TryPop(T &item, size_t &localTail) noexcept
         {
             size_t localHead = Head.load(std::memory_order_relaxed);
@@ -97,20 +135,53 @@ namespace naoto
 
             Head.store(localHead + 1, std::memory_order_release);
         }
+
+        [[nodiscard]] bool TimedPop(T &item, size_t &localTail,
+                                    const uint64_t timeout_us) noexcept
+        {
+            size_t localHead = Head.load(std::memory_order_relaxed);
+
+            auto timeout = std::chrono::microseconds(timeout_us);
+            auto deadline = std::chrono::high_resolution_clock::now() + timeout;
+
+            while (localTail == localHead) [[unlikely]]
+            {
+                if (std::chrono::high_resolution_clock::now() >= deadline)
+                    [[unlikely]]
+                {
+                    return false;
+                }
+
+                localTail = Tail.load(std::memory_order_acquire);
+            }
+
+            const size_t idx = localHead & (Size - 1);
+
+            item = Buffer[idx];
+
+            Head.store(localHead + 1, std::memory_order_release);
+
+            return true;
+        }
     };
 
-    template <size_t Size, typename T>
+    template <typename T, size_t Size>
     class SpscQueueProducer
     {
     private:
-        SpscQueue<Size, T> *Queue;
+        SpscQueue<T, Size> *Queue;
         size_t LocalHead;
 
     public:
-        explicit SpscQueueProducer(SpscQueue<Size, T> *queue)
+        explicit SpscQueueProducer(SpscQueue<T, Size> *queue)
             : Queue(queue)
             , LocalHead(queue->Head.load(std::memory_order_acquire))
         {}
+
+        [[nodiscard]] size_t GetSize(void) const noexcept
+        {
+            return Queue->GetSize();
+        }
 
         [[nodiscard]] bool TryPush(const T &item) noexcept
         {
@@ -121,22 +192,33 @@ namespace naoto
         {
             Queue->Push(item, LocalHead);
         }
+
+        [[nodiscard]] bool TimedPush(const T &item,
+                                     const uint64_t timeout_us) noexcept
+        {
+            return Queue->TimedPush(item, LocalHead, timeout_us);
+        }
     };
 
-    template <size_t Size, typename T>
+    template <typename T, size_t Size>
     class SpscQueueConsumer
     {
     private:
-        SpscQueue<Size, T> *Queue;
+        SpscQueue<T, Size> *Queue;
         size_t LocalTail;
 
     public:
-        explicit SpscQueueConsumer(SpscQueue<Size, T> *queue)
+        explicit SpscQueueConsumer(SpscQueue<T, Size> *queue)
             : Queue(queue)
             , LocalTail(queue->Tail.load(std::memory_order_acquire))
         {}
 
-        [[nodiscard]] bool TryPop(const T &item) noexcept
+        [[nodiscard]] size_t GetSize(void) const noexcept
+        {
+            return Queue->GetSize();
+        }
+
+        [[nodiscard]] bool TryPop(T &item) noexcept
         {
             return Queue->TryPop(item, LocalTail);
         }
@@ -144,6 +226,11 @@ namespace naoto
         void Pop(T &item) noexcept
         {
             Queue->Pop(item, LocalTail);
+        }
+
+        [[nodiscard]] bool TimedPop(T &item, const uint64_t timeout_us) noexcept
+        {
+            return Queue->TimedPop(item, LocalTail, timeout_us);
         }
     };
 } // namespace naoto

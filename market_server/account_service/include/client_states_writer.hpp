@@ -5,31 +5,34 @@
 #include <client_states.hpp>
 #include <consumer.hpp>
 #include <order_state_report.hpp>
+#include <spsc_queue.hpp>
+#include <system_conf.hpp>
 
 namespace naoto::account_service
 {
-    template <size_t MaxPositions, size_t BatchSize>
     class ClientStatesWriter
-        : public Consumer<ClientStatesWriter<MaxPositions, BatchSize>,
-                          OrderStateReport, BatchSize>
+        : public Consumer<
+              ClientStatesWriter, OrderStateReport, TradeReportReceiveQueueSize,
+              TradeReportReceivePoolSize, TradeReportReceiveBatchSize>
     {
-        using Base = Consumer<ClientStatesWriter<MaxPositions, BatchSize>,
-                              OrderStateReport, BatchSize>;
-        using ReportQueue =
-            moodycamel::BlockingReaderWriterCircularBuffer<OrderStateReport *>;
+        using Base =
+            Consumer<ClientStatesWriter, OrderStateReport,
+                     TradeReportReceiveQueueSize, TradeReportReceivePoolSize,
+                     TradeReportReceiveBatchSize>;
+        using ReportQueue = SpscQueue<OrderStateReport *, MaxClients>;
 
     private:
         ClientStates<MaxPositions> &States;
         absl::flat_hash_set<uint32_t> Touched;
 
     public:
-        ClientStatesWriter(ClientStates<MaxPositions> &states,
-                           ReportQueue &incoming,
-                           StoragePool<OrderStateReport> &mempool)
+        ClientStatesWriter(
+            ClientStates<MaxPositions> &states, ReportQueue *incoming,
+            StoragePool<OrderStateReport, TradeReportReceivePoolSize> &mempool)
             : Base(incoming, mempool)
             , States(states)
         {
-            Touched.reserve(BatchSize);
+            Touched.reserve(TradeReportReceiveBatchSize);
         }
 
         void Handle(OrderStateReport *report) noexcept
@@ -51,7 +54,8 @@ namespace naoto::account_service
             States.FlushTripleBuffer(report->ClientId);
         }
 
-        void Handle(std::array<OrderStateReport *, BatchSize> &reportBatch,
+        void Handle(std::array<OrderStateReport *, TradeReportReceiveBatchSize>
+                        &reportBatch,
                     size_t batchSize) noexcept
         {
             std::cout << "Received market update batch of size " << batchSize

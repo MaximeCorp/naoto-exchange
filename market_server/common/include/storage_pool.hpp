@@ -1,82 +1,83 @@
 #pragma once
 
+#include <array>
 #include <iostream>
 #include <readerwritercircularbuffer.h>
+#include <spsc_queue.hpp>
 #include <stdexcept>
-#include <vector>
 
 namespace naoto
 {
-    template <typename T>
+    template <typename T, size_t Size>
     class StoragePool
     {
-        using FreeQueue = moodycamel::BlockingReaderWriterCircularBuffer<T *>;
+        using FreeQueue = SpscQueue<T *, Size>;
 
     private:
-        std::vector<T> Storage;
-
-        const size_t Capacity;
+        std::array<T, Size> Storage;
         FreeQueue Free;
-        std::vector<T *> LocalReuseBuffer;
+
+        alignas(64) size_t LocalHead;
+        alignas(64) size_t LocalTail;
+
+        alignas(64) std::array<T *, Size> LocalReuseBuffer;
         size_t LocalReuseSize;
 
     public:
-        StoragePool(size_t poolSize)
-            : Capacity(poolSize)
-            , Free(poolSize)
+        StoragePool(void)
+            : LocalHead(0)
+            , LocalTail(0)
             , LocalReuseSize(0)
         {
-            if (poolSize == 0)
+            if (Size == 0)
             {
                 throw std::invalid_argument(
                     "Pool size must be greater than zero.");
             }
 
-            std::cout << "Initializing storage pool with capacity: " << Capacity
+            std::cout << "Initializing storage pool with capacity: " << Size
                       << " objects.\n";
 
-            Storage.resize(Capacity);
-
-            LocalReuseBuffer.resize(Capacity);
-
-            for (size_t i = 0; i < Capacity; ++i)
+            for (size_t i = 0; i < Size; ++i)
             {
                 T *ptr = &Storage[i];
 
-                if (!Free.try_enqueue(ptr))
+                if (!Free.TryPush(ptr, LocalTail))
                 {
                     throw std::runtime_error(
                         "Failed to populate initial free list.");
                 }
+
                 LocalReuseBuffer[i] = nullptr;
             }
-            std::cout << "Pool ready. All " << Capacity
+            std::cout << "Pool ready. All " << Size
                       << " objects are available.\n";
         }
 
-        [[nodiscard]] size_t getCapacity() const noexcept
+        [[nodiscard]] size_t GetSize() const noexcept
         {
-            return Capacity;
+            return Size;
         }
 
         // Producer methods
 
-        [[nodiscard]] T *acquire() noexcept
+        [[nodiscard]] T *Acquire() noexcept
         {
             if (LocalReuseSize)
             {
                 return LocalReuseBuffer[--LocalReuseSize];
             }
 
-            T *res = nullptr;
+            T *res;
 
-            Free.try_dequeue(res);
-            return res;
+            bool found = Free.TryPop(res, LocalTail);
+
+            return found ? res : nullptr;
         }
 
-        [[nodiscard]] bool localRelease(T *element) noexcept
+        [[nodiscard]] bool LocalRelease(T *element) noexcept
         {
-            bool released = LocalReuseSize < Capacity;
+            bool released = LocalReuseSize < Size;
 
             if (released)
             {
@@ -86,21 +87,21 @@ namespace naoto
             return released;
         }
 
-        [[nodiscard]] bool getAvailable() noexcept
+        [[nodiscard]] bool GetAvailable() noexcept
         {
-            return LocalReuseSize > 0 || Free.peek() != nullptr;
+            return LocalReuseSize > 0 || Free.GetSize() != 0;
         }
 
         // Consumer methods
 
-        [[nodiscard]] bool release(T *element) noexcept
+        [[nodiscard]] bool Release(T *element) noexcept
         {
-            return element && Free.try_enqueue(element);
+            return element && Free.TryPush(element, LocalHead);
         }
 
-        void releaseCritical(T *element) noexcept
+        void ReleaseCritical(T *element) noexcept
         {
-            if (!element || !Free.try_enqueue(element)) [[unlikely]]
+            if (!element || !Free.TryPush(element, LocalHead)) [[unlikely]]
             {
                 std::fprintf(stderr,
                              "CRITICAL: Mempool corruption. Failed "

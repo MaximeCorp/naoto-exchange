@@ -10,7 +10,7 @@
 
 namespace naoto
 {
-    template <std::integral K, typename V, size_t MaxLevel,
+    template <std::integral K, typename V, size_t PoolSize, size_t MaxLevel,
               typename Compare = std::less<K>>
         requires std::is_pointer_v<V>
     class SkipList
@@ -38,7 +38,7 @@ namespace naoto
         Compare comp;
         SkipNode *Head;
         SkipNode *Tail;
-        SingleThreadedStoragePool<SkipNode> NodesPool;
+        SingleThreadedStoragePool<SkipNode, PoolSize> NodesPool;
         uint64_t State;
         size_t CurMax;
 
@@ -67,7 +67,7 @@ namespace naoto
             , State(__rdtsc())
             , CurMax(0)
         {
-            Tail = NodesPool.acquire();
+            Tail = NodesPool.Acquire();
 
             if constexpr (std::is_same_v<Compare, std::less<K>>)
             {
@@ -82,7 +82,7 @@ namespace naoto
             Tail->Height = MaxLevel;
             Tail->Forward.fill(nullptr);
 
-            Head = NodesPool.acquire();
+            Head = NodesPool.Acquire();
 
             if constexpr (std::is_same_v<Compare, std::less<K>>)
             {
@@ -106,7 +106,7 @@ namespace naoto
             {
                 SkipNode *toRelease = curNode;
                 curNode = curNode->Forward[0];
-                bool released = NodesPool.release(toRelease);
+                bool released = NodesPool.Release(toRelease);
 
                 if (!released) [[unlikely]]
                 {
@@ -167,7 +167,7 @@ namespace naoto
             }
 
             std::uint64_t level = nextLevel();
-            SkipNode *__restrict newNode = NodesPool.acquire();
+            SkipNode *__restrict newNode = NodesPool.Acquire();
 
             if (!newNode) [[unlikely]]
             {
@@ -221,7 +221,7 @@ namespace naoto
                     prev[i]->Forward[i] = curNode->Forward[i];
                 }
 
-                bool released = NodesPool.release(curNode);
+                bool released = NodesPool.Release(curNode);
 
                 if (!released) [[unlikely]]
                 {

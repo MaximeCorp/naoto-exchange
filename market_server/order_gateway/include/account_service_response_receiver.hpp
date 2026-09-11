@@ -4,28 +4,31 @@
 #include <chrono>
 #include <client_account_snapshot.hpp>
 #include <cstring>
-#include <versioned_fd.hpp>
 #include <object_batch.hpp>
 #include <object_buffer.hpp>
 #include <readerwritercircularbuffer.h>
+#include <spsc_queue.hpp>
 #include <storage_pool.hpp>
 #include <sys/socket.h>
 #include <thread>
+#include <versioned_fd.hpp>
 
 namespace naoto::order_gateway
 {
-    template <size_t BatchSize, size_t MaxPositions>
     class AccountServiceResponseReceiver
     {
         using ResponseBatch =
-            ObjectBatch<ClientAccountSnapshot<MaxPositions>, BatchSize>;
+            ObjectBatch<ClientAccountSnapshot<MaxPositions>,
+                        GatewayClientRequestResponseBatchSize>;
         using ResponseQueue =
-            moodycamel::BlockingReaderWriterCircularBuffer<ResponseBatch *>;
+            SpscQueueProducer<ResponseBatch *,
+                              GatewayClientRequestResponseQueueSize>;
 
     private:
         VersionedFd &AccountFd;
-        ResponseQueue &OutgoingResponses;
-        StoragePool<ResponseBatch> &ResponsePool;
+        ResponseQueue OutgoingResponses;
+        StoragePool<ResponseBatch, GatewayClientRequestResponsePoolSize>
+            &ResponsePool;
         ObjectBuffer<ClientAccountSnapshot<MaxPositions>> Buffer;
         uint32_t BufferGen;
 
@@ -52,7 +55,7 @@ namespace naoto::order_gateway
 
             BufferGen = curGen;
 
-            ResponseBatch *curBatch = ResponsePool.acquire();
+            ResponseBatch *curBatch = ResponsePool.Acquire();
 
             if (!curBatch) [[unlikely]]
             {
@@ -69,13 +72,14 @@ namespace naoto::order_gateway
 
             ssize_t nread =
                 recv(curFd, (char *)(curBatch->Data.data()) + Buffer.BufferSize,
-                     sizeof(ClientAccountSnapshot<MaxPositions>) * BatchSize
+                     sizeof(ClientAccountSnapshot<MaxPositions>)
+                             * GatewayClientRequestResponseBatchSize
                          - Buffer.BufferSize,
                      0);
 
             if (nread <= 0) [[unlikely]]
             {
-                if (!ResponsePool.localRelease(curBatch)) [[unlikely]]
+                if (!ResponsePool.LocalRelease(curBatch)) [[unlikely]]
                 {
                     // TODO : Handle this case
                 }
@@ -107,11 +111,11 @@ namespace naoto::order_gateway
                              "leftover account service response bytes\n\n";
             }
 
-            if (!OutgoingResponses.try_enqueue(curBatch)) [[unlikely]]
+            if (!OutgoingResponses.TryPush(curBatch)) [[unlikely]]
             {
                 std::cout << "Failed enqueing a batch of " << curBatch->Size
                           << " account service response(s).\n\n";
-                if (!ResponsePool.localRelease(curBatch)) [[unlikely]]
+                if (!ResponsePool.LocalRelease(curBatch)) [[unlikely]]
                 {
                     // even worse
                 }
@@ -125,9 +129,12 @@ namespace naoto::order_gateway
         }
 
     public:
-        AccountServiceResponseReceiver(VersionedFd &accountFd,
-                                       ResponseQueue &outgoingResponses,
-                              StoragePool<ResponseBatch> &responsePool)
+        AccountServiceResponseReceiver(
+            VersionedFd &accountFd,
+            SpscQueue<ResponseBatch *, GatewayClientRequestResponseQueueSize>
+                *outgoingResponses,
+            StoragePool<ResponseBatch, GatewayClientRequestResponsePoolSize>
+                &responsePool)
             : AccountFd(accountFd)
             , OutgoingResponses(outgoingResponses)
             , ResponsePool(responsePool)

@@ -2,13 +2,15 @@
 
 #include <client_account_snapshot.hpp>
 #include <cstring>
-#include <versioned_fd.hpp>
-#include <routed_message.hpp>
 #include <object_batch.hpp>
 #include <readerwritercircularbuffer.h>
+#include <routed_message.hpp>
+#include <spsc_queue.hpp>
 #include <storage_pool.hpp>
 #include <sys/socket.h>
+#include <system_conf.hpp>
 #include <type_traits>
+#include <versioned_fd.hpp>
 
 namespace naoto::account_service
 {
@@ -17,15 +19,16 @@ namespace naoto::account_service
     class GatewayResponseDispatcher
     {
         // Might be worth batching
-        using ResponsesQueue = moodycamel::BlockingReaderWriterCircularBuffer<
-            RoutedMessage<ClientAccountSnapshot<MaxPositions>>>;
+        using ResponsesQueue = SpscQueueConsumer<
+            RoutedMessage<ClientAccountSnapshot<MaxPositions>>, MaxClients>;
         // using UpdatesQueue = moodycamel::BlockingReaderWriterCircularBuffer<
         // RoutedMessage<ClientUpdate>>;
 
     private:
-        ResponsesQueue &Responses;
+        ResponsesQueue Responses;
         // UpdatesQueue &Updates;
-        StoragePool<ClientAccountSnapshot<MaxPositions>> &ResponsesPool;
+        StoragePool<ClientAccountSnapshot<MaxPositions>,
+                    AccountResponsePoolSize> &ResponsesPool;
         // StoragePool<ClientUpdate> &UpdatesPool;
         std::array<VersionedFd, MaxGateways> &GatewayFd; // Consumer
 
@@ -47,7 +50,7 @@ namespace naoto::account_service
                         &curResponse = ResponsesResend[--ResponsesResendSize];
 
                     SendMessage<RoutedMessage>(curResponse.Message,
-                                                  curResponse.GatewayId);
+                                               curResponse.GatewayId);
                 }
             }
         }
@@ -137,7 +140,7 @@ namespace naoto::account_service
             if constexpr (std::is_same_v<T,
                                          ClientAccountSnapshot<MaxPositions>>)
             {
-                bool released = ResponsesPool.release((T *)curMessage);
+                bool released = ResponsesPool.Release((T *)curMessage);
 
                 if (!released) [[unlikely]]
                 {
@@ -164,10 +167,9 @@ namespace naoto::account_service
             // TODO : decide if this batching is useful
             for (size_t i = 0; i < BatchesSize; ++i)
             {
-                RoutedMessage<ClientAccountSnapshot<MaxPositions>>
-                    curResponse;
+                RoutedMessage<ClientAccountSnapshot<MaxPositions>> curResponse;
 
-                if (!Responses.try_dequeue(curResponse)) [[unlikely]]
+                if (!Responses.TryPop(curResponse)) [[unlikely]]
                 {
                     break;
                 }
@@ -194,8 +196,10 @@ namespace naoto::account_service
 
     public:
         GatewayResponseDispatcher(
-            ResponsesQueue &responses, // UpdatesQueue &updates,
-            StoragePool<ClientAccountSnapshot<MaxPositions>> &responsesPool, //,
+            SpscQueue<RoutedMessage<ClientAccountSnapshot<MaxPositions>>,
+                      MaxClients> *responses, // UpdatesQueue &updates,
+            StoragePool<ClientAccountSnapshot<MaxPositions>,
+                        AccountResponsePoolSize> &responsesPool, //,
             // StoragePool<ClientUpdate> &updatesPool,
             std::array<VersionedFd, MaxGateways> &gatewayFd)
             : Responses(responses)

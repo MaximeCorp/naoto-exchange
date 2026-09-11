@@ -14,6 +14,7 @@
 #include <pthread.h>
 #include <readerwritercircularbuffer.h>
 #include <routed_auth_request.hpp>
+#include <system_conf.hpp>
 #include <thread>
 #include <trade_report_receiver.hpp>
 
@@ -24,19 +25,17 @@ namespace naoto::order_gateway
               size_t ReceiveRingBufferSize>
     class OrderGatewayService
     {
-        using OrdersQueue = moodycamel::BlockingReaderWriterCircularBuffer<
-            ObjectBatch<Order, BatchSize> *>;
-        using DisconnectsQueue =
-            moodycamel::BlockingReaderWriterCircularBuffer<uint32_t>;
+        using OrdersQueue = SpscQueue<ObjectBatch<Order, BatchSize> *,
+                                      GatewayEpollReceiveQueueSize>;
+        using DisconnectsQueue = SpscQueue<uint32_t, GatewayMaxClients>;
         using ReportQueue =
-            moodycamel::BlockingReaderWriterCircularBuffer<OrderStateReport *>;
+            SpscQueue<OrderStateReport, TradeReportReceiveQueueSize *>;
         using ResponseBatch =
             ObjectBatch<ClientAccountSnapshot<MaxPositions>, BatchSize>;
 
         using ResponseQueue =
-            moodycamel::BlockingReaderWriterCircularBuffer<ResponseBatch *>;
-        using RequestQueue =
-            moodycamel::BlockingReaderWriterCircularBuffer<RoutedAuthRequest *>;
+            SpscQueue<ResponseBatch *, GatewayClientRequestResponseQueueSize>;
+        using RequestQueue = SpscQueue<RoutedAuthRequest *, GatewayMaxClients>;
 
     private:
         StoragePool<ObjectBatch<Order, BatchSize>> OrdersPool;
@@ -93,26 +92,20 @@ namespace naoto::order_gateway
             , ResponsesPool(poolSize)
             , ServerRequestsPool(poolSize)
             , WriterRequestsPool(poolSize)
-            , IncomingOrders(queue_size)
-            , IncomingDisconnects(queue_size)
-            , IncomingReports(queue_size)
-            , IncomingResponses(queue_size)
-            , ServerIncomingRequests(queue_size)
-            , WriterIncomingRequests(queue_size)
             , States(MaxClients)
-            , Server(port, maxEvents, maxPending, OrdersPool, IncomingOrders,
-                     States, ClientStatesUpdatesFd, IncomingDisconnects,
-                     ServerRequestsPool, ServerIncomingRequests)
-            , Router(OrdersPool, IncomingOrders, ClientStatesUpdatesFd, States)
-            , StatesWriter(States, IncomingReports, ReportsPool,
-                           IncomingResponses, ResponsesPool,
-                           IncomingDisconnects, WriterIncomingRequests,
+            , Server(port, maxEvents, maxPending, OrdersPool, &IncomingOrders,
+                     States, ClientStatesUpdatesFd, &IncomingDisconnects,
+                     ServerRequestsPool, &ServerIncomingRequests)
+            , Router(OrdersPool, &IncomingOrders, ClientStatesUpdatesFd, States)
+            , StatesWriter(States, &IncomingReports, ReportsPool,
+                           &IncomingResponses, ResponsesPool,
+                           &IncomingDisconnects, &WriterIncomingRequests,
                            WriterRequestsPool)
-            , UpdatesReceiver(argc, argv, IncomingReports, ReportsPool, portId,
+            , UpdatesReceiver(argc, argv, &IncomingReports, ReportsPool, portId,
                               nbRxQueueSlots, poolSize, dstIp, dstPort)
-            , AccountReceiver(ClientStatesUpdatesFd, IncomingResponses,
+            , AccountReceiver(ClientStatesUpdatesFd, &IncomingResponses,
                               ResponsesPool)
-            , RequestSender(ServerIncomingRequests, WriterIncomingRequests,
+            , RequestSender(&ServerIncomingRequests, &WriterIncomingRequests,
                             ServerRequestsPool, WriterRequestsPool,
                             ClientStatesUpdatesFd)
         {

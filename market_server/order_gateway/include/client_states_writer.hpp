@@ -9,40 +9,47 @@
 #include <object_batch.hpp>
 #include <order_state_report.hpp>
 #include <routed_auth_request.hpp>
+#include <spsc_queue.hpp>
 #include <storage_pool.hpp>
+#include <system_conf.hpp>
 
 namespace naoto::order_gateway
 {
-    template <size_t MaxClients, size_t MaxPositions, size_t BatchSize,
-              size_t BufferSize>
+    template <size_t MaxClients, size_t MaxPositions, size_t BufferSize>
     class ClientStatesWriter
-        : public Consumer<ClientStatesWriter<MaxClients, MaxPositions,
-                                             BatchSize, BufferSize>,
-                          OrderStateReport, BatchSize>
+        : public Consumer<
+              ClientStatesWriter<MaxClients, MaxPositions, BufferSize>,
+              OrderStateReport, TradeReportReceiveQueueSize,
+              TradeReportReceivePoolSize, TradeReportReceiveBatchSize>
         , public Consumer<
-              ClientStatesWriter<MaxClients, MaxPositions, BatchSize,
-                                 BufferSize>,
-              ObjectBatch<ClientAccountSnapshot<MaxPositions>, BatchSize>>
+              ClientStatesWriter<MaxClients, MaxPositions, BufferSize>,
+              ObjectBatch<ClientAccountSnapshot<MaxPositions>,
+                          GatewayClientRequestResponseBatchSize>,
+              GatewayClientRequestResponseQueueSize,
+              GatewayClientRequestResponsePoolSize>
 
     {
-        using ReportBase = Consumer<
-            ClientStatesWriter<MaxClients, MaxPositions, BatchSize, BufferSize>,
-            OrderStateReport, BatchSize>;
+        using ReportBase =
+            Consumer<ClientStatesWriter<MaxClients, MaxPositions, BufferSize>,
+                     OrderStateReport, TradeReportReceiveQueueSize,
+                     TradeReportReceivePoolSize, TradeReportReceiveBatchSize>;
         using ReportQueue =
-            moodycamel::BlockingReaderWriterCircularBuffer<OrderStateReport *>;
+            SpscQueue<OrderStateReport *, TradeReportReceiveQueueSize>;
 
         using ResponseBatch =
-            ObjectBatch<ClientAccountSnapshot<MaxPositions>, BatchSize>;
-        using ResponseBase = Consumer<
-            ClientStatesWriter<MaxClients, MaxPositions, BatchSize, BufferSize>,
-            ObjectBatch<ClientAccountSnapshot<MaxPositions>, BatchSize>>;
-        using ResponseQueue =
-            moodycamel::BlockingReaderWriterCircularBuffer<ResponseBatch *>;
+            ObjectBatch<ClientAccountSnapshot<MaxPositions>,
+                        GatewayClientRequestResponseBatchSize>;
+        using ResponseBase =
+            Consumer<ClientStatesWriter<MaxClients, MaxPositions, BufferSize>,
+                     ObjectBatch<ClientAccountSnapshot<MaxPositions>,
+                                 GatewayClientRequestResponseBatchSize>,
+                     GatewayClientRequestResponseQueueSize,
+                     GatewayClientRequestResponsePoolSize>;
+        using ResponseQueue = SpscQueue<ResponseBatch *, GatewayMaxClients>;
 
-        using DisconnectQueue =
-            moodycamel::BlockingReaderWriterCircularBuffer<uint32_t>;
+        using DisconnectQueue = SpscQueueConsumer<uint32_t, MaxClients>;
         using GatewayReqQueue =
-            moodycamel::BlockingReaderWriterCircularBuffer<RoutedAuthRequest *>;
+            SpscQueue<RoutedAuthRequest *, GatewayMaxClients>;
 
     private:
         const uint16_t GatewayId;
@@ -57,12 +64,12 @@ namespace naoto::order_gateway
 
     public:
         ClientStatesWriter(ClientStates<MaxPositions> &states,
-                           ReportQueue &incomingReports,
+                           ReportQueue *incomingReports,
                            StoragePool<OrderStateReport> &reportPool,
-                           ResponseQueue &incomingResponses,
+                           ResponseQueue *incomingResponses,
                            StoragePool<ResponseBatch> &responsePool,
-                           DisconnectQueue &incomingDisconnects,
-                           GatewayReqQueue &outgoingReq,
+                           SpscQueue<uint32_t, MaxClients> *incomingDisconnects,
+                           GatewayReqQueue *outgoingReq,
                            StoragePool<RoutedAuthRequest> &gatewayReqPool)
             : ReportBase(incomingReports, reportPool)
             , ResponseBase(incomingResponses, responsePool)
@@ -281,7 +288,7 @@ namespace naoto::order_gateway
         {
             uint32_t fd;
 
-            if (IncomingDisconnects.try_dequeue(fd))
+            if (IncomingDisconnects.TryPop(fd))
             {
                 States.SetAuthStatus(fd, 0);
                 States.FlushTripleBuffer(fd);

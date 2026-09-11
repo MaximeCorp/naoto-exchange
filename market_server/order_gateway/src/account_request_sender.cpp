@@ -1,26 +1,24 @@
 #include <account_request_sender.hpp>
-
 #include <iostream>
 #include <sys/socket.h>
 
 namespace naoto::order_gateway
 {
-    void GatewayRequestForwarder::SendRequest(
-        RoutedAuthRequest *curRequest) noexcept
+    void
+    GatewayRequestForwarder::SendRequest(RoutedAuthRequest *curRequest) noexcept
     {
         std::cout << "Sending request to account service\n\n";
         uint64_t curVal =
             AccountFd.load(std::memory_order_relaxed); // Relaxed because
-                                                   // memory dependancy
-                                                   // allows it
+                                                       // memory dependancy
+                                                       // allows it
 
         int32_t curFd = VersionedFd::Fd(curVal);
 
         if (curFd == -1) [[unlikely]]
         {
-            std::cerr
-                << "Failed fetching user details from account "
-                   "service: not connected\n\n";
+            std::cerr << "Failed fetching user details from account "
+                         "service: not connected\n\n";
             return;
         }
 
@@ -29,12 +27,12 @@ namespace naoto::order_gateway
         // this by closing fd after making sure the sender has
         // seen the new fd
 
-        ssize_t sent = send(curFd, curRequest, sizeof(RoutedAuthRequest),
-                           MSG_NOSIGNAL);
+        ssize_t sent =
+            send(curFd, curRequest, sizeof(RoutedAuthRequest), MSG_NOSIGNAL);
 
         std::cerr << "Sending request to fd " << curFd
-                  << ", size=" << sizeof(RoutedAuthRequest)
-                  << ", sent=" << sent << "\n";
+                  << ", size=" << sizeof(RoutedAuthRequest) << ", sent=" << sent
+                  << "\n";
 
         // TODO: modify the logic here to call send as many times as
         // necessary, apply same modifications to risk check sendOrder
@@ -73,8 +71,8 @@ namespace naoto::order_gateway
     {
         while (true)
         {
-            EpollConsumer.ConsumeTimed(75);
-            StatesWriterConsumer.ConsumeTimed(75);
+            EpollConsumer.ConsumeTimed(100);
+            StatesWriterConsumer.ConsumeTimed(100);
         }
     }
 } // namespace naoto::order_gateway

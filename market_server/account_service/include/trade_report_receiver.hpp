@@ -8,6 +8,7 @@
 #include <rte_eal.h>
 #include <rte_ethdev.h>
 #include <rte_lcore.h>
+#include <spsc_queue.hpp>
 #include <udp_multicast_receiver.hpp>
 
 #define RX_QUEUES 1
@@ -21,21 +22,22 @@ namespace naoto::account_service
     class TradeReportReceiver
     {
         using ReportQueue =
-            moodycamel::BlockingReaderWriterCircularBuffer<OrderStateReport *>;
+            SpscQueue<OrderStateReport *, TradeReportReceiveQueueSize>;
 
     private:
-        std::optional<
-            UdpMulticastReceiver<OrderStateReport, RingBufferSize, BatchSize>>
+        std::optional<UdpMulticastReceiver<
+            OrderStateReport, RingBufferSize, TradeReportReceiveQueueSize,
+            TradeReportReceivePoolSize, TradeReportReceiveBatchSize>>
             ReportReceiver;
 
     public:
         // Must be called on a dedicated thread
-        TradeReportReceiver(int argc, char **argv,
-                      ReportQueue &incomingOrderStates,
-                      StoragePool<OrderStateReport> &orderStatesPool,
-                      const uint16_t portId, const uint16_t nbRxQueueSlots,
-                      const size_t poolSize, const uint32_t dstIp,
-                      const uint16_t dstPort)
+        TradeReportReceiver(
+            int argc, char **argv, ReportQueue *incomingOrderStates,
+            StoragePool<OrderStateReport, TradeReportReceivePoolSize>
+                &orderStatesPool,
+            const uint16_t portId, const uint16_t nbRxQueueSlots,
+            const size_t poolSize, const uint32_t dstIp, const uint16_t dstPort)
         {
             int ret = rte_eal_init(argc, argv);
 

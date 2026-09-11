@@ -52,18 +52,12 @@ namespace naoto::account_service
                                    const size_t dpdkPoolSize,
                                    const uint32_t dstIp, const uint16_t dstPort)
         : States(MaxClients)
-        , RequestPool(MaxClients)
-        , ReportPool(MaxClients * MaxTradeClient)
-        , ResponsePool(MaxClients)
-        , Requests(MaxClients)
-        , Reports(MaxClients)
-        , Responses(MaxClients)
-        , Server(serverPort, maxEvents, maxPending, RequestPool, Requests,
+        , Server(serverPort, maxEvents, maxPending, RequestPool, &Requests,
                  GatewayFd)
-        , Processor(States, Requests, Responses, RequestPool, ResponsePool)
-        , Dispatcher(Responses, ResponsePool, GatewayFd)
-        , Writer(States, Reports, ReportPool)
-        , ReportReceiver(argc, argv, Reports, ReportPool, portId,
+        , Processor(States, &Requests, &Responses, RequestPool, ResponsePool)
+        , Dispatcher(&Responses, ResponsePool, GatewayFd)
+        , Writer(States, &Reports, ReportPool)
+        , ReportReceiver(argc, argv, &Reports, ReportPool, portId,
                          nbRxQueueSlots, dpdkPoolSize, dstIp, dstPort)
     {}
 
@@ -73,18 +67,12 @@ namespace naoto::account_service
         const size_t dpdkPoolSize, const uint32_t dstIp, const uint16_t dstPort,
         std::vector<ClientState<MaxPositions>> &clients)
         : States(MaxClients, clients)
-        , RequestPool(MaxClients)
-        , ReportPool(MaxClients * MaxTradeClient)
-        , ResponsePool(MaxClients)
-        , Requests(MaxClients)
-        , Reports(MaxClients)
-        , Responses(MaxClients)
-        , Server(serverPort, maxEvents, maxPending, RequestPool, Requests,
+        , Server(serverPort, maxEvents, maxPending, RequestPool, &Requests,
                  GatewayFd)
-        , Processor(States, Requests, Responses, RequestPool, ResponsePool)
-        , Dispatcher(Responses, ResponsePool, GatewayFd)
-        , Writer(States, Reports, ReportPool)
-        , ReportReceiver(argc, argv, Reports, ReportPool, portId,
+        , Processor(States, &Requests, &Responses, RequestPool, ResponsePool)
+        , Dispatcher(&Responses, ResponsePool, GatewayFd)
+        , Writer(States, &Reports, ReportPool)
+        , ReportReceiver(argc, argv, &Reports, ReportPool, portId,
                          nbRxQueueSlots, dpdkPoolSize, dstIp, dstPort)
     {}
 
@@ -105,10 +93,7 @@ namespace naoto::account_service
 
         EtcdClientSetUp();
 
-        std::thread serverThread(
-            &GatewayEpollServer<AccountEpollReceiveBatchSize,
-                                MaxGateways>::startServer,
-            &Server);
+        std::thread serverThread(&GatewayEpollServer::startServer, &Server);
 
         std::thread keeperThread(&ClientRequestProcessor::StartLoop,
                                  &Processor);
@@ -119,10 +104,7 @@ namespace naoto::account_service
                 AccountResponsesResendBufferSize>::StartLoop,
             &Dispatcher);
 
-        std::thread writerThread(
-            &ClientStatesWriter<MaxPositions,
-                                ClientStatesSwapBatchSize>::StartLoop,
-            &Writer);
+        std::thread writerThread(&ClientStatesWriter::StartLoop, &Writer);
 
         setAffinity(serverThread, 10);
         setAffinity(keeperThread, 11);

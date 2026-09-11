@@ -9,7 +9,7 @@ namespace naoto::account_service
         ObjectBatch<RoutedAuthRequest, AccountEpollReceiveBatchSize> *curBatch =
             nullptr;
 
-        if (IncomingMessages.try_dequeue(curBatch)) [[likely]]
+        if (IncomingMessages.TryPop(curBatch)) [[likely]]
         {
             std::cout << "Received messages batch of size "
                       << curBatch->getSize() << " at client states keeper\n";
@@ -45,7 +45,7 @@ namespace naoto::account_service
                     {
                         // Client connection denied
                         ClientAccountSnapshot<MaxPositions> *curResponse =
-                            ResponsesPool.acquire();
+                            ResponsesPool.Acquire();
                         curResponse->Clear();
                         curResponse->Status = 'R';
                         curResponse->ClientId = clientId;
@@ -57,7 +57,7 @@ namespace naoto::account_service
                         toPush.GatewayId = gatewayId;
                         toPush.Message = curResponse;
 
-                        ResponsesSend.wait_enqueue(toPush);
+                        ResponsesSend.Push(toPush);
 
                         std::cout << "Refused: unauthorized gateway\n\n";
 
@@ -68,7 +68,7 @@ namespace naoto::account_service
                     {
                         // Send refuse response: wrong credentials
                         ClientAccountSnapshot<MaxPositions> *curResponse =
-                            ResponsesPool.acquire();
+                            ResponsesPool.Acquire();
                         curResponse->Clear();
                         curResponse->Status = 'C';
                         curResponse->ClientId = clientId;
@@ -80,7 +80,7 @@ namespace naoto::account_service
                         toPush.GatewayId = gatewayId;
                         toPush.Message = curResponse;
 
-                        ResponsesSend.wait_enqueue(toPush);
+                        ResponsesSend.Push(toPush);
 
                         std::cout << "Refused: wrong credentials\n\n";
 
@@ -89,7 +89,7 @@ namespace naoto::account_service
 
                     // Send details
                     ClientAccountSnapshot<MaxPositions> *curResponse =
-                        ResponsesPool.acquire();
+                        ResponsesPool.Acquire();
                     curResponse->Status = 'A';
                     curResponse->SequenceId = 0; // Handle sequence ID later
                     curResponse->ClientId = clientId;
@@ -105,7 +105,7 @@ namespace naoto::account_service
 
                     std::cout << "Accepted\n\n";
 
-                    ResponsesSend.wait_enqueue(toPush);
+                    ResponsesSend.Push(toPush);
                 }
                 else if (curMessage.RequestType == 'D')
                 {
@@ -120,7 +120,7 @@ namespace naoto::account_service
                 }
             }
 
-            if (!MessagesPool.release(curBatch)) [[unlikely]]
+            if (!MessagesPool.Release(curBatch)) [[unlikely]]
             {
                 std::cerr << "Failed releasing to messages pool in process "
                              "message\n";
@@ -130,11 +130,17 @@ namespace naoto::account_service
     }
 
     ClientRequestProcessor::ClientRequestProcessor(
-        ClientStates<MaxPositions> &states, MessageQueue &incomingMessages,
-        ResponsesQueue &responsesSend,
-        StoragePool<ObjectBatch<RoutedAuthRequest,
-                                AccountEpollReceiveBatchSize>> &messagesPool,
-        StoragePool<ClientAccountSnapshot<MaxPositions>> &responsesPool)
+        ClientStates<MaxPositions> &states,
+        SpscQueue<
+            ObjectBatch<RoutedAuthRequest, AccountEpollReceiveBatchSize> *,
+            MaxClients> *incomingMessages,
+        SpscQueue<RoutedMessage<ClientAccountSnapshot<MaxPositions>>,
+                  MaxClients> *responsesSend,
+        StoragePool<
+            ObjectBatch<RoutedAuthRequest, AccountEpollReceiveBatchSize>,
+            AccountResponsePoolSize> &messagesPool,
+        StoragePool<ClientAccountSnapshot<MaxPositions>,
+                    AccountResponsePoolSize> &responsesPool)
         : States(states)
         , IncomingMessages(incomingMessages)
         , ResponsesSend(responsesSend)

@@ -10,7 +10,7 @@
 #include <netinet/in.h>
 #include <object_batch.hpp>
 #include <object_buffer.hpp>
-#include <readerwritercircularbuffer.h>
+#include <spsc_queue.hpp>
 #include <storage_pool.hpp>
 #include <sys/epoll.h>
 #include <sys/socket.h>
@@ -43,11 +43,12 @@ namespace naoto
     };
 
     template <typename DerivedServer, typename T, size_t BatchSize,
+              size_t QueueSize, size_t PoolSize,
               typename InitMessage = std::monostate>
     class EpollServer
     {
-        using ObjectQueue = moodycamel::BlockingReaderWriterCircularBuffer<
-            ObjectBatch<T, BatchSize> *>;
+        using ObjectQueue =
+            SpscQueueProducer<ObjectBatch<T, BatchSize> *, QueueSize>;
         using FirstMessageBuffer =
             std::conditional_t<!std::is_same_v<std::monostate, InitMessage>,
                                std::vector<bool>, std::monostate>;
@@ -66,8 +67,8 @@ namespace naoto
 
         std::vector<ObjectBuffer<T>> Buffers;
         [[no_unique_address]] FirstMessageBuffer FirstMessage;
-        StoragePool<ObjectBatch<T, BatchSize>> &Pool;
-        alignas(64) ObjectQueue &OutgoingBatches;
+        StoragePool<ObjectBatch<T, BatchSize>, PoolSize> &Pool;
+        ObjectQueue OutgoingBatches;
 
         inline void setNonBlocking(const int fd) noexcept
         {
@@ -190,7 +191,7 @@ namespace naoto
 
             while (true)
             {
-                batch = Pool.acquire();
+                batch = Pool.Acquire();
 
                 if (!batch) [[unlikely]]
                 {
@@ -212,7 +213,7 @@ namespace naoto
 
                 if (nread <= 0) [[unlikely]]
                 {
-                    if (Pool.localRelease(batch)) [[unlikely]]
+                    if (Pool.LocalRelease(batch)) [[unlikely]]
                     {
                         // TODO : handle this
                     }
@@ -250,10 +251,10 @@ namespace naoto
                                                                         curFd);
                     }
 
-                    if (!OutgoingBatches.try_enqueue(batch)) [[unlikely]]
+                    if (!OutgoingBatches.TryPush(batch)) [[unlikely]]
                     {
                         // TODO : think about what to do in this case
-                        if (!Pool.localRelease(batch)) [[unlikely]]
+                        if (!Pool.LocalRelease(batch)) [[unlikely]]
                         {
                             // TODO : handle this
                         }
@@ -261,7 +262,7 @@ namespace naoto
                 }
                 else
                 {
-                    if (!Pool.localRelease(batch)) [[unlikely]]
+                    if (!Pool.LocalRelease(batch)) [[unlikely]]
                     {
                         // TODO : handle this
                     }
@@ -346,7 +347,7 @@ namespace naoto
 
     public:
         EpollServer(const int port, const int maxEvents, const int maxPending,
-                    StoragePool<ObjectBatch<T, BatchSize>> &pool,
+                    StoragePool<ObjectBatch<T, BatchSize>, PoolSize> &pool,
                     ObjectQueue &outgoingBatches, const size_t nb_fds)
             : Port(port)
             , MaxEvents(maxEvents)
@@ -363,9 +364,10 @@ namespace naoto
             initSocket();
         }
 
-        EpollServer(const int port, const int maxEvents, const int maxPending,
-                    StoragePool<ObjectBatch<T, BatchSize>> &pool,
-                    ObjectQueue &outgoingBatches)
+        EpollServer(
+            const int port, const int maxEvents, const int maxPending,
+            StoragePool<ObjectBatch<T, BatchSize>, PoolSize> &pool,
+            SpscQueue<ObjectBatch<T, BatchSize> *, QueueSize> *outgoingBatches)
             : Port(port)
             , MaxEvents(maxEvents)
             , MaxPending(maxPending)
@@ -373,6 +375,7 @@ namespace naoto
             , OutgoingBatches(outgoingBatches)
         {
             Buffers.resize(FileDescriptorsOps::getMaxFd());
+
             if constexpr (HasFirstMessageHandle<DerivedServer, InitMessage>)
             {
                 FirstMessage.resize(FileDescriptorsOps::getMaxFd());

@@ -3,7 +3,9 @@
 #include <consumer.hpp>
 #include <order_state_report.hpp>
 #include <readerwritercircularbuffer.h>
+#include <spsc_queue.hpp>
 #include <storage_pool.hpp>
+#include <system_conf.hpp>
 #include <udp_multicast_emitter.hpp>
 
 namespace naoto::matching_engine
@@ -11,15 +13,16 @@ namespace naoto::matching_engine
     template <size_t BatchSize = 0>
     class TradeReportEmitter
         : public Consumer<TradeReportEmitter<BatchSize>, OrderStateReport,
+                          MeOrderStateQueueSize, MeOrderStatePoolSize,
                           BatchSize>
         , public UdpMulticastEmitter<TradeReportEmitter<BatchSize>,
                                      OrderStateReport, BatchSize>
     {
         using UpdatesQueue =
-            moodycamel::BlockingReaderWriterCircularBuffer<OrderStateReport *>;
+            SpscQueue<OrderStateReport *, MeOrderStateQueueSize>;
 
     public:
-        TradeReportEmitter(UpdatesQueue &incoming,
+        TradeReportEmitter(UpdatesQueue *incoming,
                            StoragePool<OrderStateReport> &mempool,
                            const uint16_t portId, const uint16_t nbTxQueueSlots,
                            const uint16_t queueId, const unsigned lcoreId,

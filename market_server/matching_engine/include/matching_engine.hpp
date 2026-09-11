@@ -11,6 +11,7 @@
 #include <order_state_report.hpp>
 #include <pthread.h>
 #include <readerwritercircularbuffer.h>
+#include <spsc_queue.hpp>
 #include <string>
 #include <system_conf.hpp>
 #include <thread>
@@ -21,12 +22,12 @@ namespace naoto::matching_engine
               size_t OrderMapSize>
     class MatchingEngine
     {
-        using OrdersQueue = moodycamel::BlockingReaderWriterCircularBuffer<
-            ObjectBatch<Order, BatchSize> *>;
+        using OrdersQueue =
+            SpscQueue<ObjectBatch<Order, BatchSize> *, MeOrderQueueSize>;
         using OrderStatesQueue =
-            moodycamel::BlockingReaderWriterCircularBuffer<OrderStateReport *>;
+            SpscQueue<OrderStateReport *, MeOrderStateQueueSize>;
         using OrderBookUpdatesQueue =
-            moodycamel::BlockingReaderWriterCircularBuffer<OrderBookUpdate *>;
+            SpscQueue<OrderBookUpdate *, MeOrderBookUpdateQueueSize>;
 
     private:
         OrdersQueue IncomingOrders;
@@ -96,19 +97,16 @@ namespace naoto::matching_engine
                        const uint16_t srcPort, const uint32_t dstOrderIp,
                        const uint16_t dstOrderPort, const uint32_t dstBookIp,
                        const uint16_t dstBookPort)
-            : IncomingOrders(queueSize)
-            , OutgoingOrders(queueSize)
-            , OutgoingBook(queueSize)
-            , OrdersPool(queueSize)
-            , OrderStatesPool(queueSize)
-            , OrderBookUpdatesPool(queueSize)
-            , OrderBook(assetId, initialPrice, IncomingOrders, OutgoingOrders,
-                        OutgoingBook, OrdersPool, OrderStatesPool,
+            : OrdersPool(MeOrderPoolSize)
+            , OrderStatesPool(MeOrderPoolSize)
+            , OrderBookUpdatesPool(MeOrderPoolSize)
+            , OrderBook(assetId, initialPrice, &IncomingOrders, &OutgoingOrders,
+                        &OutgoingBook, OrdersPool, OrderStatesPool,
                         OrderBookUpdatesPool, orderNodePoolSize,
                         skipListNodesPoolSize)
-            , Server(port, maxEvents, maxPending, OrdersPool, IncomingOrders,
+            , Server(port, maxEvents, maxPending, OrdersPool, &IncomingOrders,
                      nb_fds)
-            , Emitters(argc, argv, OutgoingOrders, OutgoingBook,
+            , Emitters(argc, argv, &OutgoingOrders, &OutgoingBook,
                        OrderStatesPool, OrderBookUpdatesPool, portId,
                        nbTxQueueSlots, poolSize, srcIp, srcPort, dstOrderIp,
                        dstOrderPort, dstBookIp, dstBookPort)

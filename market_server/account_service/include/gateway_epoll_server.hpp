@@ -2,25 +2,30 @@
 
 #include <cstddef>
 #include <epoll_server.hpp>
-#include <versioned_fd.hpp>
 #include <file_descriptors_ops.hpp>
 #include <gateway_handshake.hpp>
-#include <routed_auth_request.hpp>
 #include <object_batch.hpp>
 #include <readerwritercircularbuffer.h>
+#include <routed_auth_request.hpp>
+#include <spsc_queue.hpp>
+#include <system_conf.hpp>
+#include <versioned_fd.hpp>
 
 namespace naoto::account_service
 {
-    template <size_t BatchSize, size_t MaxGateways>
     class GatewayEpollServer
-        : public EpollServer<
-              GatewayEpollServer<BatchSize, MaxGateways>,
-              RoutedAuthRequest, BatchSize, GatewayHandshake>
+        : public EpollServer<GatewayEpollServer, RoutedAuthRequest,
+                             AccountEpollReceiveBatchSize,
+                             AccountEpollReceiveQueueSize,
+                             AccountRequestPoolSize, GatewayHandshake>
     {
         using Base = EpollServer<GatewayEpollServer, RoutedAuthRequest,
-                                 BatchSize, GatewayHandshake>;
-        using RequestQueue = moodycamel::BlockingReaderWriterCircularBuffer<
-            ObjectBatch<RoutedAuthRequest, BatchSize> *>;
+                                 AccountEpollReceiveBatchSize,
+                                 AccountEpollReceiveQueueSize,
+                                 AccountRequestPoolSize, GatewayHandshake>;
+        using RequestQueue = SpscQueue<
+            ObjectBatch<RoutedAuthRequest, AccountEpollReceiveBatchSize> *,
+            AccountEpollReceiveQueueSize>;
 
     private:
         std::array<VersionedFd, MaxGateways> &Gateways;
@@ -29,8 +34,10 @@ namespace naoto::account_service
     public:
         GatewayEpollServer(
             const int port, const int maxEvents, const int maxPending,
-            StoragePool<ObjectBatch<RoutedAuthRequest, BatchSize>> &pool,
-            RequestQueue &orders,
+            StoragePool<
+                ObjectBatch<RoutedAuthRequest, AccountEpollReceiveBatchSize>,
+                AccountRequestPoolSize> &pool,
+            RequestQueue *orders,
             std::array<VersionedFd, MaxGateways> &gateways)
             : Base(port, maxEvents, maxPending, pool, orders)
             , Gateways(gateways)

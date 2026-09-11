@@ -7,10 +7,12 @@
 #include <order_book_emitter.hpp>
 #include <order_book_update.hpp>
 #include <order_state_report.hpp>
-#include <trade_report_emitter.hpp>
 #include <rte_eal.h>
 #include <rte_ethdev.h>
 #include <rte_lcore.h>
+#include <spsc_queue.hpp>
+#include <system_conf.hpp>
+#include <trade_report_emitter.hpp>
 
 #define RX_QUEUES 0
 #define TX_QUEUES 2
@@ -22,9 +24,9 @@ namespace naoto::matching_engine
     class MarketDataEmitters
     {
         using OrdersQueue =
-            moodycamel::BlockingReaderWriterCircularBuffer<OrderStateReport *>;
+            SpscQueue<OrderStateReport *, MeOrderStateQueueSize>;
         using BookQueue =
-            moodycamel::BlockingReaderWriterCircularBuffer<OrderBookUpdate *>;
+            SpscQueue<OrderBookUpdate *, MeOrderBookUpdateQueueSize>;
 
     private:
         std::optional<OrderBookEmitter<BatchSize>> BookEmitter;
@@ -33,15 +35,15 @@ namespace naoto::matching_engine
     public:
         // Must be called on a dedicated thread
         MarketDataEmitters(int argc, char **argv,
-                      OrdersQueue &incomingOrderStates,
-                      BookQueue &incomingBookUpdates,
-                      StoragePool<OrderStateReport> &orderStatesPool,
-                      StoragePool<OrderBookUpdate> &orderBookUpdatesPool,
-                      const uint16_t portId, const uint16_t nbTxQueueSlots,
-                      const size_t poolSize, const uint32_t srcIp,
-                      const uint16_t srcPort, const uint32_t dstOrderIp,
-                      const uint16_t dstOrderPort, const uint32_t dstBookIp,
-                      const uint16_t dstBookPort)
+                           OrdersQueue &incomingOrderStates,
+                           BookQueue &incomingBookUpdates,
+                           StoragePool<OrderStateReport> &orderStatesPool,
+                           StoragePool<OrderBookUpdate> &orderBookUpdatesPool,
+                           const uint16_t portId, const uint16_t nbTxQueueSlots,
+                           const size_t poolSize, const uint32_t srcIp,
+                           const uint16_t srcPort, const uint32_t dstOrderIp,
+                           const uint16_t dstOrderPort,
+                           const uint32_t dstBookIp, const uint16_t dstBookPort)
         {
             int ret = rte_eal_init(argc, argv);
 

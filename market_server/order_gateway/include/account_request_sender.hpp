@@ -1,33 +1,33 @@
 #pragma once
 
 #include <consumer.hpp>
-#include <versioned_fd.hpp>
-#include <routed_auth_request.hpp>
 #include <readerwritercircularbuffer.h>
+#include <routed_auth_request.hpp>
 #include <storage_pool.hpp>
+#include <system_conf.hpp>
+#include <versioned_fd.hpp>
 
 namespace naoto::order_gateway
 {
     class GatewayRequestForwarder
-        : public Consumer<GatewayRequestForwarder, RoutedAuthRequest>
+        : public Consumer<GatewayRequestForwarder, RoutedAuthRequest,
+                          GatewayRequestQueueSize, GatewayRequestPoolSize>
     {
-        using Base = Consumer<GatewayRequestForwarder, RoutedAuthRequest>;
-        using RequestQueue =
-            moodycamel::BlockingReaderWriterCircularBuffer<RoutedAuthRequest *>;
+        using Base = Consumer<GatewayRequestForwarder, RoutedAuthRequest,
+                              GatewayRequestQueueSize, GatewayRequestPoolSize>;
+        using RequestQueue = SpscQueue<RoutedAuthRequest *, GatewayMaxClients>;
 
     private:
         VersionedFd &AccountFd;
 
-        // Not on the order hot path (this forwards auth/connect requests
-        // to the account service, not orders) - defined out of line in
-        // account_request_sender.cpp so <sys/socket.h> and the send()
-        // logic aren't reparsed by every includer of this header.
         void SendRequest(RoutedAuthRequest *curRequest) noexcept;
 
     public:
-        GatewayRequestForwarder(RequestQueue &requestsQueue,
-                     StoragePool<RoutedAuthRequest> &requestsPool,
-                     VersionedFd &accountFd)
+        GatewayRequestForwarder(
+            RequestQueue *requestsQueue,
+            StoragePool<RoutedAuthRequest, GatewayRequestPoolSize>
+                &requestsPool,
+            VersionedFd &accountFd)
             : Base(requestsQueue, requestsPool)
             , AccountFd(accountFd)
         {}
@@ -37,19 +37,19 @@ namespace naoto::order_gateway
 
     class AccountRequestSender
     {
-        using RequestQueue =
-            moodycamel::BlockingReaderWriterCircularBuffer<RoutedAuthRequest *>;
+        using RequestQueue = SpscQueue<RoutedAuthRequest *, GatewayMaxClients>;
 
     private:
         GatewayRequestForwarder EpollConsumer;
         GatewayRequestForwarder StatesWriterConsumer;
 
     public:
-        AccountRequestSender(RequestQueue &epollRequests,
-                         RequestQueue &statesWriterRequests,
-                         StoragePool<RoutedAuthRequest> &epollPool,
-                         StoragePool<RoutedAuthRequest> &statesWriterPool,
-                         VersionedFd &accountFd)
+        AccountRequestSender(
+            RequestQueue *epollRequests, RequestQueue *statesWriterRequests,
+            StoragePool<RoutedAuthRequest, GatewayRequestPoolSize> &epollPool,
+            StoragePool<RoutedAuthRequest, GatewayRequestPoolSize>
+                &statesWriterPool,
+            VersionedFd &accountFd)
             : EpollConsumer(epollRequests, epollPool, accountFd)
             , StatesWriterConsumer(statesWriterRequests, statesWriterPool,
                                    accountFd)
