@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstring>
 #include <iostream>
+#include <matching_engine_types.hpp>
 #include <optional>
 #include <order_book_emitter.hpp>
 #include <order_book_update.hpp>
@@ -20,25 +21,19 @@
 
 namespace naoto::matching_engine
 {
-    template <size_t BatchSize = 0>
     class MarketDataEmitters
     {
-        using OrdersQueue =
-            SpscQueue<OrderStateReport *, MeOrderStateQueueSize>;
-        using BookQueue =
-            SpscQueue<OrderBookUpdate *, MeOrderBookUpdateQueueSize>;
-
     private:
-        std::optional<OrderBookEmitter<BatchSize>> BookEmitter;
-        std::optional<TradeReportEmitter<BatchSize>> TradeEmitter;
+        std::optional<OrderBookEmitter> BookEmitter;
+        std::optional<TradeReportEmitter> TradeEmitter;
 
     public:
         // Must be called on a dedicated thread
         MarketDataEmitters(int argc, char **argv,
-                           OrdersQueue &incomingOrderStates,
-                           BookQueue &incomingBookUpdates,
-                           StoragePool<OrderStateReport> &orderStatesPool,
-                           StoragePool<OrderBookUpdate> &orderBookUpdatesPool,
+                           OrderStateQueue *incomingOrderStates,
+                           OrderBookUpdateQueue *incomingBookUpdates,
+                           OrderStateMempool &orderStatesPool,
+                           OrderBookUpdateMempool &orderBookUpdatesPool,
                            const uint16_t portId, const uint16_t nbTxQueueSlots,
                            const size_t poolSize, const uint32_t srcIp,
                            const uint16_t srcPort, const uint32_t dstOrderIp,
@@ -112,8 +107,7 @@ namespace naoto::matching_engine
 
         void StartEmittersLoop(void) noexcept
         {
-            rte_eal_remote_launch(StartTradeReportLoop<BatchSize>,
-                                  &TradeEmitter.value(),
+            rte_eal_remote_launch(StartTradeReportLoop, &TradeEmitter.value(),
                                   TradeEmitter->GetLcoreId());
 
             BookEmitter->StartLoop();

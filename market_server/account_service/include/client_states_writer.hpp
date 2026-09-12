@@ -1,35 +1,26 @@
 #pragma once
 
 #include <absl/container/flat_hash_set.h>
+#include <account_service_types.hpp>
 #include <array>
 #include <client_states.hpp>
-#include <consumer.hpp>
+#include <iostream>
 #include <order_state_report.hpp>
 #include <spsc_queue.hpp>
 #include <system_conf.hpp>
 
 namespace naoto::account_service
 {
-    class ClientStatesWriter
-        : public Consumer<
-              ClientStatesWriter, OrderStateReport, TradeReportReceiveQueueSize,
-              TradeReportReceivePoolSize, TradeReportReceiveBatchSize>
+    class ClientStatesWriter : public ClientStatesWriterBase
     {
-        using Base =
-            Consumer<ClientStatesWriter, OrderStateReport,
-                     TradeReportReceiveQueueSize, TradeReportReceivePoolSize,
-                     TradeReportReceiveBatchSize>;
-        using ReportQueue = SpscQueue<OrderStateReport *, MaxClients>;
-
     private:
-        ClientStates<MaxPositions> &States;
+        ClientStates &States;
         absl::flat_hash_set<uint32_t> Touched;
 
     public:
-        ClientStatesWriter(
-            ClientStates<MaxPositions> &states, ReportQueue *incoming,
-            StoragePool<OrderStateReport, TradeReportReceivePoolSize> &mempool)
-            : Base(incoming, mempool)
+        ClientStatesWriter(ClientStates &states, TradeReportQueue *incoming,
+                           TradeReportMempool &mempool)
+            : ClientStatesWriterBase(incoming, mempool)
             , States(states)
         {
             Touched.reserve(TradeReportReceiveBatchSize);
@@ -46,6 +37,14 @@ namespace naoto::account_service
             std::cout << "Sold Asset Delta: " << report->SoldDelta << "\n";
             std::cout << "Sequence Id: " << report->SequenceId << "\n";
 
+#ifdef NAOTO_PERF
+            std::cout << "timestamps:\n"
+                      << report->IngestedTimestamp << "\n"
+                      << report->RoutedTimestamp << "\n"
+                      << report->ReceivedTimestamp << "\n"
+                      << report->UpdateTimestamp << "\n\n";
+#endif
+
             States.SetClientAssets(report->ClientId, report->BoughtDelta, 0,
                                    report->BoughtAssetId, report->SequenceId);
             States.SetClientAssets(report->ClientId, report->SoldDelta,
@@ -54,9 +53,7 @@ namespace naoto::account_service
             States.FlushTripleBuffer(report->ClientId);
         }
 
-        void Handle(std::array<OrderStateReport *, TradeReportReceiveBatchSize>
-                        &reportBatch,
-                    size_t batchSize) noexcept
+        void Handle(TradeReportBatch &reportBatch, size_t batchSize) noexcept
         {
             std::cout << "Received market update batch of size " << batchSize
                       << "\n";
@@ -73,6 +70,13 @@ namespace naoto::account_service
                 std::cout << "Sold Asset Id: " << report->SoldAssetId << "\n";
                 std::cout << "Sold Asset Delta: " << report->SoldDelta << "\n";
                 std::cout << "Sequence Id: " << report->SequenceId << "\n";
+#ifdef NAOTO_PERF
+                std::cout << "timestamps:\n"
+                          << report->IngestedTimestamp << "\n"
+                          << report->RoutedTimestamp << "\n"
+                          << report->ReceivedTimestamp << "\n"
+                          << report->UpdateTimestamp << "\n\n";
+#endif
 
                 States.SetClientAssets(report->ClientId, report->BoughtDelta, 0,
                                        report->BoughtAssetId,
@@ -103,7 +107,7 @@ namespace naoto::account_service
         {
             while (true)
             {
-                Base::TryConsume();
+                ClientStatesWriterBase::TryConsume();
             }
         }
     };

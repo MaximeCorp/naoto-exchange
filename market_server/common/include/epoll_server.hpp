@@ -1,8 +1,10 @@
 #pragma once
 
 #include <atomic>
+#include <cerrno>
 #include <concepts>
 #include <cstdlib>
+#include <cstring>
 #include <fcntl.h>
 #include <file_descriptors_ops.hpp>
 #include <gtest/gtest_prod.h>
@@ -42,17 +44,30 @@ namespace naoto
         { server.BatchHandle(t, fd) } -> std::same_as<void>;
     };
 
+    // Queue an EpollServer pushes assembled batches into, the per-fd
+    // partial-message buffers, the pool it draws batches from, and the
+    // per-fd "still waiting for the handshake" flags (absent entirely when
+    // the server has no InitMessage).
+    template <typename T, size_t BatchSize, size_t QueueSize>
+    using EpollServerObjectQueue =
+        SpscQueueProducer<ObjectBatch<T, BatchSize> *, QueueSize>;
+
+    template <typename InitMessage>
+    using EpollServerFirstMessageBuffer =
+        std::conditional_t<!std::is_same_v<std::monostate, InitMessage>,
+                           std::vector<bool>, std::monostate>;
+
+    template <typename T>
+    using EpollServerBuffers = std::vector<ObjectBuffer<T>>;
+
+    template <typename T, size_t BatchSize, size_t PoolSize>
+    using EpollServerMempool = StoragePool<ObjectBatch<T, BatchSize>, PoolSize>;
+
     template <typename DerivedServer, typename T, size_t BatchSize,
               size_t QueueSize, size_t PoolSize,
               typename InitMessage = std::monostate>
     class EpollServer
     {
-        using ObjectQueue =
-            SpscQueueProducer<ObjectBatch<T, BatchSize> *, QueueSize>;
-        using FirstMessageBuffer =
-            std::conditional_t<!std::is_same_v<std::monostate, InitMessage>,
-                               std::vector<bool>, std::monostate>;
-
         static_assert(sizeof(T) >= sizeof(InitMessage),
                       "Epoll server: The first message can't be contained "
                       "because it's bigger than normal messages\n");
@@ -65,10 +80,11 @@ namespace naoto
         const int MaxEvents;
         const int MaxPending;
 
-        std::vector<ObjectBuffer<T>> Buffers;
-        [[no_unique_address]] FirstMessageBuffer FirstMessage;
-        StoragePool<ObjectBatch<T, BatchSize>, PoolSize> &Pool;
-        ObjectQueue OutgoingBatches;
+        EpollServerBuffers<T> Buffers;
+        [[no_unique_address]] EpollServerFirstMessageBuffer<InitMessage>
+            FirstMessage;
+        EpollServerMempool<T, BatchSize, PoolSize> &Pool;
+        EpollServerObjectQueue<T, BatchSize, QueueSize> OutgoingBatches;
 
         inline void setNonBlocking(const int fd) noexcept
         {
@@ -347,8 +363,10 @@ namespace naoto
 
     public:
         EpollServer(const int port, const int maxEvents, const int maxPending,
-                    StoragePool<ObjectBatch<T, BatchSize>, PoolSize> &pool,
-                    ObjectQueue &outgoingBatches, const size_t nb_fds)
+                    EpollServerMempool<T, BatchSize, PoolSize> &pool,
+                    SpscQueue<ObjectBatch<T, BatchSize> *, QueueSize>
+                        *outgoingBatches,
+                    const size_t nb_fds)
             : Port(port)
             , MaxEvents(maxEvents)
             , MaxPending(maxPending)
@@ -366,7 +384,7 @@ namespace naoto
 
         EpollServer(
             const int port, const int maxEvents, const int maxPending,
-            StoragePool<ObjectBatch<T, BatchSize>, PoolSize> &pool,
+            EpollServerMempool<T, BatchSize, PoolSize> &pool,
             SpscQueue<ObjectBatch<T, BatchSize> *, QueueSize> *outgoingBatches)
             : Port(port)
             , MaxEvents(maxEvents)

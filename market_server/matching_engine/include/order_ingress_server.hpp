@@ -1,7 +1,8 @@
 #pragma once
 
-#include <epoll_server.hpp>
+#include <matching_engine_types.hpp>
 #include <order.hpp>
+#include <system_conf.hpp>
 
 #ifdef NAOTO_PERF
 #    include <timestamps.hpp>
@@ -9,18 +10,13 @@
 
 namespace naoto::matching_engine
 {
-    template <size_t BatchSize>
-    class OrderIngressServer
-        : public EpollServer<OrderIngressServer<BatchSize>, Order, BatchSize>
+    class OrderIngressServer : public OrderIngressServerBase
     {
-        using Base =
-            EpollServer<OrderIngressServer<BatchSize>, Order, BatchSize>;
-
     public:
-        using Base::Base;
+        using OrderIngressServerBase::OrderIngressServerBase;
 
 #ifdef NAOTO_PERF
-        void BatchHandle(ObjectBatch<Order, BatchSize> *batch,
+        void BatchHandle(OrderBatch *batch,
                          uint32_t fd) noexcept
         {
             batch->Fd = fd;

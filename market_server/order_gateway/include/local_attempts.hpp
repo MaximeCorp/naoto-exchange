@@ -3,10 +3,10 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <system_conf.hpp>
 
 namespace naoto::order_gateway
 {
-    template <size_t MaxPositions>
     struct LocalAttempts
     {
         std::array<int64_t, MaxPositions> Attempt;

@@ -1,7 +1,7 @@
 #pragma once
 
 #include <cstddef>
-#include <epoll_server.hpp>
+#include <account_service_types.hpp>
 #include <file_descriptors_ops.hpp>
 #include <gateway_handshake.hpp>
 #include <object_batch.hpp>
@@ -13,33 +13,18 @@
 
 namespace naoto::account_service
 {
-    class GatewayEpollServer
-        : public EpollServer<GatewayEpollServer, RoutedAuthRequest,
-                             AccountEpollReceiveBatchSize,
-                             AccountEpollReceiveQueueSize,
-                             AccountRequestPoolSize, GatewayHandshake>
+    class GatewayEpollServer : public GatewayEpollServerBase
     {
-        using Base = EpollServer<GatewayEpollServer, RoutedAuthRequest,
-                                 AccountEpollReceiveBatchSize,
-                                 AccountEpollReceiveQueueSize,
-                                 AccountRequestPoolSize, GatewayHandshake>;
-        using RequestQueue = SpscQueue<
-            ObjectBatch<RoutedAuthRequest, AccountEpollReceiveBatchSize> *,
-            AccountEpollReceiveQueueSize>;
-
     private:
-        std::array<VersionedFd, MaxGateways> &Gateways;
+        GatewayFds &Gateways;
         std::vector<uint16_t> FdToGateways;
 
     public:
         GatewayEpollServer(
             const int port, const int maxEvents, const int maxPending,
-            StoragePool<
-                ObjectBatch<RoutedAuthRequest, AccountEpollReceiveBatchSize>,
-                AccountRequestPoolSize> &pool,
-            RequestQueue *orders,
-            std::array<VersionedFd, MaxGateways> &gateways)
-            : Base(port, maxEvents, maxPending, pool, orders)
+            AuthRequestMempool &pool, AuthRequestQueue *orders,
+            GatewayFds &gateways)
+            : GatewayEpollServerBase(port, maxEvents, maxPending, pool, orders)
             , Gateways(gateways)
             , FdToGateways(FileDescriptorsOps::getMaxFd(), 0)
         {}

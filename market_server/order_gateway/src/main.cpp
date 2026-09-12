@@ -10,24 +10,20 @@ using namespace naoto::order_gateway;
 
 int main(int argc, char **argv)
 {
-    OrderGatewayService<GatewayEpollReceiveBatchSize, MaxAssets, MaxPositions,
-                        GatewayMaxClients, GatewayUpdateBufferSize,
-                        TradeReportReceiveBufferSize>
-        gateway(
-            argc, argv,
-            /*portId=*/0, // DPDK NIC port id - deployment-specific
-            /*nbRxQueueSlots=*/256, // DPDK NIC RX ring depth - no
-                                    // system_conf equivalent, manually
-                                    // tuned to the NIC
-            /*poolSize=*/TradeReportReceiveBufferSize,
-            /*dstIp=*/RTE_IPV4(239, 1, 1, 1), /*dstPort=*/30001,
-            /*queue_size=*/GatewayUpdateBufferSize, // shared depth for the
-                                                     // gateway's internal
-                                                     // SPSC handoff queues
-            /*port=*/8081,
-            /*maxEvents=*/16, // epoll_wait batch size, not a capacity
-                              // limit - deployment-tuned, not derived
-            /*maxPending=*/16); // listen() backlog, same as above
+    // Batch sizes, queue depths and pool capacities are compile-time now:
+    // see system_conf.hpp.
+    auto gateway = std::make_unique<OrderGatewayService>(
+        argc, argv,
+        /*portId=*/0, // DPDK NIC port id - deployment-specific
+        /*nbRxQueueSlots=*/256, // DPDK NIC RX ring depth - no
+                                // system_conf equivalent, manually
+                                // tuned to the NIC
+        /*poolSize=*/TradeReportReceiveBufferSize,
+        /*dstIp=*/RTE_IPV4(239, 1, 1, 1), /*dstPort=*/30001,
+        /*port=*/8081,
+        /*maxEvents=*/16, // epoll_wait batch size, not a capacity
+                          // limit - deployment-tuned, not derived
+        /*maxPending=*/16); // listen() backlog, same as above
 
-    gateway.StartGateway();
+    gateway->StartGateway();
 }

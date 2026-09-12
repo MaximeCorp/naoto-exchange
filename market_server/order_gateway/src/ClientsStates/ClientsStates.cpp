@@ -3,9 +3,8 @@
 
 namespace naoto::order_gateway
 {
-    template <size_t MaxPositions>
-    [[nodiscard]] ClientStates<MaxPositions> make_fd_array(void)
+    [[nodiscard]] ClientStates make_fd_array(void)
     {
-        return ClientStates<MaxPositions>(FileDescriptorsOps::getMaxFd());
+        return ClientStates(FileDescriptorsOps::getMaxFd());
     }
 } // namespace naoto::order_gateway

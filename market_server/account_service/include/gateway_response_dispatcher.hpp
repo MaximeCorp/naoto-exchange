@@ -1,7 +1,11 @@
 #pragma once
 
+#include <account_service_types.hpp>
 #include <client_account_snapshot.hpp>
+#include <cerrno>
 #include <cstring>
+#include <exception>
+#include <iostream>
 #include <object_batch.hpp>
 #include <readerwritercircularbuffer.h>
 #include <routed_message.hpp>
@@ -14,27 +18,20 @@
 
 namespace naoto::account_service
 {
-    template <size_t MaxPositions, size_t BatchesSize, size_t MaxGateways,
-              size_t ResendBufferSize>
     class GatewayResponseDispatcher
     {
         // Might be worth batching
-        using ResponsesQueue = SpscQueueConsumer<
-            RoutedMessage<ClientAccountSnapshot<MaxPositions>>, MaxClients>;
         // using UpdatesQueue = moodycamel::BlockingReaderWriterCircularBuffer<
         // RoutedMessage<ClientUpdate>>;
 
     private:
-        ResponsesQueue Responses;
+        AccountResponseConsumer Responses;
         // UpdatesQueue &Updates;
-        StoragePool<ClientAccountSnapshot<MaxPositions>,
-                    AccountResponsePoolSize> &ResponsesPool;
+        AccountResponseMempool &ResponsesPool;
         // StoragePool<ClientUpdate> &UpdatesPool;
-        std::array<VersionedFd, MaxGateways> &GatewayFd; // Consumer
+        GatewayFds &GatewayFd; // Consumer
 
-        std::array<RoutedMessage<ClientAccountSnapshot<MaxPositions>>,
-                   ResendBufferSize>
-            ResponsesResend;
+        AccountResponseResendBuffer ResponsesResend;
         size_t ResponsesResendSize;
 
         template <typename T>
@@ -42,15 +39,18 @@ namespace naoto::account_service
                                                // order of messages matters
         {
             if constexpr (std::is_same_v<T,
-                                         ClientAccountSnapshot<MaxPositions>>)
+                                         ClientAccountSnapshot>)
             {
                 while (ResponsesResendSize)
                 {
-                    RoutedMessage<ClientAccountSnapshot<MaxPositions>>
-                        &curResponse = ResponsesResend[--ResponsesResendSize];
+                    AccountResponse &curResponse =
+                        ResponsesResend[--ResponsesResendSize];
 
-                    SendMessage<RoutedMessage>(curResponse.Message,
-                                               curResponse.GatewayId);
+                    // ASSUMPTION: was SendMessage<RoutedMessage>, which
+                    // can't compile (class template used as a type).
+                    // Message is a ClientAccountSnapshot*, so that's T.
+                    SendMessage<ClientAccountSnapshot>(curResponse.Message,
+                                                       curResponse.GatewayId);
                 }
             }
         }
@@ -89,7 +89,7 @@ namespace naoto::account_service
                 if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
                 {
                     if constexpr (std::is_same_v<
-                                      T, ClientAccountSnapshot<MaxPositions>>)
+                                      T, ClientAccountSnapshot>)
                     {
                         ResponsesResend[ResponsesResendSize].GatewayId = idx;
                         ResponsesResend[ResponsesResendSize++].Message =
@@ -119,7 +119,7 @@ namespace naoto::account_service
                 // For later : push to the array / vector of
                 // messages to send again
                 if constexpr (std::is_same_v<
-                                  T, ClientAccountSnapshot<MaxPositions>>)
+                                  T, ClientAccountSnapshot>)
                 {
                     ResponsesResend[ResponsesResendSize].GatewayId = idx;
                     ResponsesResend[ResponsesResendSize++].Message =
@@ -138,7 +138,7 @@ namespace naoto::account_service
 
             // Release the message if no sending error
             if constexpr (std::is_same_v<T,
-                                         ClientAccountSnapshot<MaxPositions>>)
+                                         ClientAccountSnapshot>)
             {
                 bool released = ResponsesPool.Release((T *)curMessage);
 
@@ -165,21 +165,21 @@ namespace naoto::account_service
         void ConsumeMessages(void) noexcept
         {
             // TODO : decide if this batching is useful
-            for (size_t i = 0; i < BatchesSize; ++i)
+            for (size_t i = 0; i < AccountResponseBatchSize; ++i)
             {
-                RoutedMessage<ClientAccountSnapshot<MaxPositions>> curResponse;
+                AccountResponse curResponse;
 
                 if (!Responses.TryPop(curResponse)) [[unlikely]]
                 {
                     break;
                 }
 
-                SendMessage<ClientAccountSnapshot<MaxPositions>>(
+                SendMessage<ClientAccountSnapshot>(
                     curResponse.Message, curResponse.GatewayId);
             }
 
             /*
-            for (size_t i = 0; i < BatchesSize; ++i)
+            for (size_t i = 0; i < AccountResponseBatchSize; ++i)
             {
                 const RoutedMessage<ClientUpdate> curUpdate;
 
@@ -196,12 +196,10 @@ namespace naoto::account_service
 
     public:
         GatewayResponseDispatcher(
-            SpscQueue<RoutedMessage<ClientAccountSnapshot<MaxPositions>>,
-                      MaxClients> *responses, // UpdatesQueue &updates,
-            StoragePool<ClientAccountSnapshot<MaxPositions>,
-                        AccountResponsePoolSize> &responsesPool, //,
+            AccountResponseQueue *responses, // UpdatesQueue &updates,
+            AccountResponseMempool &responsesPool, //,
             // StoragePool<ClientUpdate> &updatesPool,
-            std::array<VersionedFd, MaxGateways> &gatewayFd)
+            GatewayFds &gatewayFd)
             : Responses(responses)
             //, Updates(updates)
             , ResponsesPool(responsesPool)

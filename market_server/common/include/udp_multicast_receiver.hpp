@@ -16,6 +16,8 @@
 #include <spsc_queue.hpp>
 #include <storage_pool.hpp>
 #include <string>
+#include <system_conf.hpp>
+#include <udp_multicast_types.hpp>
 #include <variant>
 
 namespace naoto
@@ -28,8 +30,16 @@ namespace naoto
         { t.SequenceId } -> std::convertible_to<uint32_t>;
     };
 
+    // Queue a receiver pushes decoded objects into, and the pool it draws
+    // them from.
+    template <typename T, size_t QueueSize>
+    using UdpReceiverQueue = SpscQueueProducer<T *, QueueSize>;
+
+    template <typename T, size_t PoolSize>
+    using UdpReceiverMempool = StoragePool<T, PoolSize>;
+
     template <typename T, size_t RingBufferSize, size_t QueueSize,
-              size_t PoolSize, size_t BatchSize = 0, size_t MTU = 1500>
+              size_t PoolSize, size_t BatchSize = 0>
         requires HasSequenceIdLocal<T>
     class UdpMulticastReceiver
     {
@@ -43,16 +53,10 @@ namespace naoto
         static constexpr size_t MaxPackets =
             BatchSize / ObjectsPerPacket + (BatchSize % ObjectsPerPacket != 0);
 
-        using TQueue = SpscQueueProducer<T *, QueueSize>;
-        using PacketsBuffer =
-            std::conditional_t<(BatchSize > 0),
-                               std::array<rte_mbuf *, MaxPackets>,
-                               std::monostate>;
-
     protected:
-        [[no_unique_address]] PacketsBuffer Packets;
-        TQueue Outgoing;
-        StoragePool<T, PoolSize> &TPool;
+        [[no_unique_address]] UdpPacketsBuffer<BatchSize, MaxPackets> Packets;
+        UdpReceiverQueue<T, QueueSize> Outgoing;
+        UdpReceiverMempool<T, PoolSize> &TPool;
         uint16_t PortId;
         uint16_t QueueId;
         unsigned LcoreId;
@@ -64,7 +68,8 @@ namespace naoto
 
     public:
         UdpMulticastReceiver(SpscQueue<T *, QueueSize> *outgoing,
-                             StoragePool<T, PoolSize> &pool, uint16_t portId,
+                             UdpReceiverMempool<T, PoolSize> &pool,
+                             uint16_t portId,
                              uint16_t nbRxQueueSlots, uint16_t queueId,
                              unsigned lcoreId, const char *poolName,
                              size_t poolSize, uint32_t dstIp, uint32_t dstPort)

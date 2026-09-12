@@ -2,7 +2,9 @@
 
 #include <account_request_sender.hpp>
 #include <account_service_response_receiver.hpp>
+#include <chrono>
 #include <client_account_snapshot.hpp>
+#include <client_message_sender.hpp>
 #include <client_states.hpp>
 #include <client_states_writer.hpp>
 #include <file_descriptors_ops.hpp>
@@ -10,55 +12,61 @@
 #include <netinet/tcp.h>
 #include <object_batch.hpp>
 #include <order.hpp>
+#include <order_gateway_types.hpp>
 #include <order_router.hpp>
 #include <pthread.h>
 #include <readerwritercircularbuffer.h>
 #include <routed_auth_request.hpp>
+#include <shared_memory_ops.hpp>
+#include <shared_memory_types.hpp>
 #include <system_conf.hpp>
 #include <thread>
 #include <trade_report_receiver.hpp>
 
 namespace naoto::order_gateway
 {
-    template <size_t BatchSize, size_t MaxAsset, size_t MaxPositions,
-              size_t MaxClients, size_t UpdatesBufferSize,
-              size_t ReceiveRingBufferSize>
     class OrderGatewayService
     {
-        using OrdersQueue = SpscQueue<ObjectBatch<Order, BatchSize> *,
-                                      GatewayEpollReceiveQueueSize>;
-        using DisconnectsQueue = SpscQueue<uint32_t, GatewayMaxClients>;
-        using ReportQueue =
-            SpscQueue<OrderStateReport, TradeReportReceiveQueueSize *>;
-        using ResponseBatch =
-            ObjectBatch<ClientAccountSnapshot<MaxPositions>, BatchSize>;
-
-        using ResponseQueue =
-            SpscQueue<ResponseBatch *, GatewayClientRequestResponseQueueSize>;
-        using RequestQueue = SpscQueue<RoutedAuthRequest *, GatewayMaxClients>;
-
     private:
-        StoragePool<ObjectBatch<Order, BatchSize>> OrdersPool;
-        StoragePool<OrderStateReport> ReportsPool;
-        StoragePool<ResponseBatch> ResponsesPool;
-        StoragePool<RoutedAuthRequest> ServerRequestsPool;
-        StoragePool<RoutedAuthRequest> WriterRequestsPool;
-        OrdersQueue IncomingOrders;
-        DisconnectsQueue IncomingDisconnects;
-        ReportQueue IncomingReports;
-        ResponseQueue IncomingResponses;
-        RequestQueue ServerIncomingRequests;
-        RequestQueue WriterIncomingRequests;
-        ClientStates<MaxPositions> States;
+        OrderBatchMempool OrdersPool;
+        TradeReportMempool ReportsPool;
+        AccountResponseMempool ResponsesPool;
+        AuthRequestMempool ServerRequestsPool;
+        AuthRequestMempool WriterRequestsPool;
+        OrderBatchQueue IncomingOrders;
+        DisconnectQueue IncomingDisconnects;
+        TradeReportQueue IncomingReports;
+        AccountResponseQueue IncomingResponses;
+        AuthRequestQueue ServerIncomingRequests;
+        AuthRequestQueue WriterIncomingRequests;
+        OrderConfirmationQueue IncomingConfirmation;
+        ClientStates States;
         VersionedFd ClientStatesUpdatesFd;
-        GatewayServer<BatchSize, MaxPositions> Server;
-        OrderRouter<BatchSize, MaxAsset, MaxPositions, MaxClients> Router;
-        ClientStatesWriter<MaxClients, MaxPositions, BatchSize,
-                           UpdatesBufferSize>
-            StatesWriter;
-        TradeReportReceiver<ReceiveRingBufferSize, BatchSize> UpdatesReceiver;
-        AccountServiceResponseReceiver<BatchSize, MaxPositions> AccountReceiver;
+        GatewayServer Server;
+        ClientMessageSender ConfirmationSender;
+        OrderRouter Router;
+        ClientStatesWriter StatesWriter;
+        TradeReportReceiver UpdatesReceiver;
+        AccountServiceResponseReceiver AccountReceiver;
         AccountRequestSender RequestSender;
+
+        [[nodiscard]] OrderQueue *GetSharedQueue(void)
+        {
+            OrderQueue *queue = nullptr;
+            while (!queue)
+            {
+                queue = OpenSharedQueue();
+                if (queue == nullptr)
+                {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                }
+            }
+
+            std::cout << "Got the shared queue: " << (uintptr_t)queue
+                      << "bytes size:" << sizeof(OrderQueue) << "\n\n";
+
+            return queue;
+        }
 
         void setAffinity(std::thread &t, const int core_id)
         {
@@ -84,19 +92,20 @@ namespace naoto::order_gateway
         OrderGatewayService(int argc, char **argv, const uint16_t portId,
                             const uint16_t nbRxQueueSlots,
                             const size_t poolSize, const uint32_t dstIp,
-                            const uint16_t dstPort, const size_t queue_size,
-                            const int port, const int maxEvents,
-                            const int maxPending)
-            : OrdersPool(poolSize)
-            , ReportsPool(poolSize)
-            , ResponsesPool(poolSize)
-            , ServerRequestsPool(poolSize)
-            , WriterRequestsPool(poolSize)
-            , States(MaxClients)
+                            const uint16_t dstPort, const int port,
+                            const int maxEvents, const int maxPending)
+            : States(GatewayMaxClients)
             , Server(port, maxEvents, maxPending, OrdersPool, &IncomingOrders,
                      States, ClientStatesUpdatesFd, &IncomingDisconnects,
                      ServerRequestsPool, &ServerIncomingRequests)
-            , Router(OrdersPool, &IncomingOrders, ClientStatesUpdatesFd, States)
+            , ConfirmationSender(&IncomingConfirmation)
+            , Router(OrdersPool, &IncomingOrders, ClientStatesUpdatesFd, States,
+                     &IncomingConfirmation
+#ifdef NAOTO_SHARED_MEMORY
+                     ,
+                     GetSharedQueue()
+#endif
+                         )
             , StatesWriter(States, &IncomingReports, ReportsPool,
                            &IncomingResponses, ResponsesPool,
                            &IncomingDisconnects, &WriterIncomingRequests,
@@ -109,31 +118,24 @@ namespace naoto::order_gateway
                             ServerRequestsPool, WriterRequestsPool,
                             ClientStatesUpdatesFd)
         {
-            FileDescriptorsOps::setMaxFd(MaxClients);
+            FileDescriptorsOps::setMaxFd(GatewayMaxClients);
         }
 
         void StartGateway(void)
         {
-            std::thread riskThread(
-                &OrderRouter<BatchSize, MaxAsset, MaxPositions,
-                             MaxClients>::startLoop,
-                &Router);
-            std::thread serverThread(
-                &GatewayServer<BatchSize, MaxPositions>::startServer, &Server);
-            std::thread statesWriterThread(
-                &ClientStatesWriter<MaxClients, MaxPositions, BatchSize,
-                                    UpdatesBufferSize>::StartLoop,
-                &StatesWriter);
+            std::thread riskThread(&OrderRouter::startLoop, &Router);
+            std::thread serverThread(&GatewayServer::startServer, &Server);
+            std::thread statesWriterThread(&ClientStatesWriter::StartLoop,
+                                           &StatesWriter);
+
+            std::thread confirmationSenderThread(
+                &ClientMessageSender::StartLoop, &ConfirmationSender);
 
             std::thread updatesReceiverThread(
-                &TradeReportReceiver<ReceiveRingBufferSize,
-                                     BatchSize>::StartReceiversLoop,
-                &UpdatesReceiver);
+                &TradeReportReceiver::StartReceiversLoop, &UpdatesReceiver);
 
             std::thread accountReceiverThread(
-                &AccountServiceResponseReceiver<BatchSize,
-                                                MaxPositions>::StartLoop,
-                &AccountReceiver);
+                &AccountServiceResponseReceiver::StartLoop, &AccountReceiver);
 
             std::thread requestSenderThread(&AccountRequestSender::StartLoop,
                                             &RequestSender);
@@ -145,6 +147,7 @@ namespace naoto::order_gateway
             setAffinity(updatesReceiverThread, 11);
             setAffinity(accountReceiverThread, 10);
             setAffinity(requestSenderThread, 11);
+            setAffinity(confirmationSenderThread, 10);
 
             pthread_setname_np(riskThread.native_handle(), "RiskEngine");
             pthread_setname_np(serverThread.native_handle(), "EpollServer");

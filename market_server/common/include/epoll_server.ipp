@@ -4,9 +4,9 @@
 
 namespace naoto
 {
-    template <typename DerivedServer, typename T, size_t QueueSize,
-              size_t PoolSize, size_t BatchSize, typename InitMessage>
-    void EpollServer<DerivedServer, T, QueueSize, PoolSize, BatchSize,
+    template <typename DerivedServer, typename T, size_t BatchSize,
+              size_t QueueSize, size_t PoolSize, typename InitMessage>
+    void EpollServer<DerivedServer, T, BatchSize, QueueSize, PoolSize,
                      InitMessage>::initSocket() noexcept
     {
         struct sockaddr_in server_addr;

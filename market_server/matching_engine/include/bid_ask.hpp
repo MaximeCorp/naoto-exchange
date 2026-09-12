@@ -1,8 +1,12 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <flat_hash_map.hpp>
+#include <functional>
 #include <gtest/gtest_prod.h>
+#include <matching_engine_types.hpp>
 #include <object_batch.hpp>
 #include <order.hpp>
 #include <order_book.hpp>
@@ -10,6 +14,7 @@
 #include <order_node.hpp>
 #include <order_state_report.hpp>
 #include <readerwritercircularbuffer.h>
+#include <shared_memory_types.hpp>
 #include <spsc_queue.hpp>
 #include <storage_pool.hpp>
 #include <string>
@@ -23,8 +28,6 @@
 
 namespace naoto::matching_engine
 {
-    template <size_t FHMSize, size_t SkipListMaxLevel, size_t BatchSize,
-              size_t OrderMapSize>
     class BidAsk
     {
         FRIEND_TEST(BidAskTest, MarketableBuyCrossesRestingAsk);
@@ -51,13 +54,6 @@ namespace naoto::matching_engine
         FRIEND_TEST(BidAskTest,
                     MarketBuyOrderWithZeroPriceNeverMatches_LIKELY_BUG);
 
-        using OrdersQueue = SpscQueueConsumer<ObjectBatch<Order, BatchSize> *,
-                                              MeOrderQueueSize>;
-        using OrderStatesQueue =
-            SpscQueueProducer<OrderStateReport *, MeOrderStateQueueSize>;
-        using OrderBookUpdatesQueue =
-            SpscQueueProducer<OrderBookUpdate *, MeOrderBookUpdateQueueSize>;
-
     private:
         uint32_t MarketAssetId;
         int64_t MarketPrice;
@@ -66,23 +62,25 @@ namespace naoto::matching_engine
         uint32_t ReportSequenceId;
         uint32_t OrderBookSequenceId;
 
-        OrdersQueue IncomingOrders;
-        OrderStatesQueue OutgoingOrders;
-        OrderBookUpdatesQueue OutgoingBook;
-        StoragePool<ObjectBatch<Order, BatchSize>, MeOrderPoolSize> &OrdersPool;
-        StoragePool<OrderStateReport, MeOrderStatePoolSize> &OrderReportsPool;
-        StoragePool<OrderBookUpdate, MeOrderBookUpdatePoolSize>
-            &OrderBookUpdatesPool;
-        SingleThreadedStoragePool<OrderNode, MeOrderNodePoolSize> OrderNodePool;
-        SingleThreadedStoragePool<PriceLevel, MePriceLevelPoolSize>
-            PriceLevelPool;
+#ifdef NAOTO_SHARED_MEMORY
+        OrderConsumer IncomingOrders;
+#else
+        OrderBatchConsumer IncomingOrders;
+#endif
+        OrderStateProducer OutgoingOrders;
+        OrderBookUpdateProducer OutgoingBook;
+#ifndef NAOTO_SHARED_MEMORY
+        OrderBatchMempool &OrdersPool;
+#endif
+        OrderStateMempool &OrderReportsPool;
+        OrderBookUpdateMempool &OrderBookUpdatesPool;
+        OrderNodeMempool OrderNodePool;
+        PriceLevelMempool PriceLevelPool;
 
-        FlatHashMap<uint64_t, OrderNode *, OrderMapSize> OrderMap;
+        OrderIdMap OrderMap;
 
-        OrderBook<FHMSize, SkipListMaxLevel, OrderMapSize,
-                  std::greater<int64_t>>
-            Bid;
-        OrderBook<FHMSize, SkipListMaxLevel, OrderMapSize> Ask;
+        OrderBook<std::greater<int64_t>> Bid;
+        OrderBook<> Ask;
 
         [[nodiscard]] bool IsMarketable(Order &order) const noexcept
         {
@@ -122,7 +120,7 @@ namespace naoto::matching_engine
 #endif
                     ReportSequenceId++, order.ClientId, order.OrderId, 0, 0, 0,
                     OrderState::REJECT);
-                OutgoingOrders.TryPush(rejectReport);
+                (void)OutgoingOrders.TryPush(rejectReport);
 
                 return;
             }
@@ -144,7 +142,9 @@ namespace naoto::matching_engine
 #endif
                     ReportSequenceId++, toCancel->GetClientId(),
                     toCancel->GetId(), 0, MarketAssetId, 0, OrderState::CANCEL);
-                OutgoingOrders.TryPush(cancelReport);
+                OutgoingOrders.Push(cancelReport);
+
+                std::cout << "Successful cancel\n\n";
 
                 PriceLevel *curLevel = Bid.DeleteOrder(toCancel);
 
@@ -160,7 +160,7 @@ namespace naoto::matching_engine
                     curLevel ? curLevel->GetTotalAmount() : 0, curPrice,
                     MarketAssetId, ORDER_BOOK_UPDATE_BUY);
 
-                OutgoingBook.TryPush(curOrderBookUpdate);
+                OutgoingBook.Push(curOrderBookUpdate);
             }
             else
             {
@@ -174,7 +174,9 @@ namespace naoto::matching_engine
 #endif
                     ReportSequenceId++, toCancel->GetClientId(),
                     toCancel->GetId(), 0, 0, MarketAssetId, OrderState::CANCEL);
-                OutgoingOrders.TryPush(cancelReport);
+                OutgoingOrders.Push(cancelReport);
+
+                std::cout << "Successful cancel\n\n";
 
                 PriceLevel *curLevel = Ask.DeleteOrder(toCancel);
 
@@ -190,7 +192,7 @@ namespace naoto::matching_engine
                     curLevel ? curLevel->GetTotalAmount() : 0, curPrice,
                     MarketAssetId, ORDER_BOOK_UPDATE_SELL);
 
-                OutgoingBook.TryPush(curOrderBookUpdate);
+                OutgoingBook.Push(curOrderBookUpdate);
             }
         }
 
@@ -263,7 +265,7 @@ namespace naoto::matching_engine
                         MarketAssetId, 0,
                         order.Amount > 0 ? OrderState::PARTIAL_FILL
                                          : OrderState::FILL);
-                    OutgoingOrders.TryPush(orderReport);
+                    (void)OutgoingOrders.TryPush(orderReport);
 
                     OrderStateReport *offerReport = OrderReportsPool.Acquire();
                     offerReport->FillReport(
@@ -277,7 +279,7 @@ namespace naoto::matching_engine
                         bestOffer->GetId(), 0, 0, MarketAssetId,
                         bestOffer->GetAmount() > 0 ? OrderState::PARTIAL_FILL
                                                    : OrderState::FILL);
-                    OutgoingOrders.TryPush(offerReport);
+                    (void)OutgoingOrders.TryPush(offerReport);
 
                     OrderBookUpdate *curOrderBookUpdate =
                         OrderBookUpdatesPool.Acquire();
@@ -288,7 +290,7 @@ namespace naoto::matching_engine
 #endif
                         OrderBookSequenceId++, bestLevel->GetTotalAmount(),
                         BestAskPrice, MarketAssetId, ORDER_BOOK_UPDATE_SELL);
-                    OutgoingBook.TryPush(curOrderBookUpdate);
+                    (void)OutgoingBook.TryPush(curOrderBookUpdate);
 
                     if (bestOffer->GetAmount() == 0)
                     {
@@ -314,7 +316,9 @@ namespace naoto::matching_engine
 #endif
                     ReportSequenceId++, order.ClientId, order.OrderId, 0,
                     MarketAssetId, 0, OrderState::CANCEL);
-                OutgoingOrders.TryPush(orderReport);
+                OutgoingOrders.Push(orderReport);
+
+                std::cout << "No matches found\n\n";
             }
         }
 
@@ -386,7 +390,7 @@ namespace naoto::matching_engine
                         MarketAssetId,
                         order.Amount > 0 ? OrderState::PARTIAL_FILL
                                          : OrderState::FILL);
-                    OutgoingOrders.TryPush(orderReport);
+                    (void)OutgoingOrders.TryPush(orderReport);
                     // TODO : try_enqueue failure handling, should loop until it
                     // works
 
@@ -402,7 +406,7 @@ namespace naoto::matching_engine
                         bestOffer->GetId(), 0, MarketAssetId, 0,
                         bestOffer->GetAmount() > 0 ? OrderState::PARTIAL_FILL
                                                    : OrderState::FILL);
-                    OutgoingOrders.TryPush(offerReport);
+                    (void)OutgoingOrders.TryPush(offerReport);
 
                     OrderBookUpdate *curOrderBookUpdate =
                         OrderBookUpdatesPool.Acquire();
@@ -412,7 +416,7 @@ namespace naoto::matching_engine
 #endif
                         OrderBookSequenceId++, bestLevel->GetTotalAmount(),
                         BestBidPrice, MarketAssetId, ORDER_BOOK_UPDATE_BUY);
-                    OutgoingBook.TryPush(curOrderBookUpdate);
+                    (void)OutgoingBook.TryPush(curOrderBookUpdate);
 
                     if (bestOffer->GetAmount() == 0)
                     {
@@ -426,7 +430,7 @@ namespace naoto::matching_engine
             if (order.Amount > 0) [[unlikely]]
             {
 #ifdef NAOTO_PERF
-                uint now = now_tsc();
+                uint64_t now = now_tsc();
 #endif
 
                 OrderStateReport *orderReport = OrderReportsPool.Acquire();
@@ -438,7 +442,9 @@ namespace naoto::matching_engine
 #endif
                     ReportSequenceId++, order.ClientId, order.OrderId, 0, 0,
                     MarketAssetId, OrderState::CANCEL);
-                OutgoingOrders.TryPush(orderReport);
+                OutgoingOrders.Push(orderReport);
+
+                std::cout << "No matches found\n\n";
             }
         }
 
@@ -488,7 +494,7 @@ namespace naoto::matching_engine
 #endif
                     ReportSequenceId++, order.ClientId, order.OrderId, 0, 0,
                     MarketAssetId, OrderState::ADD);
-                OutgoingOrders.TryPush(addReport);
+                (void)OutgoingOrders.TryPush(addReport);
                 // TODO : try_enqueue failure handling
             }
 
@@ -503,7 +509,7 @@ namespace naoto::matching_engine
 #endif
                     OrderBookSequenceId++, curLevel->GetTotalAmount(),
                     curLevel->GetKey(), MarketAssetId, ORDER_BOOK_UPDATE_SELL);
-                OutgoingBook.TryPush(curOrderBookUpdate);
+                (void)OutgoingBook.TryPush(curOrderBookUpdate);
             }
         }
 
@@ -540,7 +546,7 @@ namespace naoto::matching_engine
 #endif
                     ReportSequenceId++, order.ClientId, order.OrderId, 0,
                     MarketAssetId, 0, OrderState::ADD);
-                OutgoingOrders.TryPush(addReport);
+                (void)OutgoingOrders.TryPush(addReport);
                 // TODO : try_enqueue failure handling
             }
 
@@ -555,7 +561,7 @@ namespace naoto::matching_engine
 #endif
                     OrderBookSequenceId++, curLevel->GetTotalAmount(),
                     curLevel->GetKey(), MarketAssetId, ORDER_BOOK_UPDATE_BUY);
-                OutgoingBook.TryPush(curOrderBookUpdate);
+                (void)OutgoingBook.TryPush(curOrderBookUpdate);
             }
             // TODO : failure handling
         }
@@ -588,20 +594,19 @@ namespace naoto::matching_engine
         }
 
     public:
-        BidAsk(
-            const std::uint32_t assetId, const std::int64_t initialPrice,
-            SpscQueue<ObjectBatch<Order, BatchSize> *, MeOrderQueueSize>
-                *incoming,
-            SpscQueue<OrderStateReport *, MeOrderStateQueueSize>
-                *outgoingOrders,
-            SpscQueue<OrderBookUpdate *, MeOrderBookUpdateQueueSize>
-                *outgoingBook,
-            StoragePool<ObjectBatch<Order, BatchSize>, MeOrderPoolSize> &pool,
-            StoragePool<OrderStateReport, MeOrderStatePoolSize>
-                &orderReportsPool,
-            StoragePool<OrderBookUpdate, MeOrderBookUpdatePoolSize>
-                &orderBookUpdatesPool,
-            const size_t orderNodePoolSize, const size_t skipListNodesPoolSize)
+        BidAsk(const std::uint32_t assetId, const std::int64_t initialPrice,
+#ifdef NAOTO_SHARED_MEMORY
+               OrderQueue *incoming,
+#else
+               OrderBatchQueue *incoming,
+#endif
+               OrderStateQueue *outgoingOrders,
+               OrderBookUpdateQueue *outgoingBook,
+#ifndef NAOTO_SHARED_MEMORY
+               OrderBatchMempool &pool,
+#endif
+               OrderStateMempool &orderReportsPool,
+               OrderBookUpdateMempool &orderBookUpdatesPool)
             : MarketAssetId(assetId)
             , MarketPrice(initialPrice)
             , BestAskPrice(INT64_MAX)
@@ -613,16 +618,19 @@ namespace naoto::matching_engine
             , IncomingOrders(incoming)
             , OutgoingOrders(outgoingOrders)
             , OutgoingBook(outgoingBook)
+#ifndef NAOTO_SHARED_MEMORY
             , OrdersPool(pool)
+#endif
             , OrderReportsPool(orderReportsPool)
             , OrderBookUpdatesPool(orderBookUpdatesPool)
-            , OrderNodePool(orderNodePoolSize)
-            , PriceLevelPool(orderNodePoolSize)
-            , Bid(skipListNodesPoolSize, OrderNodePool, PriceLevelPool,
-                  OrderMap)
-            , Ask(skipListNodesPoolSize, OrderNodePool, PriceLevelPool,
-                  OrderMap)
-        {}
+            , Bid(OrderNodePool, PriceLevelPool, OrderMap)
+            , Ask(OrderNodePool, PriceLevelPool, OrderMap)
+        {
+#ifdef NAOTO_SHARED_MEMORY
+            std::cout << "Got the shared queue: " << (uintptr_t)incoming
+                      << "bytes size:" << sizeof(OrderQueue) << "\n\n";
+#endif
+        }
 
         ~BidAsk() = default;
 
@@ -630,7 +638,34 @@ namespace naoto::matching_engine
         {
             while (true)
             {
-                ObjectBatch<Order, BatchSize> *batch = nullptr;
+#ifdef NAOTO_SHARED_MEMORY
+                Order curOrder;
+                bool popped = IncomingOrders.TryPop(curOrder);
+
+                if (!popped)
+                {
+                    continue;
+                }
+
+                curOrder.ReceivedTimestamp = now_tsc();
+
+                if (curOrder.Action == OrderAction::EXECUTE)
+                {
+                    executeOrder(curOrder);
+                }
+                else if (curOrder.Action == OrderAction::CANCEL) [[likely]]
+                {
+                    if (curOrder.Side == OrderSide::BUY)
+                    {
+                        CancelOrder<OrderSide::BUY>(curOrder);
+                    }
+                    else
+                    {
+                        CancelOrder<OrderSide::SELL>(curOrder);
+                    }
+                }
+#else
+                OrderBatch *batch = nullptr;
 
                 if (IncomingOrders.TryPop(batch)) [[likely]]
                 {
@@ -656,7 +691,7 @@ namespace naoto::matching_engine
                         }
                     }
 
-                    bool released = OrdersPool.release(batch);
+                    bool released = OrdersPool.Release(batch);
 
                     if (!released) [[unlikely]]
                     {
@@ -664,6 +699,7 @@ namespace naoto::matching_engine
                         std::terminate();
                     }
                 }
+#endif
             }
         }
     };

@@ -1,6 +1,9 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
+#include <cstdio>
+#include <exception>
 #include <iostream>
 #include <readerwritercircularbuffer.h>
 #include <spsc_queue.hpp>
@@ -8,14 +11,16 @@
 
 namespace naoto
 {
+    // Free list backing a StoragePool of Size objects of type T.
+    template <typename T, size_t Size>
+    using StoragePoolFreeQueue = SpscQueue<T *, Size>;
+
     template <typename T, size_t Size>
     class StoragePool
     {
-        using FreeQueue = SpscQueue<T *, Size>;
-
     private:
         std::array<T, Size> Storage;
-        FreeQueue Free;
+        StoragePoolFreeQueue<T, Size> Free;
 
         alignas(64) size_t LocalHead;
         alignas(64) size_t LocalTail;

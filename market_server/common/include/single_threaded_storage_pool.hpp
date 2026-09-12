@@ -1,6 +1,8 @@
 #pragma once
 
+#include <array>
 #include <concepts>
+#include <cstddef>
 #include <iostream>
 #include <vector>
 
@@ -16,6 +18,7 @@ namespace naoto
 
     public:
         SingleThreadedStoragePool(void)
+            : FreeSize(Size)
         {
             std::cout << "Initializing storage pool with capacity: " << Size
                       << " objects.\n";

@@ -5,10 +5,10 @@
 #include <cstdint>
 #include <iomanip>
 #include <iostream>
+#include <system_conf.hpp>
 
 namespace naoto::order_gateway
 {
-    template <size_t MaxPositions>
     struct alignas(64) ClientState
     {
         uint32_t ClientId;

@@ -25,19 +25,27 @@ namespace naoto
         ((BatchSize == 0 && HasHandle<DerivedConsumer, T>)
          || (BatchSize > 0 && HasBatchHandle<DerivedConsumer, T, BatchSize>));
 
+    // Queue a Consumer pops from, and the batch it accumulates into.
+    // Unbatched (BatchSize == 0) consumers carry no buffer at all.
+    template <typename T, size_t QueueSize>
+    using ConsumerQueue = SpscQueueConsumer<T *, QueueSize>;
+
+    template <typename T, size_t BatchSize>
+    using ConsumerBuffer =
+        std::conditional_t<(BatchSize > 0), std::array<T *, BatchSize>,
+                           std::monostate>;
+
+    template <typename T, size_t PoolSize>
+    using ConsumerMempool = StoragePool<T, PoolSize>;
+
     template <typename DerivedConsumer, typename T, size_t QueueSize,
               size_t PoolSize, size_t BatchSize = 0, size_t Tag = 0>
     class Consumer
     {
-        using TQueue = SpscQueueConsumer<T *, QueueSize>;
-        using BufferType =
-            std::conditional_t<(BatchSize > 0), std::array<T *, BatchSize>,
-                               std::monostate>;
-
     protected:
-        TQueue Incoming;
-        StoragePool<T, PoolSize> &Mempool;
-        [[no_unique_address]] BufferType Buffer{};
+        ConsumerQueue<T, QueueSize> Incoming;
+        ConsumerMempool<T, PoolSize> &Mempool;
+        [[no_unique_address]] ConsumerBuffer<T, BatchSize> Buffer{};
 
         [[nodiscard]] bool FreeElement(
             T *element) noexcept // Caller"s responsability to check pointer
@@ -47,7 +55,7 @@ namespace naoto
 
     public:
         Consumer(SpscQueue<T *, QueueSize> *incoming,
-                 StoragePool<T, PoolSize> &mempool)
+                 ConsumerMempool<T, PoolSize> &mempool)
             : Incoming(incoming)
             , Mempool(mempool)
         {}

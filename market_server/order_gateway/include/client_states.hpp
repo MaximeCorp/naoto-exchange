@@ -5,23 +5,29 @@
 #include <client_delta.hpp>
 #include <client_state.hpp>
 #include <readerwritercircularbuffer.h>
+#include <system_conf.hpp>
 #include <vector>
 
 namespace naoto::order_gateway
 {
-    template <size_t MaxPositions>
     class ClientStates // Data coherence not guaranteed, pls update the right
                        // buffers yourself when using flush
     {
     private:
-        alignas(64) std::vector<ClientState<MaxPositions>> States1;
-        alignas(64) std::vector<ClientState<MaxPositions>> States2;
-        alignas(64) std::vector<ClientState<MaxPositions>> States3;
+        alignas(64) std::vector<ClientState> States1;
+        alignas(64) std::vector<ClientState> States2;
+        alignas(64) std::vector<ClientState> States3;
 
         alignas(
-            64) std::vector<std::array<ClientDelta<MaxPositions>, 3>> Deltas;
+            64) std::vector<std::array<ClientDelta, 3>> Deltas;
 
-        alignas(64) std::vector<uint8_t> Complete;
+        // Each slot is a real std::atomic<uint8_t> (value-initialised to 0
+        // in C++20) rather than a plain uint8_t wrapped in std::atomic_ref
+        // at every access point. Same memory orders, same semantics - the
+        // atomic_ref version compiles fine, this just makes the atomicity a
+        // property of the member instead of relying on every reader and
+        // writer remembering to wrap it.
+        alignas(64) std::vector<std::atomic<uint8_t>> Complete;
 
     public:
         ClientStates(size_t maxClients)
@@ -29,16 +35,16 @@ namespace naoto::order_gateway
             , States2(maxClients)
             , States3(maxClients)
             , Deltas(maxClients)
-            , Complete(maxClients, 0)
+            , Complete(maxClients)
         {}
 
         ClientStates(size_t maxClients,
-                     std::vector<ClientState<MaxPositions>> &states)
+                     std::vector<ClientState> &states)
             : States1(maxClients)
             , States2(maxClients)
             , States3(maxClients)
             , Deltas(maxClients)
-            , Complete(maxClients, 0)
+            , Complete(maxClients)
         {
             for (size_t i = 0; i < states.size(); ++i)
             {
@@ -52,24 +58,21 @@ namespace naoto::order_gateway
         [[nodiscard]] uint8_t
         GetComplete(const uint32_t clientId) const noexcept
         {
-            return std::atomic_ref(Complete[clientId])
-                .load(std::memory_order_acquire);
+            return Complete[clientId].load(std::memory_order_acquire);
         }
 
         [[nodiscard]] uint32_t GetClientId(const uint32_t clientFd) noexcept
         {
-            uint8_t complete = std::atomic_ref(Complete[clientFd])
-                                   .load(std::memory_order_acquire);
+            uint8_t complete = Complete[clientFd].load(std::memory_order_acquire);
             return complete == 0 ? States1[clientFd].ClientId
                 : complete == 1  ? States2[clientFd].ClientId
                                  : States3[clientFd].ClientId;
         }
 
-        [[nodiscard]] ClientState<MaxPositions>
+        [[nodiscard]] ClientState
         GetClientState(const uint32_t clientFd) const noexcept
         {
-            uint8_t complete = std::atomic_ref(Complete[clientFd])
-                                   .load(std::memory_order_acquire);
+            uint8_t complete = Complete[clientFd].load(std::memory_order_acquire);
             return complete == 0 ? States1[clientFd]
                 : complete == 1  ? States2[clientFd]
                                  : States3[clientFd];
@@ -77,9 +80,8 @@ namespace naoto::order_gateway
 
         [[nodiscard]] uint8_t GetClientAuth(const uint32_t clientFd) noexcept
         {
-            uint8_t complete = std::atomic_ref(Complete[clientFd])
-                                   .load(std::memory_order_acquire);
-            ClientState<MaxPositions> &curState = complete == 0
+            uint8_t complete = Complete[clientFd].load(std::memory_order_acquire);
+            ClientState &curState = complete == 0
                 ? States1[clientFd]
                 : complete == 1 ? States2[clientFd]
                                 : States3[clientFd];
@@ -92,7 +94,7 @@ namespace naoto::order_gateway
                                           int64_t *confirmed,
                                           int64_t *attempt) const noexcept
         {
-            ClientState<MaxPositions> curState = GetClientState(clientFd);
+            ClientState curState = GetClientState(clientFd);
 
             for (size_t i = 0; i < MaxPositions; ++i)
             {
@@ -110,10 +112,9 @@ namespace naoto::order_gateway
 
         void SetAuthStatus(const uint32_t clientFd, uint8_t auth) noexcept
         {
-            uint8_t complete = std::atomic_ref(Complete[clientFd])
-                                   .load(std::memory_order_relaxed);
+            uint8_t complete = Complete[clientFd].load(std::memory_order_relaxed);
 
-            ClientState<MaxPositions> &state = complete == 0
+            ClientState &state = complete == 0
                 ? States2[clientFd]
                 : (complete == 1 ? States3[clientFd] : States1[clientFd]);
 
@@ -122,18 +123,17 @@ namespace naoto::order_gateway
 
         // Producer methods
         void SetClientState(
-            const ClientAccountSnapshot<MaxPositions> *response) noexcept
+            const ClientAccountSnapshot *response) noexcept
         {
             const uint32_t clientFd = response->ClientFd;
 
-            uint8_t complete = std::atomic_ref(Complete[clientFd])
-                                   .load(std::memory_order_relaxed);
+            uint8_t complete = Complete[clientFd].load(std::memory_order_relaxed);
 
-            ClientState<MaxPositions> &ref = complete == 0
+            ClientState &ref = complete == 0
                 ? States1[clientFd]
                 : (complete == 1 ? States2[clientFd] : States3[clientFd]);
 
-            ClientState<MaxPositions> *state = complete == 0
+            ClientState *state = complete == 0
                 ? &States2[clientFd]
                 : (complete == 1 ? &States3[clientFd] : &States1[clientFd]);
 
@@ -154,10 +154,9 @@ namespace naoto::order_gateway
         void SetClientAssets(const uint32_t clientId, const int64_t confirmed,
                              const int64_t attempt, uint16_t assetId) noexcept
         {
-            uint8_t complete = std::atomic_ref(Complete[clientId])
-                                   .load(std::memory_order_relaxed);
+            uint8_t complete = Complete[clientId].load(std::memory_order_relaxed);
 
-            ClientState<MaxPositions> &toChange = complete == 0
+            ClientState &toChange = complete == 0
                 ? States2[clientId]
                 : (complete == 1 ? States3[clientId] : States1[clientId]);
 
@@ -176,13 +175,12 @@ namespace naoto::order_gateway
 
         void FlushTripleBuffer(const uint32_t clientFd) noexcept
         {
-            uint8_t complete = std::atomic_ref(Complete[clientFd])
-                                   .load(std::memory_order_relaxed);
+            uint8_t complete = Complete[clientFd].load(std::memory_order_relaxed);
 
-            std::array<ClientDelta<MaxPositions>, 3> &curDelta =
+            std::array<ClientDelta, 3> &curDelta =
                 Deltas[clientFd];
 
-            ClientState<MaxPositions> *curState = complete == 0
+            ClientState *curState = complete == 0
                 ? &States2[clientFd]
                 : (complete == 1 ? &States3[clientFd] : &States1[clientFd]);
 
@@ -198,13 +196,12 @@ namespace naoto::order_gateway
 
             complete = complete == 2 ? 0 : complete + 1;
 
-            std::atomic_ref(Complete[clientFd])
-                .store(complete, std::memory_order_release);
+            Complete[clientFd].store(complete, std::memory_order_release);
 
             // Assumption: the client details will always contain MaxPositions
             // assets (even if some aren't used)
 
-            ClientState<MaxPositions> *newState = complete == 0
+            ClientState *newState = complete == 0
                 ? &States2[clientFd]
                 : (complete == 1 ? &States3[clientFd] : &States1[clientFd]);
 

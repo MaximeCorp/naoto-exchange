@@ -15,7 +15,7 @@ int main(int argc, char **argv)
         0x85, 0x86, 0xdd, 0xaa, 0x92, 0xee, 0x7d, 0x94, 0xd1, 0x38
     };
 
-    ClientState<16> client1;
+    ClientState client1;
     client1.ClientId = 0;
     client1.Key = testKey;
 
@@ -29,7 +29,7 @@ int main(int argc, char **argv)
     client1.Authorized = 0;
     client1.Connected = -1;
 
-    ClientState<16> client2;
+    ClientState client2;
     client2.ClientId = 1;
     client2.Key = testKey;
 
@@ -43,7 +43,7 @@ int main(int argc, char **argv)
     client2.Authorized = 0;
     client2.Connected = -1;
 
-    ClientState<16> client3;
+    ClientState client3;
     client3.ClientId = 2;
     client3.Key = testKey;
 
@@ -57,7 +57,7 @@ int main(int argc, char **argv)
     client3.Authorized = 0;
     client3.Connected = -1;
 
-    std::vector<ClientState<16>> clients;
+    std::vector<ClientState> clients;
 
     clients.push_back(client1);
     clients.push_back(client2);

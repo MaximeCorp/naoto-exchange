@@ -4,24 +4,30 @@
 #include <client_delta.hpp>
 #include <client_state.hpp>
 #include <readerwritercircularbuffer.h>
+#include <system_conf.hpp>
 #include <vector>
 
 namespace naoto::account_service
 {
-    template <size_t MaxPositions>
     class ClientStates // Data coherence not guaranteed, pls update the right
                        // buffers yourself when using flush
     {
     private:
-        alignas(64) std::vector<ClientState<MaxPositions>> States1;
-        alignas(64) std::vector<ClientState<MaxPositions>> States2;
-        alignas(64) std::vector<ClientState<MaxPositions>> States3;
+        alignas(64) std::vector<ClientState> States1;
+        alignas(64) std::vector<ClientState> States2;
+        alignas(64) std::vector<ClientState> States3;
 
         alignas(
-            64) std::vector<std::array<ClientDelta<MaxPositions>, 3>> Deltas;
+            64) std::vector<std::array<ClientDelta, 3>> Deltas;
         alignas(64) std::vector<std::array<uint64_t, 3>> SequenceIds;
 
-        alignas(64) std::vector<uint8_t> Complete;
+        // Each slot is a real std::atomic<uint8_t> (value-initialised to 0
+        // in C++20) rather than a plain uint8_t wrapped in std::atomic_ref
+        // at every access point. Same memory orders, same semantics - the
+        // atomic_ref version compiles fine, this just makes the atomicity a
+        // property of the member instead of relying on every reader and
+        // writer remembering to wrap it.
+        alignas(64) std::vector<std::atomic<uint8_t>> Complete;
 
     public:
         ClientStates(size_t maxClients)
@@ -30,7 +36,7 @@ namespace naoto::account_service
             , States3(maxClients)
             , Deltas(maxClients)
             , SequenceIds(maxClients)
-            , Complete(maxClients, 0)
+            , Complete(maxClients)
         {
             for (size_t i = 0; i < maxClients; ++i)
             {
@@ -42,13 +48,13 @@ namespace naoto::account_service
         }
 
         ClientStates(size_t maxClients,
-                     std::vector<ClientState<MaxPositions>> &states)
+                     std::vector<ClientState> &states)
             : States1(maxClients)
             , States2(maxClients)
             , States3(maxClients)
             , Deltas(maxClients)
             , SequenceIds(maxClients)
-            , Complete(maxClients, 0)
+            , Complete(maxClients)
         {
             for (size_t i = 0; i < maxClients; ++i)
             {
@@ -70,34 +76,31 @@ namespace naoto::account_service
         [[nodiscard]] uint8_t
         GetComplete(const uint32_t clientId) const noexcept
         {
-            return std::atomic_ref(Complete[clientId])
-                .load(std::memory_order_acquire);
+            return Complete[clientId].load(std::memory_order_acquire);
         }
 
-        [[nodiscard]] const ClientState<MaxPositions>
+        [[nodiscard]] const ClientState
         GetClientState(const uint32_t clientId) const noexcept
         {
-            uint8_t complete = std::atomic_ref(Complete[clientId])
-                                   .load(std::memory_order_acquire);
+            uint8_t complete = Complete[clientId].load(std::memory_order_acquire);
             return complete == 0 ? States1[clientId]
                 : complete == 1  ? States2[clientId]
                                  : States3[clientId];
         }
 
         // Producer methods
-        void SetClientState(const ClientState<MaxPositions> &clientState,
+        void SetClientState(const ClientState &clientState,
                             uint64_t sequenceId) noexcept
         {
             const uint32_t clientId = clientState.ClientId;
 
-            uint8_t complete = std::atomic_ref(Complete[clientId])
-                                   .load(std::memory_order_relaxed);
+            uint8_t complete = Complete[clientId].load(std::memory_order_relaxed);
 
-            ClientState<MaxPositions> &toChange = complete == 0
+            ClientState &toChange = complete == 0
                 ? States2[clientId]
                 : (complete == 1 ? States3[clientId] : States1[clientId]);
 
-            const ClientState<MaxPositions> &ref = complete == 0
+            const ClientState &ref = complete == 0
                 ? States1[clientId]
                 : (complete == 1 ? States2[clientId] : States3[clientId]);
 
@@ -127,10 +130,9 @@ namespace naoto::account_service
                              const int64_t attempt, uint16_t assetId,
                              uint64_t sequenceId) noexcept
         {
-            uint8_t complete = std::atomic_ref(Complete[clientId])
-                                   .load(std::memory_order_relaxed);
+            uint8_t complete = Complete[clientId].load(std::memory_order_relaxed);
 
-            ClientState<MaxPositions> &toChange = complete == 0
+            ClientState &toChange = complete == 0
                 ? States2[clientId]
                 : (complete == 1 ? States3[clientId] : States1[clientId]);
 
@@ -153,13 +155,12 @@ namespace naoto::account_service
 
         void FlushTripleBuffer(const uint32_t clientId) noexcept
         {
-            uint8_t complete = std::atomic_ref(Complete[clientId])
-                                   .load(std::memory_order_relaxed);
+            uint8_t complete = Complete[clientId].load(std::memory_order_relaxed);
 
-            std::array<ClientDelta<MaxPositions>, 3> &curDelta =
+            std::array<ClientDelta, 3> &curDelta =
                 Deltas[clientId];
 
-            ClientState<MaxPositions> *curState = complete == 0
+            ClientState *curState = complete == 0
                 ? &States2[clientId]
                 : (complete == 1 ? &States3[clientId] : &States1[clientId]);
 
@@ -176,8 +177,7 @@ namespace naoto::account_service
 
             complete = complete == 2 ? 0 : complete + 1;
 
-            std::atomic_ref(Complete[clientId])
-                .store(complete, std::memory_order_release);
+            Complete[clientId].store(complete, std::memory_order_release);
 
             // Assumption: the client details will always contain MaxPositions
             // assets (even if some aren't used)
@@ -187,7 +187,7 @@ namespace naoto::account_service
                 : (complete == 1 ? SequenceIds[clientId][2]
                                  : SequenceIds[clientId][0]);
 
-            ClientState<MaxPositions> *newState = complete == 0
+            ClientState *newState = complete == 0
                 ? &States2[clientId]
                 : (complete == 1 ? &States3[clientId] : &States1[clientId]);
 

@@ -6,8 +6,7 @@ namespace naoto::account_service
 {
     void ClientRequestProcessor::ProcessMessage(void)
     {
-        ObjectBatch<RoutedAuthRequest, AccountEpollReceiveBatchSize> *curBatch =
-            nullptr;
+        AuthRequestBatch *curBatch = nullptr;
 
         if (IncomingMessages.TryPop(curBatch)) [[likely]]
         {
@@ -23,7 +22,7 @@ namespace naoto::account_service
                 uint32_t clientId = curMessage.ClientId;
                 const std::array<uint8_t, 32> &key = curMessage.Key;
 
-                ClientState<MaxPositions> curClient =
+                ClientState curClient =
                     States.GetClientState(clientId);
 
                 if (curMessage.RequestType == 'A')
@@ -44,15 +43,14 @@ namespace naoto::account_service
                         && gatewayId != 10)
                     {
                         // Client connection denied
-                        ClientAccountSnapshot<MaxPositions> *curResponse =
+                        ClientAccountSnapshot *curResponse =
                             ResponsesPool.Acquire();
                         curResponse->Clear();
                         curResponse->Status = 'R';
                         curResponse->ClientId = clientId;
                         curResponse->ClientFd = curMessage.ClientFd;
 
-                        RoutedMessage<ClientAccountSnapshot<MaxPositions>>
-                            toPush;
+                        AccountResponse toPush;
 
                         toPush.GatewayId = gatewayId;
                         toPush.Message = curResponse;
@@ -67,15 +65,14 @@ namespace naoto::account_service
                     if (!curClient.CheckKey(key))
                     {
                         // Send refuse response: wrong credentials
-                        ClientAccountSnapshot<MaxPositions> *curResponse =
+                        ClientAccountSnapshot *curResponse =
                             ResponsesPool.Acquire();
                         curResponse->Clear();
                         curResponse->Status = 'C';
                         curResponse->ClientId = clientId;
                         curResponse->ClientFd = curMessage.ClientFd;
 
-                        RoutedMessage<ClientAccountSnapshot<MaxPositions>>
-                            toPush;
+                        AccountResponse toPush;
 
                         toPush.GatewayId = gatewayId;
                         toPush.Message = curResponse;
@@ -88,7 +85,7 @@ namespace naoto::account_service
                     }
 
                     // Send details
-                    ClientAccountSnapshot<MaxPositions> *curResponse =
+                    ClientAccountSnapshot *curResponse =
                         ResponsesPool.Acquire();
                     curResponse->Status = 'A';
                     curResponse->SequenceId = 0; // Handle sequence ID later
@@ -98,7 +95,7 @@ namespace naoto::account_service
                     curResponse->Confirmed = curClient.Confirmed;
                     curResponse->Attempt = curClient.Attempt;
 
-                    RoutedMessage<ClientAccountSnapshot<MaxPositions>> toPush;
+                    AccountResponse toPush;
 
                     toPush.GatewayId = gatewayId;
                     toPush.Message = curResponse;
@@ -130,17 +127,9 @@ namespace naoto::account_service
     }
 
     ClientRequestProcessor::ClientRequestProcessor(
-        ClientStates<MaxPositions> &states,
-        SpscQueue<
-            ObjectBatch<RoutedAuthRequest, AccountEpollReceiveBatchSize> *,
-            MaxClients> *incomingMessages,
-        SpscQueue<RoutedMessage<ClientAccountSnapshot<MaxPositions>>,
-                  MaxClients> *responsesSend,
-        StoragePool<
-            ObjectBatch<RoutedAuthRequest, AccountEpollReceiveBatchSize>,
-            AccountResponsePoolSize> &messagesPool,
-        StoragePool<ClientAccountSnapshot<MaxPositions>,
-                    AccountResponsePoolSize> &responsesPool)
+        ClientStates &states, AuthRequestQueue *incomingMessages,
+        AccountResponseQueue *responsesSend, AuthRequestMempool &messagesPool,
+        AccountResponseMempool &responsesPool)
         : States(states)
         , IncomingMessages(incomingMessages)
         , ResponsesSend(responsesSend)

@@ -13,6 +13,8 @@
 #include <rte_lcore.h>
 #include <rte_mbuf.h>
 #include <rte_udp.h>
+#include <system_conf.hpp>
+#include <udp_multicast_types.hpp>
 #include <variant>
 
 namespace naoto
@@ -26,8 +28,7 @@ namespace naoto
         { t.SequenceId } -> std::convertible_to<uint32_t>;
     };
 
-    template <typename DeriverEmitter, typename T, size_t BatchSize = 0,
-              size_t MTU = 1500>
+    template <typename DeriverEmitter, typename T, size_t BatchSize = 0>
     class UdpMulticastEmitter
     {
         static constexpr size_t ObjectsPerPacket =
@@ -40,13 +41,8 @@ namespace naoto
         static constexpr size_t MaxPackets =
             BatchSize / ObjectsPerPacket + (BatchSize % ObjectsPerPacket != 0);
 
-        using PacketsBuffer =
-            std::conditional_t<(BatchSize > 0),
-                               std::array<rte_mbuf *, MaxPackets>,
-                               std::monostate>;
-
     protected:
-        [[no_unique_address]] PacketsBuffer Packets;
+        [[no_unique_address]] UdpPacketsBuffer<BatchSize, MaxPackets> Packets;
         uint32_t SequenceId;
         uint16_t PortId;
         uint16_t QueueId;

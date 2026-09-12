@@ -65,7 +65,7 @@ namespace naoto::account_service
         int argc, char **argv, int serverPort, int maxEvents, int maxPending,
         const uint16_t portId, const uint16_t nbRxQueueSlots,
         const size_t dpdkPoolSize, const uint32_t dstIp, const uint16_t dstPort,
-        std::vector<ClientState<MaxPositions>> &clients)
+        std::vector<ClientState> &clients)
         : States(MaxClients, clients)
         , Server(serverPort, maxEvents, maxPending, RequestPool, &Requests,
                  GatewayFd)
@@ -98,11 +98,8 @@ namespace naoto::account_service
         std::thread keeperThread(&ClientRequestProcessor::StartLoop,
                                  &Processor);
 
-        std::thread dispatcherThread(
-            &GatewayResponseDispatcher<
-                MaxPositions, AccountResponseBatchSize, MaxGateways,
-                AccountResponsesResendBufferSize>::StartLoop,
-            &Dispatcher);
+        std::thread dispatcherThread(&GatewayResponseDispatcher::StartLoop,
+                                     &Dispatcher);
 
         std::thread writerThread(&ClientStatesWriter::StartLoop, &Writer);
 

@@ -123,8 +123,6 @@ def send_order(sock: socket.socket, naoto_perf: bool, order_id: int,
     payload = pack_order(naoto_perf, price, order_id, client_id, amount,
                           asset_id, order_type, side)
     sock.sendall(payload)
-    print("sent order")
-
 
 def recv_exact(sock: socket.socket, num_bytes: int, timeout: float):
     """Reads exactly num_bytes, handling TCP fragmentation, or returns
@@ -176,7 +174,7 @@ def main() -> int:
                         help="default: %(default)s")
     parser.add_argument("--asset", type=int, default=DEFAULT_ASSET_ID,
                         help="AssetId to trade (default: %(default)s)")
-    parser.add_argument("--price", type=int, default=100,
+    parser.add_argument("--price", type=int, default=1,
                         help="Price for the limit buy order -- arbitrary, "
                              "adjust to whatever makes sense for your "
                              "asset (default: %(default)s)")
@@ -232,6 +230,10 @@ def main() -> int:
 
     print()
 
+    time.sleep(1)
+
+    sent_count = 0
+
     # ---- Client 1: N individual MARKET SELL orders ------------------------
     sock_b = connect_and_auth(args.host, args.port, client_id=1, key=key)
     try:
@@ -241,10 +243,13 @@ def main() -> int:
                        client_id=1, price=0,  # ignored for MARKET orders
                        amount=args.sell_amount, asset_id=args.asset,
                        order_type=ORDER_TYPE_MARKET, side=ORDER_SIDE_SELL)
+            sent_count += 1
     finally:
         sock_b.close()
 
     print("\nDone.")
+
+    print(f"Sent {sent_count} orders.\n")
     return 0
 
 

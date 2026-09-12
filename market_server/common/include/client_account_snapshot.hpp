@@ -5,11 +5,11 @@
 #include <cstdint>
 #include <iomanip>
 #include <iostream>
+#include <system_conf.hpp>
 
 namespace naoto
 {
 #pragma pack(push, 1)
-    template <size_t MaxPositions>
     struct ClientAccountSnapshot
     {
         char Status; // 'A' for accepted, 'C' for wrong credentials, 'R' for

@@ -2,7 +2,10 @@
 
 #include <array>
 #include <concepts>
+#include <cstdint>
 #include <cstdlib>
+#include <functional>
+#include <iostream>
 #include <limits>
 #include <queue>
 #include <single_threaded_storage_pool.hpp>
@@ -60,10 +63,11 @@ namespace naoto
         }
 
     public:
-        SkipList(const size_t nodesPoolSize)
+        // Capacity is the PoolSize template parameter (the pool is a fixed
+        // std::array); the head and the tail each take one of those slots.
+        SkipList(void)
             : Head(nullptr)
             , Tail(nullptr)
-            , NodesPool(nodesPoolSize + 2) // The head and the tail
             , State(__rdtsc())
             , CurMax(0)
         {

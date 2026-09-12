@@ -3,7 +3,9 @@
 #include <atomic>
 #include <client_auth_request.hpp>
 #include <client_states.hpp>
-#include <epoll_server.hpp>
+#include <cstdlib>
+#include <cstring>
+#include <order_gateway_types.hpp>
 #include <order.hpp>
 #include <routed_auth_request.hpp>
 #include <spsc_queue.hpp>
@@ -17,37 +19,25 @@
 
 namespace naoto::order_gateway
 {
-    template <size_t BatchSize, size_t MaxPositions>
-    class GatewayServer
-        : public EpollServer<GatewayServer<BatchSize, MaxPositions>, Order,
-                             BatchSize, ClientAuthRequest>
+    class GatewayServer : public GatewayServerBase
     {
-        using Base = EpollServer<GatewayServer<BatchSize, MaxPositions>, Order,
-                                 BatchSize, ClientAuthRequest>;
-        using DisconnectQueue = SpscQueueProducer<uint32_t, GatewayMaxClients>;
-        using GatewayRequestQueue =
-            SpscQueueProducer<RoutedAuthRequest *, GatewayMaxClients>;
-        using OrderQueue = SpscQueue<ObjectBatch<Order, BatchSize> *,
-                                     GatewayEpollReceiveQueueSize>;
-
     private:
         VersionedFd &AccountFd;
         uint16_t GatewayId;
-        ClientStates<MaxPositions> &States;
-        DisconnectQueue OutgoingDisconnects;
-        StoragePool<RoutedAuthRequest> &GatewayReqPool;
-        GatewayRequestQueue OutgoingRequests;
+        ClientStates &States;
+        DisconnectProducer OutgoingDisconnects;
+        AuthRequestMempool &GatewayReqPool;
+        AuthRequestProducer OutgoingRequests;
 
     public:
         GatewayServer(
             const int port, const int maxEvents, const int maxPending,
-            StoragePool<ObjectBatch<Order, BatchSize>> &pool,
-            OrderQueue *orders, ClientStates<MaxPositions> &states,
-            VersionedFd &accountFd,
-            SpscQueue<uint32_t, GatewayMaxClients> *outgoingDisconnects,
-            StoragePool<RoutedAuthRequest> &gatewayReqPool,
-            SpscQueue<RoutedAuthRequest *, GatewayMaxClients> *outgoingRequests)
-            : Base(port, maxEvents, maxPending, pool, orders)
+            OrderBatchMempool &pool, OrderBatchQueue *orders,
+            ClientStates &states, VersionedFd &accountFd,
+            DisconnectQueue *outgoingDisconnects,
+            AuthRequestMempool &gatewayReqPool,
+            AuthRequestQueue *outgoingRequests)
+            : GatewayServerBase(port, maxEvents, maxPending, pool, orders)
             , AccountFd(accountFd)
             , GatewayId(std::stoul(std::getenv("GATEWAY_ID") ?: "0"))
             , States(states)
@@ -59,7 +49,7 @@ namespace naoto::order_gateway
         void FirstMessageHandle(ClientAuthRequest *message,
                                 uint32_t fd) noexcept
         {
-            RoutedAuthRequest *finalRequest = GatewayReqPool.acquire();
+            RoutedAuthRequest *finalRequest = GatewayReqPool.Acquire();
 
             if (!finalRequest) [[unlikely]]
             {
@@ -81,7 +71,7 @@ namespace naoto::order_gateway
                              "request sender.\n\n";
 
                 // TODO : handle failure here
-                if (!GatewayReqPool.localRelease(finalRequest)) [[unlikely]]
+                if (!GatewayReqPool.LocalRelease(finalRequest)) [[unlikely]]
                 {
                     // TODO : here too
                 }
@@ -92,7 +82,7 @@ namespace naoto::order_gateway
             }
         }
 
-        void BatchHandle(ObjectBatch<Order, BatchSize> *batch,
+        void BatchHandle(OrderBatch *batch,
                          uint32_t fd) noexcept
         {
 #ifdef NAOTO_PERF

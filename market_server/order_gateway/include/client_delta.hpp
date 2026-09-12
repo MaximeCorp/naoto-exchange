@@ -3,10 +3,10 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <system_conf.hpp>
 
 namespace naoto::order_gateway
 {
-    template <size_t MaxPositions>
     struct ClientDelta
     {
         // std::array<uint16_t, MaxPositions> AssetId; // Might be needed for

@@ -3,22 +3,32 @@
 #include <arpa/inet.h>
 #include <array>
 #include <bytes_buffer.hpp>
+#include <cerrno>
 #include <client_states.hpp>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <etcd/KeepAlive.hpp>
 #include <etcd/SyncClient.hpp>
 #include <etcd/Watcher.hpp>
 #include <gateway_handshake.hpp>
+#include <iostream>
 #include <local_attempts.hpp>
+#include <memory>
 #include <netdb.h>
 #include <netinet/tcp.h>
 #include <nlohmann/json.hpp>
 #include <order.hpp>
 #include <order_confirmation.hpp>
+#include <order_gateway_types.hpp>
 #include <order_risk_check.hpp>
 #include <readerwritercircularbuffer.h>
+#include <shared_memory_types.hpp>
+#include <spsc_queue.hpp>
 #include <storage_pool.hpp>
+#include <string>
 #include <system_conf.hpp>
+#include <unistd.h>
 #include <vector>
 #include <versioned_fd.hpp>
 
@@ -28,36 +38,33 @@
 
 namespace naoto::order_gateway
 {
-    template <size_t BatchSize, size_t MaxAsset, size_t MaxPositions,
-              size_t MaxClients>
     class OrderRouter
     {
-        using OrderQueue = SpscQueueConsumer<ObjectBatch<Order, BatchSize> *,
-                                             GatewayEpollReceiveQueueSize>;
-
     private:
-        ClientStates<MaxPositions>
+        ClientStates
             &clientStates; // Only for read (another object will write in it)
-        std::array<LocalAttempts<MaxPositions>, MaxClients> LocalAttempt;
-        std::array<uint32_t, MaxClients> LocalSessionId;
+        std::array<LocalAttempts, GatewayMaxClients> LocalAttempt;
+        std::array<uint32_t, GatewayMaxClients> LocalSessionId;
 
-        StoragePool<ObjectBatch<Order, BatchSize>> &OrdersPool;
-        std::array<VersionedFd, MaxAsset> MatchingEngines;
-        std::array<BytesBuffer<BatchSize * sizeof(Order)>, MaxAsset>
-            OrderBuffer;
+        OrderBatchMempool &OrdersPool;
+#ifdef NAOTO_SHARED_MEMORY
+        OrderProducer OutgoingOrder;
+#else
+        std::array<VersionedFd, MaxAssets> MatchingEngines;
+        std::array<OrderResendBuffer, MaxAssets> OrderBuffer;
         size_t OrderOffset;
-
-        std::array<BytesBuffer<BatchSize * sizeof(OrderConfirmation)>,
-                   MaxClients>
+#endif
+        std::array<ConfirmationResendBuffer, GatewayMaxClients>
             ConfirmationBuffer;
         VersionedFd &AccountFd;
-        OrderQueue Orders;
         std::shared_ptr<etcd::KeepAlive> KeepAlive;
         std::unique_ptr<etcd::SyncClient> EtcdClient;
         std::unique_ptr<etcd::Watcher> EtcdMEWatcher;
         std::unique_ptr<etcd::Watcher> EtcdAccountServiceWatcher;
+        OrderBatchConsumer Orders;
         const uint16_t GatewayId;
         uint64_t OrdersCount;
+        OrderConfirmationProducer OutgoingConfirmation;
 
         [[nodiscard]] int32_t connectToService(const std::string &service_addr)
         {
@@ -104,6 +111,7 @@ namespace naoto::order_gateway
             return fd;
         }
 
+#ifndef NAOTO_SHARED_MEMORY
         void etcdOnMEResponse(etcd::Response &resp) noexcept
         {
             if (resp.error_code() != 0)
@@ -159,6 +167,7 @@ namespace naoto::order_gateway
                 }
             }
         }
+#endif
 
         void etcdOnAccountServiceResponse(etcd::Response &resp) noexcept
         {
@@ -270,6 +279,7 @@ namespace naoto::order_gateway
                 std::cerr << "KeepAlive active\n";
             }
 
+#ifndef NAOTO_SHARED_MEMORY
             auto existingME = EtcdClient->ls("/matching-engines/");
             for (auto &kv : existingME.values())
             {
@@ -286,6 +296,7 @@ namespace naoto::order_gateway
             }
 
             int64_t revisionME = existingME.index();
+#endif
 
             GatewayHandshake handshake;
             handshake.GatewayId = std::stoi(machine_id);
@@ -330,11 +341,13 @@ namespace naoto::order_gateway
 
             int64_t revisionAccountService = existingAccountService.index();
 
+#ifndef NAOTO_SHARED_MEMORY
             std::string engine_addr;
             EtcdMEWatcher = std::make_unique<etcd::Watcher>(
                 *EtcdClient, "/matching-engines/", revisionME + 1,
                 [this](etcd::Response resp) { this->etcdOnMEResponse(resp); },
                 true);
+#endif
 
             EtcdAccountServiceWatcher = std::make_unique<etcd::Watcher>(
                 *EtcdClient, "/account-service/", revisionAccountService + 1,
@@ -345,16 +358,18 @@ namespace naoto::order_gateway
         }
 
         template <typename T>
-        [[nodiscard]] bool
-        DrainBuffer(BytesBuffer<BatchSize * sizeof(T)> &buffer,
-                    const uint32_t fd) noexcept
+        [[nodiscard]] bool DrainBuffer(
+            BytesBuffer<GatewayEpollReceiveBatchSize * sizeof(T)> &buffer,
+            const uint32_t fd) noexcept
         {
             size_t totalSent = 0;
 
+#ifndef NAOTO_SHARED_MEMORY
             if constexpr (std::is_same_v<T, Order>)
             {
                 totalSent = OrderOffset;
             }
+#endif
 
             const uint8_t *data = buffer.GetData();
 
@@ -374,6 +389,7 @@ namespace naoto::order_gateway
                         continue;
                     }
 
+#ifndef NAOTO_SHARED_MEMORY
                     if constexpr (std::is_same_v<T, Order>)
                     {
                         auto [sentOrders, sentBytes] =
@@ -382,7 +398,8 @@ namespace naoto::order_gateway
                         buffer.Shift(sentOrders * sizeof(Order));
                         OrderOffset = sentBytes;
                     }
-                    else if constexpr (std::is_same_v<T, OrderConfirmation>)
+#endif
+                    if constexpr (std::is_same_v<T, OrderConfirmation>)
                     {
                         buffer.Shift(totalSent);
                     }
@@ -393,14 +410,17 @@ namespace naoto::order_gateway
 
             buffer.Clear();
 
+#ifndef NAOTO_SHARED_MEMORY
             if constexpr (std::is_same_v<T, Order>)
             {
                 OrderOffset = 0;
             }
+#endif
 
             return true;
         }
 
+#ifndef NAOTO_SHARED_MEMORY
         [[nodiscard]] bool SendOrder(const Order &curOrder,
                                      const uint64_t curVal) noexcept
         {
@@ -447,6 +467,7 @@ namespace naoto::order_gateway
 
             return true;
         }
+#endif
 
         void SendOrderConfirmation(const OrderConfirmation *confirmation,
                                    const uint32_t fd) noexcept
@@ -487,13 +508,12 @@ namespace naoto::order_gateway
                 return OrderConfirmationStatus::UserNotConnected;
             }
 
-            ClientState<MaxPositions> curState =
-                clientStates.GetClientState(fd);
+            ClientState curState = clientStates.GetClientState(fd);
 
             OrderConfirmationStatus status =
-                naoto::order_gateway::CheckOrderRisk<MaxPositions, MaxAsset>(
-                    curState, LocalAttempt[fd], LocalSessionId[fd], order,
-                    auth);
+                naoto::order_gateway::CheckOrderRisk(curState, LocalAttempt[fd],
+                                                     LocalSessionId[fd], order,
+                                                     auth);
 
             if (status == OrderConfirmationStatus::BadClientId) [[unlikely]]
             {
@@ -505,7 +525,7 @@ namespace naoto::order_gateway
 
         void consumeOrder(void) noexcept
         {
-            ObjectBatch<Order, BatchSize> *curBatch = nullptr;
+            OrderBatch *curBatch = nullptr;
 
             // TODO : find a way to clear confirmation resend buffer when new
             // connection comes
@@ -517,11 +537,13 @@ namespace naoto::order_gateway
                 {
                     Order &curOrder = (*curBatch)[i];
 
+#ifndef NAOTO_SHARED_MEMORY
                     VersionedFd &curSlot = MatchingEngines[curOrder.AssetId];
                     uint64_t curVal = curSlot.load(std::memory_order_acquire);
-
+#endif
                     OrderConfirmation curConfirmation;
 
+#ifndef NAOTO_SHARED_MEMORY
                     if (VersionedFd::Fd(curVal) == -1) [[unlikely]]
                     {
                         curConfirmation.Status =
@@ -529,9 +551,12 @@ namespace naoto::order_gateway
                     }
                     else
                     {
+#endif
                         curConfirmation.Status =
                             CheckOrderRisk(curFd, curOrder, curBatch->Auth);
+#ifndef NAOTO_SHARED_MEMORY
                     }
+#endif
 
                     constexpr uint64_t COUNTER_MASK = (1ULL << 48) - 1;
 
@@ -544,6 +569,7 @@ namespace naoto::order_gateway
                     if (curConfirmation.Status
                         == OrderConfirmationStatus::Accepted) [[likely]]
                     {
+#ifndef NAOTO_SHARED_MEMORY
                         bool drained = DrainBuffer<Order>(
                             OrderBuffer[curOrder.AssetId], curFd);
 
@@ -560,55 +586,31 @@ namespace naoto::order_gateway
                                 (uint8_t *)&curOrder, sizeof(Order));
                             continue;
                         }
+#endif
 
 #ifdef NAOTO_PERF
                         curOrder.RoutedTimestamp = now_tsc();
 #endif
 
+#ifdef NAOTO_SHARED_MEMORY
+                        if (OutgoingOrder.TryPush(curOrder))
+                        {
+#else
                         if (SendOrder(curOrder, curVal))
                         {
-                            drained = DrainBuffer<OrderConfirmation>(
-                                ConfirmationBuffer[curFd], curFd);
-
-                            if (!drained) [[unlikely]]
-                            {
-                                if (ConfirmationBuffer[curFd].CanAdd(
-                                        sizeof(OrderConfirmation))) [[unlikely]]
-                                {
-                                    ConfirmationBuffer[curFd].Add(
-                                        (uint8_t *)&curConfirmation,
-                                        sizeof(OrderConfirmation));
-                                }
-                            }
-                            else
-                            {
-                                SendOrderConfirmation(&curConfirmation, curFd);
-                            }
+#endif
+                            ClientMessage message{ curFd, curConfirmation };
+                            OutgoingConfirmation.Push(message);
                         }
                     }
                     else
                     {
-                        bool drained = DrainBuffer<OrderConfirmation>(
-                            ConfirmationBuffer[curFd], curFd);
-
-                        if (!drained) [[unlikely]]
-                        {
-                            if (ConfirmationBuffer[curFd].CanAdd(
-                                    sizeof(OrderConfirmation))) [[unlikely]]
-                            {
-                                ConfirmationBuffer[curFd].Add(
-                                    (uint8_t *)&curConfirmation,
-                                    sizeof(OrderConfirmation));
-                            }
-                        }
-                        else
-                        {
-                            SendOrderConfirmation(&curConfirmation, curFd);
-                        }
+                        ClientMessage message{ curFd, curConfirmation };
+                        OutgoingConfirmation.Push(message);
                     }
                 }
 
-                if (!OrdersPool.release(curBatch))
+                if (!OrdersPool.Release(curBatch))
                 {
                     perror("Failed mempool release.\n");
                 }
@@ -616,16 +618,26 @@ namespace naoto::order_gateway
         }
 
     public:
-        OrderRouter(StoragePool<ObjectBatch<Order, BatchSize>> &ordersPool,
-                    OrderQueue &orders, VersionedFd &accountFd,
-                    ClientStates<MaxPositions> &clientStates)
+        OrderRouter(OrderBatchMempool &ordersPool, OrderBatchQueue *orders,
+                    VersionedFd &accountFd, ClientStates &clientStates,
+                    OrderConfirmationQueue *outgoingConfirmation
+#ifdef NAOTO_SHARED_MEMORY
+                    ,
+                    OrderQueue *outgoingOrder
+#endif
+                    )
             : clientStates(clientStates)
             , OrdersPool(ordersPool)
+#ifdef NAOTO_SHARED_MEMORY
+            , OutgoingOrder(outgoingOrder)
+#else
             , OrderOffset(0)
+#endif
             , AccountFd(accountFd)
             , Orders(orders)
             , GatewayId(std::stoi(std::getenv("MACHINE_ID") ?: "0"))
             , OrdersCount(std::stoi(std::getenv("ORDERS_COUNT") ?: "0"))
+            , OutgoingConfirmation(outgoingConfirmation)
         {
             EtcdClientSetUp();
             LocalSessionId.fill(0);

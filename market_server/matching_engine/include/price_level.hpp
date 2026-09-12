@@ -118,9 +118,11 @@ namespace naoto::matching_engine
             return res;
         }
 
-        void ClearPriceLevel(
-            SingleThreadedStoragePool<OrderNode, MeOrderNodePoolSize>
-                &orderNodePool)
+        // Note: takes the pool as a template parameter rather than naming
+        // OrderNodeMempool, because matching_engine_types.hpp includes this
+        // header (PriceLevel is what the pools and maps are made of).
+        template <typename OrderNodePool>
+        void ClearPriceLevel(OrderNodePool &orderNodePool)
         {
             Size = 0;
             TotalAmount = 0;

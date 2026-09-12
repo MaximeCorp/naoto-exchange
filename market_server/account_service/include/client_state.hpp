@@ -4,10 +4,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <openssl/sha.h>
+#include <system_conf.hpp>
 
 namespace naoto::account_service
 {
-    template <size_t MaxPositions>
     struct alignas(64) ClientState
     {
         uint32_t ClientId;

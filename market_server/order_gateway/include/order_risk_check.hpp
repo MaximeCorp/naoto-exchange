@@ -4,13 +4,12 @@
 #include <local_attempts.hpp>
 #include <order.hpp>
 #include <order_confirmation.hpp>
+#include <system_conf.hpp>
 
 namespace naoto::order_gateway
 {
-    template <size_t MaxPositions, size_t MaxAsset>
-    [[nodiscard]] OrderConfirmationStatus
-    CheckOrderRisk(const ClientState<MaxPositions> &curState,
-                   LocalAttempts<MaxPositions> &localAttempt,
+    [[nodiscard]] inline OrderConfirmationStatus
+    CheckOrderRisk(const ClientState &curState, LocalAttempts &localAttempt,
                    uint32_t &localSessionId, const Order &order,
                    const uint8_t auth) noexcept
     {
@@ -40,7 +39,7 @@ namespace naoto::order_gateway
         {
             // Think about how to handle missing assetId
             // Should evict an asset that has attempt = 0
-            return assetId >= MaxAsset ? OrderConfirmationStatus::UnknownSymbol
+            return assetId >= MaxAssets ? OrderConfirmationStatus::UnknownSymbol
                                        : OrderConfirmationStatus::MaxPositions;
         }
 

@@ -19,7 +19,7 @@ namespace naoto
             : Size(0)
         {}
 
-        void Add(const uint8_t *data, const size_t size) noexcept
+        void Add([[maybe_unused]] const uint8_t *data, const size_t size) noexcept
         {
             Size += size;
         }

@@ -16,8 +16,11 @@ namespace naoto
     inline constexpr size_t TradeReportReceiveBufferSize = 1024;
     inline constexpr size_t TradeReportReceiveBatchSize = 16;
     inline constexpr size_t TradeReportReceiveQueueSize = 1024;
-    inline constexpr size_t TradeReportReceivePoolSize = 1024;
+    inline constexpr size_t TradeReportReceivePoolSize = 16384;
     inline constexpr size_t ClientStatesSwapBatchSize = 16;
+
+    inline constexpr size_t SharedMemoryQueueSize = 1024;
+    inline constexpr char SharedMemoryPath[] = "/me_gw_shm";
 
     inline constexpr size_t MeEpollReceiveBatchSize = 16;
     inline constexpr size_t MeOrderQueueSize = 1024;
@@ -47,14 +50,16 @@ namespace naoto
 
     inline constexpr size_t GatewayMaxClients = 128;
     inline constexpr size_t GatewayEpollReceiveBatchSize = 16;
-    inline constexpr size_t GatewayEpollReceiveQueueSize = 128;
-    inline constexpr size_t GatewayClientRequestResponseQueueSize = 128;
-    inline constexpr size_t GatewayClientRequestResponsePoolSize = 128;
+    inline constexpr size_t GatewayEpollReceiveQueueSize = 16384;
+    inline constexpr size_t GatewayClientRequestResponseQueueSize = 1024;
+    inline constexpr size_t GatewayClientRequestResponsePoolSize = 1024;
     inline constexpr size_t GatewayClientRequestResponseBatchSize = 16;
     inline constexpr size_t GatewayResendBufferSize = 32;
     inline constexpr size_t GatewayUpdateBufferSize = 1024;
     inline constexpr size_t GatewayRequestPoolSize = 128;
     inline constexpr size_t GatewayRequestQueueSize = 128;
+    inline constexpr size_t GatewayOrderConfirmationQueueSize = 16384;
+    inline constexpr size_t GatewayOrderPoolSize = 16384;
 
     inline constexpr size_t AccountEpollCore = 12;
     inline constexpr size_t AccountEpollReceiveQueueSize = 1024;

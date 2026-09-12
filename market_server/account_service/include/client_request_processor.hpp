@@ -1,5 +1,6 @@
 #pragma once
 
+#include <account_service_types.hpp>
 #include <client_account_snapshot.hpp>
 #include <client_states.hpp>
 #include <gateway_response_dispatcher.hpp>
@@ -16,21 +17,12 @@ namespace naoto::account_service
 
     class ClientRequestProcessor
     {
-        using MessageQueue = SpscQueueConsumer<
-            ObjectBatch<RoutedAuthRequest, AccountEpollReceiveBatchSize> *,
-            MaxClients>;
-        using ResponsesQueue = SpscQueueProducer<
-            RoutedMessage<ClientAccountSnapshot<MaxPositions>>, MaxClients>;
-
     private:
-        ClientStates<MaxPositions> &States;
-        MessageQueue IncomingMessages;
-        ResponsesQueue ResponsesSend;
-        StoragePool<
-            ObjectBatch<RoutedAuthRequest, AccountEpollReceiveBatchSize>,
-            AccountResponsePoolSize> &MessagesPool;
-        StoragePool<ClientAccountSnapshot<MaxPositions>,
-                    AccountResponsePoolSize> &ResponsesPool;
+        ClientStates &States;
+        AuthRequestConsumer IncomingMessages;
+        AccountResponseProducer ResponsesSend;
+        AuthRequestMempool &MessagesPool;
+        AccountResponseMempool &ResponsesPool;
 
         void ProcessMessage(void);
 
@@ -47,17 +39,10 @@ namespace naoto::account_service
 
     public:
         ClientRequestProcessor(
-            ClientStates<MaxPositions> &states,
-            SpscQueue<
-                ObjectBatch<RoutedAuthRequest, AccountEpollReceiveBatchSize> *,
-                MaxClients> *incomingMessages,
-            SpscQueue<RoutedMessage<ClientAccountSnapshot<MaxPositions>>,
-                      MaxClients> *responsesSend,
-            StoragePool<
-                ObjectBatch<RoutedAuthRequest, AccountEpollReceiveBatchSize>,
-                AccountResponsePoolSize> &messagesPool,
-            StoragePool<ClientAccountSnapshot<MaxPositions>,
-                        AccountResponsePoolSize> &responsesPool);
+            ClientStates &states, AuthRequestQueue *incomingMessages,
+            AccountResponseQueue *responsesSend,
+            AuthRequestMempool &messagesPool,
+            AccountResponseMempool &responsesPool);
 
         void StartLoop(void);
     };

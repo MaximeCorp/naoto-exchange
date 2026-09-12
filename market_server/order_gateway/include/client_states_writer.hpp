@@ -2,9 +2,12 @@
 
 #include <absl/container/flat_hash_set.h>
 #include <array>
+#include <cstdlib>
+#include <iostream>
+#include <string>
 #include <client_account_snapshot.hpp>
 #include <client_states.hpp>
-#include <consumer.hpp>
+#include <order_gateway_types.hpp>
 #include <flat_hash_map.hpp>
 #include <object_batch.hpp>
 #include <order_state_report.hpp>
@@ -15,64 +18,37 @@
 
 namespace naoto::order_gateway
 {
-    template <size_t MaxClients, size_t MaxPositions, size_t BufferSize>
     class ClientStatesWriter
-        : public Consumer<
-              ClientStatesWriter<MaxClients, MaxPositions, BufferSize>,
-              OrderStateReport, TradeReportReceiveQueueSize,
-              TradeReportReceivePoolSize, TradeReportReceiveBatchSize>
-        , public Consumer<
-              ClientStatesWriter<MaxClients, MaxPositions, BufferSize>,
-              ObjectBatch<ClientAccountSnapshot<MaxPositions>,
-                          GatewayClientRequestResponseBatchSize>,
-              GatewayClientRequestResponseQueueSize,
-              GatewayClientRequestResponsePoolSize>
+        : public StatesWriterReportBase
+        , public StatesWriterResponseBase
 
     {
-        using ReportBase =
-            Consumer<ClientStatesWriter<MaxClients, MaxPositions, BufferSize>,
-                     OrderStateReport, TradeReportReceiveQueueSize,
-                     TradeReportReceivePoolSize, TradeReportReceiveBatchSize>;
-        using ReportQueue =
-            SpscQueue<OrderStateReport *, TradeReportReceiveQueueSize>;
-
-        using ResponseBatch =
-            ObjectBatch<ClientAccountSnapshot<MaxPositions>,
-                        GatewayClientRequestResponseBatchSize>;
-        using ResponseBase =
-            Consumer<ClientStatesWriter<MaxClients, MaxPositions, BufferSize>,
-                     ObjectBatch<ClientAccountSnapshot<MaxPositions>,
-                                 GatewayClientRequestResponseBatchSize>,
-                     GatewayClientRequestResponseQueueSize,
-                     GatewayClientRequestResponsePoolSize>;
-        using ResponseQueue = SpscQueue<ResponseBatch *, GatewayMaxClients>;
-
-        using DisconnectQueue = SpscQueueConsumer<uint32_t, MaxClients>;
-        using GatewayReqQueue =
-            SpscQueue<RoutedAuthRequest *, GatewayMaxClients>;
-
     private:
         const uint16_t GatewayId;
-        ClientStates<MaxPositions> &States;
-        FlatHashMap<uint32_t, uint32_t, MaxClients> ClientsFd;
+        ClientStates &States;
+        ClientFdMap ClientsFd;
         absl::flat_hash_set<uint32_t> Touched;
-        std::array<OrderStateReport, BufferSize> UpdatesBuffer;
+        TradeReportUpdatesBuffer UpdatesBuffer;
         uint64_t LastSeq;
-        DisconnectQueue &IncomingDisconnects;
-        StoragePool<RoutedAuthRequest> &GatewayReqPool;
-        GatewayReqQueue &OutgoingReq;
+        // ASSUMPTION: these two were declared as references
+        // (SpscQueueConsumer& / SpscQueue&) but initialised from queue
+        // pointers. Now held by value as consumer/producer handles, exactly
+        // like every other class in the project does.
+        DisconnectConsumer IncomingDisconnects;
+        AuthRequestMempool &GatewayReqPool;
+        AuthRequestProducer OutgoingReq;
 
     public:
-        ClientStatesWriter(ClientStates<MaxPositions> &states,
-                           ReportQueue *incomingReports,
-                           StoragePool<OrderStateReport> &reportPool,
-                           ResponseQueue *incomingResponses,
-                           StoragePool<ResponseBatch> &responsePool,
-                           SpscQueue<uint32_t, MaxClients> *incomingDisconnects,
-                           GatewayReqQueue *outgoingReq,
-                           StoragePool<RoutedAuthRequest> &gatewayReqPool)
-            : ReportBase(incomingReports, reportPool)
-            , ResponseBase(incomingResponses, responsePool)
+        ClientStatesWriter(ClientStates &states,
+                           TradeReportQueue *incomingReports,
+                           TradeReportMempool &reportPool,
+                           AccountResponseQueue *incomingResponses,
+                           AccountResponseMempool &responsePool,
+                           DisconnectQueue *incomingDisconnects,
+                           AuthRequestQueue *outgoingReq,
+                           AuthRequestMempool &gatewayReqPool)
+            : StatesWriterReportBase(incomingReports, reportPool)
+            , StatesWriterResponseBase(incomingResponses, responsePool)
             , GatewayId(std::stoi(std::getenv("MACHINE_ID") ?: "0"))
             , States(states)
             , LastSeq(0)
@@ -80,10 +56,10 @@ namespace naoto::order_gateway
             , GatewayReqPool(gatewayReqPool)
             , OutgoingReq(outgoingReq)
         {
-            Touched.reserve(BatchSize);
+            Touched.reserve(TradeReportReceiveBatchSize);
 
             // Fill with invalid SequenceId to mark as empty
-            for (size_t i = 0; i < BufferSize; ++i)
+            for (size_t i = 0; i < GatewayUpdateBufferSize; ++i)
             {
                 UpdatesBuffer[i].SequenceId = i + 1;
             }
@@ -102,7 +78,7 @@ namespace naoto::order_gateway
 
             LastSeq = report->SequenceId;
 
-            UpdatesBuffer[report->SequenceId & (BufferSize - 1)] = *report;
+            UpdatesBuffer[report->SequenceId & (GatewayUpdateBufferSize - 1)] = *report;
 
             uint32_t clientFd;
 
@@ -126,8 +102,7 @@ namespace naoto::order_gateway
             States.FlushTripleBuffer(clientFd);
         }
 
-        void Handle(std::array<OrderStateReport *, BatchSize> &reportBatch,
-                    size_t batchSize) noexcept
+        void Handle(TradeReportBatch &reportBatch, size_t batchSize) noexcept
         {
             std::cout << "Received market update batch of size " << batchSize
                       << "\n";
@@ -147,7 +122,7 @@ namespace naoto::order_gateway
 
                 LastSeq = report->SequenceId;
 
-                UpdatesBuffer[report->SequenceId & (BufferSize - 1)] = *report;
+                UpdatesBuffer[report->SequenceId & (GatewayUpdateBufferSize - 1)] = *report;
 
                 uint32_t clientFd;
 
@@ -191,13 +166,13 @@ namespace naoto::order_gateway
             Touched.clear();
         }
 
-        void Handle(ResponseBatch *responseBatch) noexcept
+        void Handle(AccountResponseBatch *responseBatch) noexcept
         {
             for (size_t i = 0; i < responseBatch->Size; ++i)
             {
-                ClientAccountSnapshot<MaxPositions> &response =
+                ClientAccountSnapshot &response =
                     (*responseBatch)[i];
-                if (UpdatesBuffer[response.SequenceId & (BufferSize - 1)]
+                if (UpdatesBuffer[response.SequenceId & (GatewayUpdateBufferSize - 1)]
                             .SequenceId
                         != response.SequenceId
                     && response.SequenceId != LastSeq) [[unlikely]]
@@ -205,7 +180,7 @@ namespace naoto::order_gateway
                     continue;
                     // Resend the request
                     RoutedAuthRequest *gatewayRequest =
-                        GatewayReqPool.acquire();
+                        GatewayReqPool.Acquire();
 
                     if (!gatewayRequest) [[unlikely]]
                     {
@@ -220,7 +195,7 @@ namespace naoto::order_gateway
                     gatewayRequest->Key.fill('R');
                     gatewayRequest->GatewayId = GatewayId;
 
-                    bool enqueued = OutgoingReq.try_enqueue(gatewayRequest);
+                    bool enqueued = OutgoingReq.TryPush(gatewayRequest);
 
                     if (!enqueued) [[unlikely]]
                     {
@@ -241,7 +216,7 @@ namespace naoto::order_gateway
                 while (seqId <= LastSeq)
                 {
                     OrderStateReport &curReport =
-                        UpdatesBuffer[seqId++ & (BufferSize - 1)];
+                        UpdatesBuffer[seqId++ & (GatewayUpdateBufferSize - 1)];
 
                     if (curReport.ClientId == response.ClientId)
                     {
@@ -299,8 +274,8 @@ namespace naoto::order_gateway
         {
             while (true)
             {
-                ReportBase::TryConsume();
-                ResponseBase::TryConsume();
+                StatesWriterReportBase::TryConsume();
+                StatesWriterResponseBase::TryConsume();
                 TryConsumeDisconnects();
             }
         }

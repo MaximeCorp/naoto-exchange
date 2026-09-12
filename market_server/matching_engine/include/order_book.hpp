@@ -5,35 +5,28 @@
 #include <order_node.hpp>
 #include <price_level.hpp>
 #include <single_threaded_storage_pool.hpp>
-#include <skip_list.hpp>
+#include <matching_engine_types.hpp>
+#include <system_conf.hpp>
 
 namespace naoto::matching_engine
 {
-    template <size_t FHMSize, size_t SkipListMaxLevel, size_t OrderMapSize,
-              typename Compare = std::less<std::int64_t>>
+    // Only the comparator is left as a template parameter (Bid and Ask need
+    // different ones); every size comes from system_conf.hpp.
+    template <typename Compare = std::less<std::int64_t>>
     class OrderBook
     {
     private:
-        FlatHashMap<int64_t, PriceLevel *, FHMSize> FastMap;
-        SkipList<int64_t, PriceLevel *, MeSkipListNodePoolSize,
-                 SkipListMaxLevel, Compare>
-            BestPricesMap;
-        SingleThreadedStoragePool<OrderNode, MeOrderNodePoolSize>
-            &OrderNodePool;
-        SingleThreadedStoragePool<PriceLevel, MePriceLevelPoolSize>
-            &PriceLevelPool;
+        PriceLevelMap FastMap;
+        PriceLevelSkipList<Compare> BestPricesMap;
+        OrderNodeMempool &OrderNodePool;
+        PriceLevelMempool &PriceLevelPool;
 
-        FlatHashMap<uint64_t, OrderNode *, OrderMapSize> &OrderMap;
+        OrderIdMap &OrderMap;
 
     public:
-        OrderBook(const size_t skipListNodesPoolSize,
-                  SingleThreadedStoragePool<OrderNode, MeOrderNodePoolSize>
-                      &orderNodePool,
-                  SingleThreadedStoragePool<PriceLevel, MePriceLevelPoolSize>
-                      &priceLevelPool,
-                  FlatHashMap<uint64_t, OrderNode *, OrderMapSize> &orderMap)
-            : BestPricesMap(skipListNodesPoolSize)
-            , OrderNodePool(orderNodePool)
+        OrderBook(OrderNodeMempool &orderNodePool,
+                  PriceLevelMempool &priceLevelPool, OrderIdMap &orderMap)
+            : OrderNodePool(orderNodePool)
             , PriceLevelPool(priceLevelPool)
             , OrderMap(orderMap)
         {}

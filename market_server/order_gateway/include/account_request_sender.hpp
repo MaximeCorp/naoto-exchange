@@ -1,6 +1,6 @@
 #pragma once
 
-#include <consumer.hpp>
+#include <order_gateway_types.hpp>
 #include <readerwritercircularbuffer.h>
 #include <routed_auth_request.hpp>
 #include <storage_pool.hpp>
@@ -9,26 +9,18 @@
 
 namespace naoto::order_gateway
 {
-    class GatewayRequestForwarder
-        : public Consumer<GatewayRequestForwarder, RoutedAuthRequest,
-                          GatewayRequestQueueSize, GatewayRequestPoolSize>
+    class GatewayRequestForwarder : public GatewayRequestForwarderBase
     {
-        using Base = Consumer<GatewayRequestForwarder, RoutedAuthRequest,
-                              GatewayRequestQueueSize, GatewayRequestPoolSize>;
-        using RequestQueue = SpscQueue<RoutedAuthRequest *, GatewayMaxClients>;
-
     private:
         VersionedFd &AccountFd;
 
         void SendRequest(RoutedAuthRequest *curRequest) noexcept;
 
     public:
-        GatewayRequestForwarder(
-            RequestQueue *requestsQueue,
-            StoragePool<RoutedAuthRequest, GatewayRequestPoolSize>
-                &requestsPool,
-            VersionedFd &accountFd)
-            : Base(requestsQueue, requestsPool)
+        GatewayRequestForwarder(AuthRequestQueue *requestsQueue,
+                                AuthRequestMempool &requestsPool,
+                                VersionedFd &accountFd)
+            : GatewayRequestForwarderBase(requestsQueue, requestsPool)
             , AccountFd(accountFd)
         {}
 
@@ -37,19 +29,16 @@ namespace naoto::order_gateway
 
     class AccountRequestSender
     {
-        using RequestQueue = SpscQueue<RoutedAuthRequest *, GatewayMaxClients>;
-
     private:
         GatewayRequestForwarder EpollConsumer;
         GatewayRequestForwarder StatesWriterConsumer;
 
     public:
         AccountRequestSender(
-            RequestQueue *epollRequests, RequestQueue *statesWriterRequests,
-            StoragePool<RoutedAuthRequest, GatewayRequestPoolSize> &epollPool,
-            StoragePool<RoutedAuthRequest, GatewayRequestPoolSize>
-                &statesWriterPool,
-            VersionedFd &accountFd)
+            AuthRequestQueue *epollRequests,
+            AuthRequestQueue *statesWriterRequests,
+            AuthRequestMempool &epollPool,
+            AuthRequestMempool &statesWriterPool, VersionedFd &accountFd)
             : EpollConsumer(epollRequests, epollPool, accountFd)
             , StatesWriterConsumer(statesWriterRequests, statesWriterPool,
                                    accountFd)

@@ -3,6 +3,14 @@ project(MarketServer LANGUAGES CXX)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
+find_program(CCACHE_PROGRAM ccache)
+if(CCACHE_PROGRAM)
+    set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+    message(STATUS "Using ccache: ${CCACHE_PROGRAM}")
+else()
+    message(STATUS "ccache not found - install it, rebuilds are much faster with it")
+endif()
+
 # Release by default. An -O0 build of this project is not representative
 # of anything: the CRTP layers don't inline and the hot paths are ~10x off.
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
@@ -16,6 +24,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -DNDEBUG -fno-omit-frame-pointer")
+set(CMAKE_CXX_FLAGS_DEBUG "-O1 -g -fno-omit-frame-pointer")
 
 set(ARTIFACTS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/artifacts" CACHE PATH
     "Directory bootstrap/*.sh installs DPDK and etcd-cpp-apiv3 into")
@@ -119,7 +128,7 @@ find_package(EtcdCpp REQUIRED)
 target_link_options(EtcdCpp::EtcdCpp INTERFACE
     "-Wl,-rpath,${EtcdCpp_ARTIFACT_DIR}/lib"
     "-Wl,--disable-new-dtags")
-
+    
 # ---------------------------------------------------------------- abseil
 # Used by order_gateway (flat_hash_map + flat_hash_set) and
 # client_details_provider (flat_hash_set only) for client-state lookups —
@@ -156,7 +165,7 @@ target_link_libraries(naoto_absl INTERFACE PkgConfig::ABSL)
 option(NAOTO_LTO "Whole-program link-time optimization (slow, RAM-heavy link step)" OFF)
 option(NAOTO_BUILD_TESTS "Build the GoogleTest suite under tests/" OFF)
 option(NAOTO_PERF "Turn on performances measurement with timestamps" OFF)
-option(NAOTO_ELASTIC "Scalable order gateways and matching engines." OFF)
+option(NAOTO_SHARED_MEMORY "Three processes, no scaling, but shared memory on the hot path" OFF)
 
 if(NAOTO_LTO)
     include(CheckIPOSupported)
@@ -164,14 +173,16 @@ if(NAOTO_LTO)
     if(NAOTO_IPO_OK AND CMAKE_BUILD_TYPE STREQUAL "Release")
         set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
     endif()
+else()
+    target_link_options(naoto_dpdk INTERFACE -fno-lto)
 endif()
 
 if (NAOTO_PERF)
     add_compile_definitions(NAOTO_PERF)
 endif()
 
-if (NAOTO_ELASTIC)
-    add_compile_definitions(NAOTO_ELASTIC)
+if (NAOTO_SHARED_MEMORY)
+    add_compile_definitions(NAOTO_SHARED_MEMORY)
 endif()
 
 add_subdirectory(third_party)

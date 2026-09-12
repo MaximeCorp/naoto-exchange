@@ -4,11 +4,13 @@
 #include <cstring>
 #include <iostream>
 #include <optional>
+#include <account_service_types.hpp>
 #include <order_state_report.hpp>
 #include <rte_eal.h>
 #include <rte_ethdev.h>
 #include <rte_lcore.h>
 #include <spsc_queue.hpp>
+#include <system_conf.hpp>
 #include <udp_multicast_receiver.hpp>
 
 #define RX_QUEUES 1
@@ -18,24 +20,16 @@
 
 namespace naoto::account_service
 {
-    template <size_t RingBufferSize, size_t BatchSize = 0>
     class TradeReportReceiver
     {
-        using ReportQueue =
-            SpscQueue<OrderStateReport *, TradeReportReceiveQueueSize>;
-
     private:
-        std::optional<UdpMulticastReceiver<
-            OrderStateReport, RingBufferSize, TradeReportReceiveQueueSize,
-            TradeReportReceivePoolSize, TradeReportReceiveBatchSize>>
-            ReportReceiver;
+        std::optional<TradeReportMulticastReceiver> ReportReceiver;
 
     public:
         // Must be called on a dedicated thread
         TradeReportReceiver(
-            int argc, char **argv, ReportQueue *incomingOrderStates,
-            StoragePool<OrderStateReport, TradeReportReceivePoolSize>
-                &orderStatesPool,
+            int argc, char **argv, TradeReportQueue *incomingOrderStates,
+            TradeReportMempool &orderStatesPool,
             const uint16_t portId, const uint16_t nbRxQueueSlots,
             const size_t poolSize, const uint32_t dstIp, const uint16_t dstPort)
         {

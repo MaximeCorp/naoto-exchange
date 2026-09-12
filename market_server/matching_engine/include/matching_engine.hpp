@@ -1,16 +1,21 @@
 #pragma once
 
 #include <bid_ask.hpp>
+#include <cassert>
+#include <consumer.hpp>
 #include <cstdlib>
 #include <etcd/KeepAlive.hpp>
 #include <etcd/SyncClient.hpp>
 #include <market_data_emitters.hpp>
+#include <matching_engine_types.hpp>
+#include <memory>
 #include <nlohmann/json.hpp>
 #include <order_book_update.hpp>
 #include <order_ingress_server.hpp>
 #include <order_state_report.hpp>
 #include <pthread.h>
-#include <readerwritercircularbuffer.h>
+#include <shared_memory_ops.hpp>
+#include <shared_memory_types.hpp>
 #include <spsc_queue.hpp>
 #include <string>
 #include <system_conf.hpp>
@@ -18,27 +23,24 @@
 
 namespace naoto::matching_engine
 {
-    template <size_t BatchSize, size_t SkipListMaxLevel, size_t FHMSize,
-              size_t OrderMapSize>
     class MatchingEngine
     {
-        using OrdersQueue =
-            SpscQueue<ObjectBatch<Order, BatchSize> *, MeOrderQueueSize>;
-        using OrderStatesQueue =
-            SpscQueue<OrderStateReport *, MeOrderStateQueueSize>;
-        using OrderBookUpdatesQueue =
-            SpscQueue<OrderBookUpdate *, MeOrderBookUpdateQueueSize>;
-
     private:
-        OrdersQueue IncomingOrders;
-        OrderStatesQueue OutgoingOrders;
-        OrderBookUpdatesQueue OutgoingBook;
-        StoragePool<ObjectBatch<Order, BatchSize>> OrdersPool;
-        StoragePool<OrderStateReport> OrderStatesPool;
-        StoragePool<OrderBookUpdate> OrderBookUpdatesPool;
-        BidAsk<FHMSize, SkipListMaxLevel, BatchSize, OrderMapSize> OrderBook;
-        OrderIngressServer<BatchSize> Server;
-        MarketDataEmitters<BatchSize> Emitters;
+#ifndef NAOTO_SHARED_MEMORY
+        OrderBatchQueue IncomingOrders;
+#endif
+        OrderStateQueue OutgoingOrders;
+        OrderBookUpdateQueue OutgoingBook;
+#ifndef NAOTO_SHARED_MEMORY
+        OrderBatchMempool OrdersPool;
+#endif
+        OrderStateMempool OrderStatesPool;
+        OrderBookUpdateMempool OrderBookUpdatesPool;
+        BidAsk OrderBook;
+#ifndef NAOTO_SHARED_MEMORY
+        OrderIngressServer Server;
+#endif
+        MarketDataEmitters Emitters;
 
         std::shared_ptr<etcd::KeepAlive> KeepAlive;
         std::unique_ptr<etcd::SyncClient> EtcdClient;
@@ -86,26 +88,32 @@ namespace naoto::matching_engine
         }
 
     public:
-        MatchingEngine(int argc, char **argv, const size_t queueSize,
-                       const size_t skipListNodesPoolSize,
-                       const std::int32_t assetId,
-                       const std::int64_t initialPrice, const int port,
-                       const int maxEvents, const int maxPending,
-                       const size_t nb_fds, const size_t orderNodePoolSize,
-                       const uint16_t portId, const uint16_t nbTxQueueSlots,
-                       const size_t poolSize, const uint32_t srcIp,
-                       const uint16_t srcPort, const uint32_t dstOrderIp,
-                       const uint16_t dstOrderPort, const uint32_t dstBookIp,
-                       const uint16_t dstBookPort)
-            : OrdersPool(MeOrderPoolSize)
-            , OrderStatesPool(MeOrderPoolSize)
-            , OrderBookUpdatesPool(MeOrderPoolSize)
-            , OrderBook(assetId, initialPrice, &IncomingOrders, &OutgoingOrders,
-                        &OutgoingBook, OrdersPool, OrderStatesPool,
-                        OrderBookUpdatesPool, orderNodePoolSize,
-                        skipListNodesPoolSize)
+        MatchingEngine(int argc, char **argv, const std::int32_t assetId,
+                       const std::int64_t initialPrice,
+#ifndef NAOTO_SHARED_MEMORY
+                       const int port, const int maxEvents,
+                       const int maxPending,
+#endif
+                       const size_t nb_fds, const uint16_t portId,
+                       const uint16_t nbTxQueueSlots, const size_t poolSize,
+                       const uint32_t srcIp, const uint16_t srcPort,
+                       const uint32_t dstOrderIp, const uint16_t dstOrderPort,
+                       const uint32_t dstBookIp, const uint16_t dstBookPort)
+            : OrderBook(assetId, initialPrice,
+#ifdef NAOTO_SHARED_MEMORY
+                        CreateSharedQueue(),
+#else
+                        &IncomingOrders,
+#endif
+                        &OutgoingOrders, &OutgoingBook,
+#ifndef NAOTO_SHARED_MEMORY
+                        OrdersPool,
+#endif
+                        OrderStatesPool, OrderBookUpdatesPool)
+#ifndef NAOTO_SHARED_MEMORY
             , Server(port, maxEvents, maxPending, OrdersPool, &IncomingOrders,
                      nb_fds)
+#endif
             , Emitters(argc, argv, &OutgoingOrders, &OutgoingBook,
                        OrderStatesPool, OrderBookUpdatesPool, portId,
                        nbTxQueueSlots, poolSize, srcIp, srcPort, dstOrderIp,
@@ -131,24 +139,31 @@ namespace naoto::matching_engine
 
             EtcdClientSetUp();
 
-            std::thread matchingThread(
-                &BidAsk<FHMSize, SkipListMaxLevel, BatchSize,
-                        OrderMapSize>::MarketExecutionLoop,
-                &OrderBook);
-            std::thread serverThread(
-                &OrderIngressServer<BatchSize>::startServer, &Server);
+            std::thread matchingThread(&BidAsk::MarketExecutionLoop,
+                                       &OrderBook);
+
+#ifndef NAOTO_SHARED_MEMORY
+            std::thread serverThread(&OrderIngressServer::startServer, &Server);
+#endif
 
             setAffinity(matchingThread, 8);
+#ifndef NAOTO_SHARED_MEMORY
             setAffinity(serverThread, 6);
+#endif
 
             pthread_setname_np(matchingThread.native_handle(),
                                "MatchineEngine");
+
+#ifndef NAOTO_SHARED_MEMORY
             pthread_setname_np(serverThread.native_handle(), "EpollServer");
+#endif
 
             Emitters.StartEmittersLoop();
 
             matchingThread.join();
+#ifndef NAOTO_SHARED_MEMORY
             serverThread.join();
+#endif
         }
     };
 } // namespace naoto::matching_engine
