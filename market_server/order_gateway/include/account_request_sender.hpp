@@ -1,7 +1,6 @@
 #pragma once
 
 #include <order_gateway_types.hpp>
-#include <readerwritercircularbuffer.h>
 #include <routed_auth_request.hpp>
 #include <storage_pool.hpp>
 #include <system_conf.hpp>
@@ -34,11 +33,11 @@ namespace naoto::order_gateway
         GatewayRequestForwarder StatesWriterConsumer;
 
     public:
-        AccountRequestSender(
-            AuthRequestQueue *epollRequests,
-            AuthRequestQueue *statesWriterRequests,
-            AuthRequestMempool &epollPool,
-            AuthRequestMempool &statesWriterPool, VersionedFd &accountFd)
+        AccountRequestSender(AuthRequestQueue *epollRequests,
+                             AuthRequestQueue *statesWriterRequests,
+                             AuthRequestMempool &epollPool,
+                             AuthRequestMempool &statesWriterPool,
+                             VersionedFd &accountFd)
             : EpollConsumer(epollRequests, epollPool, accountFd)
             , StatesWriterConsumer(statesWriterRequests, statesWriterPool,
                                    accountFd)

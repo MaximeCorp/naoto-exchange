@@ -1,11 +1,10 @@
 #pragma once
 
-#include <cstddef>
 #include <account_service_types.hpp>
+#include <cstddef>
 #include <file_descriptors_ops.hpp>
 #include <gateway_handshake.hpp>
 #include <object_batch.hpp>
-#include <readerwritercircularbuffer.h>
 #include <routed_auth_request.hpp>
 #include <spsc_queue.hpp>
 #include <system_conf.hpp>
@@ -20,10 +19,9 @@ namespace naoto::account_service
         std::vector<uint16_t> FdToGateways;
 
     public:
-        GatewayEpollServer(
-            const int port, const int maxEvents, const int maxPending,
-            AuthRequestMempool &pool, AuthRequestQueue *orders,
-            GatewayFds &gateways)
+        GatewayEpollServer(const int port, const int maxEvents,
+                           const int maxPending, AuthRequestMempool &pool,
+                           AuthRequestQueue *orders, GatewayFds &gateways)
             : GatewayEpollServerBase(port, maxEvents, maxPending, pool, orders)
             , Gateways(gateways)
             , FdToGateways(FileDescriptorsOps::getMaxFd(), 0)

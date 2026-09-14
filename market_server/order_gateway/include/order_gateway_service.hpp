@@ -15,7 +15,6 @@
 #include <order_gateway_types.hpp>
 #include <order_router.hpp>
 #include <pthread.h>
-#include <readerwritercircularbuffer.h>
 #include <routed_auth_request.hpp>
 #include <shared_memory_ops.hpp>
 #include <shared_memory_types.hpp>

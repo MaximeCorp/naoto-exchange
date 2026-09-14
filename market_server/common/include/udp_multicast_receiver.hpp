@@ -5,7 +5,6 @@
 #include <cstring>
 #include <iostream>
 #include <netinet/in.h>
-#include <readerwritercircularbuffer.h>
 #include <rte_ethdev.h>
 #include <rte_ether.h>
 #include <rte_ip.h>
@@ -69,10 +68,10 @@ namespace naoto
     public:
         UdpMulticastReceiver(SpscQueue<T *, QueueSize> *outgoing,
                              UdpReceiverMempool<T, PoolSize> &pool,
-                             uint16_t portId,
-                             uint16_t nbRxQueueSlots, uint16_t queueId,
-                             unsigned lcoreId, const char *poolName,
-                             size_t poolSize, uint32_t dstIp, uint32_t dstPort)
+                             uint16_t portId, uint16_t nbRxQueueSlots,
+                             uint16_t queueId, unsigned lcoreId,
+                             const char *poolName, size_t poolSize,
+                             uint32_t dstIp, uint32_t dstPort)
             : Outgoing(outgoing)
             , TPool(pool)
             , PortId(portId)

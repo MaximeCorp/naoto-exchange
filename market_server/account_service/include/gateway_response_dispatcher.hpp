@@ -1,13 +1,12 @@
 #pragma once
 
 #include <account_service_types.hpp>
-#include <client_account_snapshot.hpp>
 #include <cerrno>
+#include <client_account_snapshot.hpp>
 #include <cstring>
 #include <exception>
 #include <iostream>
 #include <object_batch.hpp>
-#include <readerwritercircularbuffer.h>
 #include <routed_message.hpp>
 #include <spsc_queue.hpp>
 #include <storage_pool.hpp>
@@ -38,8 +37,7 @@ namespace naoto::account_service
         void DrainResendBuffers(void) noexcept // Call before SendMessage if
                                                // order of messages matters
         {
-            if constexpr (std::is_same_v<T,
-                                         ClientAccountSnapshot>)
+            if constexpr (std::is_same_v<T, ClientAccountSnapshot>)
             {
                 while (ResponsesResendSize)
                 {
@@ -88,8 +86,7 @@ namespace naoto::account_service
             {
                 if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
                 {
-                    if constexpr (std::is_same_v<
-                                      T, ClientAccountSnapshot>)
+                    if constexpr (std::is_same_v<T, ClientAccountSnapshot>)
                     {
                         ResponsesResend[ResponsesResendSize].GatewayId = idx;
                         ResponsesResend[ResponsesResendSize++].Message =
@@ -118,8 +115,7 @@ namespace naoto::account_service
                 // fd
                 // For later : push to the array / vector of
                 // messages to send again
-                if constexpr (std::is_same_v<
-                                  T, ClientAccountSnapshot>)
+                if constexpr (std::is_same_v<T, ClientAccountSnapshot>)
                 {
                     ResponsesResend[ResponsesResendSize].GatewayId = idx;
                     ResponsesResend[ResponsesResendSize++].Message =
@@ -137,8 +133,7 @@ namespace naoto::account_service
             }
 
             // Release the message if no sending error
-            if constexpr (std::is_same_v<T,
-                                         ClientAccountSnapshot>)
+            if constexpr (std::is_same_v<T, ClientAccountSnapshot>)
             {
                 bool released = ResponsesPool.Release((T *)curMessage);
 
@@ -174,8 +169,8 @@ namespace naoto::account_service
                     break;
                 }
 
-                SendMessage<ClientAccountSnapshot>(
-                    curResponse.Message, curResponse.GatewayId);
+                SendMessage<ClientAccountSnapshot>(curResponse.Message,
+                                                   curResponse.GatewayId);
             }
 
             /*

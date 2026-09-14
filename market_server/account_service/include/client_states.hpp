@@ -3,7 +3,6 @@
 #include <atomic>
 #include <client_delta.hpp>
 #include <client_state.hpp>
-#include <readerwritercircularbuffer.h>
 #include <system_conf.hpp>
 #include <vector>
 

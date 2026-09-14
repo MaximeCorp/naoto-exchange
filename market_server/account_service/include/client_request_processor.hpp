@@ -6,7 +6,6 @@
 #include <gateway_response_dispatcher.hpp>
 #include <gtest/gtest_prod.h>
 #include <object_batch.hpp>
-#include <readerwritercircularbuffer.h>
 #include <routed_auth_request.hpp>
 #include <routed_message.hpp>
 #include <storage_pool.hpp>
@@ -38,11 +37,11 @@ namespace naoto::account_service
                     BatchOfMultipleRequestsAllProcessed);
 
     public:
-        ClientRequestProcessor(
-            ClientStates &states, AuthRequestQueue *incomingMessages,
-            AccountResponseQueue *responsesSend,
-            AuthRequestMempool &messagesPool,
-            AccountResponseMempool &responsesPool);
+        ClientRequestProcessor(ClientStates &states,
+                               AuthRequestQueue *incomingMessages,
+                               AccountResponseQueue *responsesSend,
+                               AuthRequestMempool &messagesPool,
+                               AccountResponseMempool &responsesPool);
 
         void StartLoop(void);
     };

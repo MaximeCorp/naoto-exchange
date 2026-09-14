@@ -13,7 +13,6 @@
 #include <order_book_update.hpp>
 #include <order_node.hpp>
 #include <order_state_report.hpp>
-#include <readerwritercircularbuffer.h>
 #include <shared_memory_types.hpp>
 #include <spsc_queue.hpp>
 #include <storage_pool.hpp>

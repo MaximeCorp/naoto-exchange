@@ -7,9 +7,8 @@
 #include <cstring>
 #include <iostream>
 #include <object_batch.hpp>
-#include <order_gateway_types.hpp>
 #include <object_buffer.hpp>
-#include <readerwritercircularbuffer.h>
+#include <order_gateway_types.hpp>
 #include <spsc_queue.hpp>
 #include <storage_pool.hpp>
 #include <sys/socket.h>
@@ -97,11 +96,10 @@ namespace naoto::order_gateway
 
             Buffer.clearBuffer();
 
-            if (!Buffer.addBytes(
-                    curBatch->Data.data()
-                        + sizeof(ClientAccountSnapshot)
-                            * batchSize,
-                    bufferSize)) [[unlikely]]
+            if (!Buffer.addBytes(curBatch->Data.data()
+                                     + sizeof(ClientAccountSnapshot)
+                                         * batchSize,
+                                 bufferSize)) [[unlikely]]
             {
                 std::cerr << "Unexpected buffer overflow while storing "
                              "leftover account service response bytes\n\n";
@@ -125,9 +123,9 @@ namespace naoto::order_gateway
         }
 
     public:
-        AccountServiceResponseReceiver(
-            VersionedFd &accountFd, AccountResponseQueue *outgoingResponses,
-            AccountResponseMempool &responsePool)
+        AccountServiceResponseReceiver(VersionedFd &accountFd,
+                                       AccountResponseQueue *outgoingResponses,
+                                       AccountResponseMempool &responsePool)
             : AccountFd(accountFd)
             , OutgoingResponses(outgoingResponses)
             , ResponsePool(responsePool)

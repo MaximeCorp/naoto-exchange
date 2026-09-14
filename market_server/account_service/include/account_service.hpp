@@ -12,7 +12,6 @@
 #include <gateway_response_dispatcher.hpp>
 #include <memory>
 #include <order_state_report.hpp>
-#include <readerwritercircularbuffer.h>
 #include <routed_auth_request.hpp>
 #include <spsc_queue.hpp>
 #include <storage_pool.hpp>

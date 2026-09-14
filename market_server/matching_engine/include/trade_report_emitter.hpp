@@ -4,7 +4,6 @@
 #include <iostream>
 #include <matching_engine_types.hpp>
 #include <order_state_report.hpp>
-#include <readerwritercircularbuffer.h>
 #include <system_conf.hpp>
 
 namespace naoto::matching_engine

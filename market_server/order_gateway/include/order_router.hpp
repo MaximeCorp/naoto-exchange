@@ -22,7 +22,6 @@
 #include <order_confirmation.hpp>
 #include <order_gateway_types.hpp>
 #include <order_risk_check.hpp>
-#include <readerwritercircularbuffer.h>
 #include <shared_memory_types.hpp>
 #include <spsc_queue.hpp>
 #include <storage_pool.hpp>

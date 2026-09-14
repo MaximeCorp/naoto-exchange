@@ -4,7 +4,6 @@
 #include <client_account_snapshot.hpp>
 #include <client_delta.hpp>
 #include <client_state.hpp>
-#include <readerwritercircularbuffer.h>
 #include <system_conf.hpp>
 #include <vector>
 
@@ -18,8 +17,7 @@ namespace naoto::order_gateway
         alignas(64) std::vector<ClientState> States2;
         alignas(64) std::vector<ClientState> States3;
 
-        alignas(
-            64) std::vector<std::array<ClientDelta, 3>> Deltas;
+        alignas(64) std::vector<std::array<ClientDelta, 3>> Deltas;
 
         // Each slot is a real std::atomic<uint8_t> (value-initialised to 0
         // in C++20) rather than a plain uint8_t wrapped in std::atomic_ref
@@ -38,8 +36,7 @@ namespace naoto::order_gateway
             , Complete(maxClients)
         {}
 
-        ClientStates(size_t maxClients,
-                     std::vector<ClientState> &states)
+        ClientStates(size_t maxClients, std::vector<ClientState> &states)
             : States1(maxClients)
             , States2(maxClients)
             , States3(maxClients)
@@ -63,7 +60,8 @@ namespace naoto::order_gateway
 
         [[nodiscard]] uint32_t GetClientId(const uint32_t clientFd) noexcept
         {
-            uint8_t complete = Complete[clientFd].load(std::memory_order_acquire);
+            uint8_t complete =
+                Complete[clientFd].load(std::memory_order_acquire);
             return complete == 0 ? States1[clientFd].ClientId
                 : complete == 1  ? States2[clientFd].ClientId
                                  : States3[clientFd].ClientId;
@@ -72,7 +70,8 @@ namespace naoto::order_gateway
         [[nodiscard]] ClientState
         GetClientState(const uint32_t clientFd) const noexcept
         {
-            uint8_t complete = Complete[clientFd].load(std::memory_order_acquire);
+            uint8_t complete =
+                Complete[clientFd].load(std::memory_order_acquire);
             return complete == 0 ? States1[clientFd]
                 : complete == 1  ? States2[clientFd]
                                  : States3[clientFd];
@@ -80,11 +79,11 @@ namespace naoto::order_gateway
 
         [[nodiscard]] uint8_t GetClientAuth(const uint32_t clientFd) noexcept
         {
-            uint8_t complete = Complete[clientFd].load(std::memory_order_acquire);
-            ClientState &curState = complete == 0
-                ? States1[clientFd]
-                : complete == 1 ? States2[clientFd]
-                                : States3[clientFd];
+            uint8_t complete =
+                Complete[clientFd].load(std::memory_order_acquire);
+            ClientState &curState = complete == 0 ? States1[clientFd]
+                : complete == 1                   ? States2[clientFd]
+                                                  : States3[clientFd];
 
             return curState.Auth;
         }
@@ -112,7 +111,8 @@ namespace naoto::order_gateway
 
         void SetAuthStatus(const uint32_t clientFd, uint8_t auth) noexcept
         {
-            uint8_t complete = Complete[clientFd].load(std::memory_order_relaxed);
+            uint8_t complete =
+                Complete[clientFd].load(std::memory_order_relaxed);
 
             ClientState &state = complete == 0
                 ? States2[clientFd]
@@ -122,12 +122,12 @@ namespace naoto::order_gateway
         }
 
         // Producer methods
-        void SetClientState(
-            const ClientAccountSnapshot *response) noexcept
+        void SetClientState(const ClientAccountSnapshot *response) noexcept
         {
             const uint32_t clientFd = response->ClientFd;
 
-            uint8_t complete = Complete[clientFd].load(std::memory_order_relaxed);
+            uint8_t complete =
+                Complete[clientFd].load(std::memory_order_relaxed);
 
             ClientState &ref = complete == 0
                 ? States1[clientFd]
@@ -154,7 +154,8 @@ namespace naoto::order_gateway
         void SetClientAssets(const uint32_t clientId, const int64_t confirmed,
                              const int64_t attempt, uint16_t assetId) noexcept
         {
-            uint8_t complete = Complete[clientId].load(std::memory_order_relaxed);
+            uint8_t complete =
+                Complete[clientId].load(std::memory_order_relaxed);
 
             ClientState &toChange = complete == 0
                 ? States2[clientId]
@@ -175,10 +176,10 @@ namespace naoto::order_gateway
 
         void FlushTripleBuffer(const uint32_t clientFd) noexcept
         {
-            uint8_t complete = Complete[clientFd].load(std::memory_order_relaxed);
+            uint8_t complete =
+                Complete[clientFd].load(std::memory_order_relaxed);
 
-            std::array<ClientDelta, 3> &curDelta =
-                Deltas[clientFd];
+            std::array<ClientDelta, 3> &curDelta = Deltas[clientFd];
 
             ClientState *curState = complete == 0
                 ? &States2[clientFd]
