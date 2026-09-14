@@ -258,8 +258,6 @@ namespace naoto
             uint16_t sent =
                 rte_eth_tx_burst(PortId, QueueId, &Packets[0], curPacket);
 
-            std::cout << "sent " << sent << " packets via dpdk udp multicast\n";
-
             if (sent < curPacket)
             {
                 rte_pktmbuf_free_bulk(&Packets[sent], curPacket - sent);

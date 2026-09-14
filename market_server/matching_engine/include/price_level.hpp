@@ -14,7 +14,7 @@ namespace naoto::matching_engine
         int64_t Price;
         size_t Size;
         uint64_t TotalAmount;
-        OrderNode *Head; // Doubly linked list of orders
+        OrderNode *Head;
         OrderNode *Tail;
 
     public:

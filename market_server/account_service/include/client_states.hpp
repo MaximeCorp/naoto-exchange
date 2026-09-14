@@ -17,16 +17,9 @@ namespace naoto::account_service
         alignas(64) std::vector<ClientState> States2;
         alignas(64) std::vector<ClientState> States3;
 
-        alignas(
-            64) std::vector<std::array<ClientDelta, 3>> Deltas;
+        alignas(64) std::vector<std::array<ClientDelta, 3>> Deltas;
         alignas(64) std::vector<std::array<uint64_t, 3>> SequenceIds;
 
-        // Each slot is a real std::atomic<uint8_t> (value-initialised to 0
-        // in C++20) rather than a plain uint8_t wrapped in std::atomic_ref
-        // at every access point. Same memory orders, same semantics - the
-        // atomic_ref version compiles fine, this just makes the atomicity a
-        // property of the member instead of relying on every reader and
-        // writer remembering to wrap it.
         alignas(64) std::vector<std::atomic<uint8_t>> Complete;
 
     public:
@@ -42,13 +35,12 @@ namespace naoto::account_service
             {
                 for (size_t j = 0; j < 3; ++j)
                 {
-                    SequenceIds[i][j] = 3334;
+                    SequenceIds[i][j] = 0;
                 }
             }
         }
 
-        ClientStates(size_t maxClients,
-                     std::vector<ClientState> &states)
+        ClientStates(size_t maxClients, std::vector<ClientState> &states)
             : States1(maxClients)
             , States2(maxClients)
             , States3(maxClients)
@@ -60,7 +52,7 @@ namespace naoto::account_service
             {
                 for (size_t j = 0; j < 3; ++j)
                 {
-                    SequenceIds[i][j] = 3334;
+                    SequenceIds[i][j] = 0;
                 }
             }
 
@@ -82,7 +74,8 @@ namespace naoto::account_service
         [[nodiscard]] const ClientState
         GetClientState(const uint32_t clientId) const noexcept
         {
-            uint8_t complete = Complete[clientId].load(std::memory_order_acquire);
+            uint8_t complete =
+                Complete[clientId].load(std::memory_order_acquire);
             return complete == 0 ? States1[clientId]
                 : complete == 1  ? States2[clientId]
                                  : States3[clientId];
@@ -94,7 +87,8 @@ namespace naoto::account_service
         {
             const uint32_t clientId = clientState.ClientId;
 
-            uint8_t complete = Complete[clientId].load(std::memory_order_relaxed);
+            uint8_t complete =
+                Complete[clientId].load(std::memory_order_relaxed);
 
             ClientState &toChange = complete == 0
                 ? States2[clientId]
@@ -130,7 +124,8 @@ namespace naoto::account_service
                              const int64_t attempt, uint16_t assetId,
                              uint64_t sequenceId) noexcept
         {
-            uint8_t complete = Complete[clientId].load(std::memory_order_relaxed);
+            uint8_t complete =
+                Complete[clientId].load(std::memory_order_relaxed);
 
             ClientState &toChange = complete == 0
                 ? States2[clientId]
@@ -155,10 +150,10 @@ namespace naoto::account_service
 
         void FlushTripleBuffer(const uint32_t clientId) noexcept
         {
-            uint8_t complete = Complete[clientId].load(std::memory_order_relaxed);
+            uint8_t complete =
+                Complete[clientId].load(std::memory_order_relaxed);
 
-            std::array<ClientDelta, 3> &curDelta =
-                Deltas[clientId];
+            std::array<ClientDelta, 3> &curDelta = Deltas[clientId];
 
             ClientState *curState = complete == 0
                 ? &States2[clientId]

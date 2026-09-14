@@ -14,13 +14,13 @@ namespace naoto::matching_engine
         , public TradeReportEmitterBase
     {
     public:
-        TradeReportEmitter(
-            OrderStateQueue *incoming, OrderStateMempool &mempool,
-            const uint16_t portId, const uint16_t nbTxQueueSlots,
-            const uint16_t queueId, const unsigned lcoreId,
-            const char *poolName, const size_t poolSize, const uint32_t srcIp,
-            const uint32_t dstIp, const uint16_t srcPort,
-            const uint16_t dstPort)
+        TradeReportEmitter(OrderStateQueue *incoming,
+                           OrderStateMempool &mempool, const uint16_t portId,
+                           const uint16_t nbTxQueueSlots,
+                           const uint16_t queueId, const unsigned lcoreId,
+                           const char *poolName, const size_t poolSize,
+                           const uint32_t srcIp, const uint32_t dstIp,
+                           const uint16_t srcPort, const uint16_t dstPort)
             : TradeReportConsumerBase(incoming, mempool)
             , TradeReportEmitterBase(portId, nbTxQueueSlots, queueId, lcoreId,
                                      poolName, poolSize, srcIp, dstIp, srcPort,
@@ -34,7 +34,6 @@ namespace naoto::matching_engine
 
         void Handle(OrderStateBatch &reports, size_t size) noexcept
         {
-            std::cout << "Order status about to be sent\n\n";
             TradeReportEmitterBase::Send(reports, size);
         }
 

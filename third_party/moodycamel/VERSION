@@ -1,3 +1,0 @@
-Source: https://github.com/cameron314/readerwriterqueue
-Commit: 09911655b8dc1bffcd1e96c29d9c796ec8019d18
-Files: readerwriterqueue.h, atomicops.h

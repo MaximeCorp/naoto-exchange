@@ -11,7 +11,6 @@
 #include <gateway_epoll_server.hpp>
 #include <gateway_response_dispatcher.hpp>
 #include <memory>
-#include <vector>
 #include <order_state_report.hpp>
 #include <readerwritercircularbuffer.h>
 #include <routed_auth_request.hpp>
@@ -20,6 +19,7 @@
 #include <system_conf.hpp>
 #include <thread>
 #include <trade_report_receiver.hpp>
+#include <vector>
 
 namespace naoto::account_service
 {

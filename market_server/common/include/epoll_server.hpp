@@ -217,7 +217,7 @@ namespace naoto
                     break;
                 }
 
-                if (buffer.BufferSize > 0) [[likely]]
+                if (buffer.BufferSize > 0)
                 {
                     std::memcpy(batch->Data.data(), buffer.Buffer.data(),
                                 buffer.BufferSize);
@@ -362,11 +362,11 @@ namespace naoto
         FRIEND_TEST(EpollServerTest, BatchHandleHookFiresBeforeEnqueue);
 
     public:
-        EpollServer(const int port, const int maxEvents, const int maxPending,
-                    EpollServerMempool<T, BatchSize, PoolSize> &pool,
-                    SpscQueue<ObjectBatch<T, BatchSize> *, QueueSize>
-                        *outgoingBatches,
-                    const size_t nb_fds)
+        EpollServer(
+            const int port, const int maxEvents, const int maxPending,
+            EpollServerMempool<T, BatchSize, PoolSize> &pool,
+            SpscQueue<ObjectBatch<T, BatchSize> *, QueueSize> *outgoingBatches,
+            const size_t nb_fds)
             : Port(port)
             , MaxEvents(maxEvents)
             , MaxPending(maxPending)

@@ -32,13 +32,6 @@ namespace naoto::matching_engine
     {
         FRIEND_TEST(BidAskTest, MarketableBuyCrossesRestingAsk);
         FRIEND_TEST(BidAskTest, NonMarketableBuyRestsInBook);
-        // Additional hooks added while building out the GoogleTest suite
-        // (tests/market_server/unit/test_bid_ask.cpp) -- same pattern as the
-        // two above, granting the named TEST_F(BidAskTest, ...) cases access to
-        // executeOrder()/CancelOrder<>()/the private Bid/Ask/OrderMap
-        // members so matching behavior can be driven and inspected
-        // directly instead of only through the blocking
-        // MarketExecutionLoop().
         FRIEND_TEST(BidAskTest, NonMarketableSellRestsInBook);
         FRIEND_TEST(BidAskTest, MarketableSellCrossesRestingBid);
         FRIEND_TEST(BidAskTest, PriceTimePriorityFifoAtSameLevel);
@@ -144,8 +137,6 @@ namespace naoto::matching_engine
                     toCancel->GetId(), 0, MarketAssetId, 0, OrderState::CANCEL);
                 OutgoingOrders.Push(cancelReport);
 
-                std::cout << "Successful cancel\n\n";
-
                 PriceLevel *curLevel = Bid.DeleteOrder(toCancel);
 
                 OrderBookUpdate *curOrderBookUpdate =
@@ -175,8 +166,6 @@ namespace naoto::matching_engine
                     ReportSequenceId++, toCancel->GetClientId(),
                     toCancel->GetId(), 0, 0, MarketAssetId, OrderState::CANCEL);
                 OutgoingOrders.Push(cancelReport);
-
-                std::cout << "Successful cancel\n\n";
 
                 PriceLevel *curLevel = Ask.DeleteOrder(toCancel);
 
@@ -242,9 +231,9 @@ namespace naoto::matching_engine
 
                     order.Amount = orderAmount;
                     bestOffer->SetAmount(offerAmount);
-                    bestLevel->IncTotalAmount(-tradedAmount);
 
                     int64_t soldDelta = -static_cast<int64_t>(tradedAmount);
+                    bestLevel->IncTotalAmount(-tradedAmount);
 
                     totalLocked += soldDelta * BestAskPrice;
 
@@ -273,7 +262,7 @@ namespace naoto::matching_engine
 
 #ifdef NAOTO_PERF
                         bestOffer->GetIngested(), bestOffer->GetRouted(),
-                        bestOffer->GetReceived(), now,
+                        bestOffer->GetReceived(), 0,
 #endif
                         ReportSequenceId++, bestOffer->GetClientId(),
                         bestOffer->GetId(), 0, 0, MarketAssetId,
@@ -303,6 +292,12 @@ namespace naoto::matching_engine
 
             if (order.Amount > 0) [[unlikely]]
             {
+                if (order.Type == OrderType::LIMIT)
+                {
+                    AddBuyLimitOrder(order);
+                    return;
+                }
+
 #ifdef NAOTO_PERF
                 uint64_t now = now_tsc();
 #endif
@@ -317,8 +312,6 @@ namespace naoto::matching_engine
                     ReportSequenceId++, order.ClientId, order.OrderId, 0,
                     MarketAssetId, 0, OrderState::CANCEL);
                 OutgoingOrders.Push(orderReport);
-
-                std::cout << "No matches found\n\n";
             }
         }
 
@@ -370,9 +363,9 @@ namespace naoto::matching_engine
 
                     order.Amount = orderAmount;
                     bestOffer->SetAmount(offerAmount);
+                    int64_t soldDelta = -static_cast<int64_t>(tradedAmount);
                     bestLevel->IncTotalAmount(-tradedAmount);
 
-                    int64_t soldDelta = -static_cast<int64_t>(tradedAmount);
                     totalLocked += soldDelta;
 
 #ifdef NAOTO_PERF
@@ -400,7 +393,7 @@ namespace naoto::matching_engine
                         soldDelta * BestBidPrice,
 #ifdef NAOTO_PERF
                         bestOffer->GetIngested(), bestOffer->GetRouted(),
-                        bestOffer->GetReceived(), now,
+                        bestOffer->GetReceived(), 0,
 #endif
                         ReportSequenceId++, bestOffer->GetClientId(),
                         bestOffer->GetId(), 0, MarketAssetId, 0,
@@ -429,6 +422,12 @@ namespace naoto::matching_engine
 
             if (order.Amount > 0) [[unlikely]]
             {
+                if (order.Type == OrderType::LIMIT)
+                {
+                    AddSellLimitOrder(order);
+                    return;
+                }
+
 #ifdef NAOTO_PERF
                 uint64_t now = now_tsc();
 #endif
@@ -443,8 +442,6 @@ namespace naoto::matching_engine
                     ReportSequenceId++, order.ClientId, order.OrderId, 0, 0,
                     MarketAssetId, OrderState::CANCEL);
                 OutgoingOrders.Push(orderReport);
-
-                std::cout << "No matches found\n\n";
             }
         }
 
@@ -467,6 +464,7 @@ namespace naoto::matching_engine
 
             if (!toAdd) [[unlikely]]
             {
+                // TODO : handle failure
                 return;
             }
 
@@ -640,15 +638,16 @@ namespace naoto::matching_engine
             {
 #ifdef NAOTO_SHARED_MEMORY
                 Order curOrder;
+
                 bool popped = IncomingOrders.TryPop(curOrder);
 
-                if (!popped)
+                if (!popped) [[unlikely]]
                 {
                     continue;
                 }
-
+#    ifdef NAOTO_PERF
                 curOrder.ReceivedTimestamp = now_tsc();
-
+#    endif
                 if (curOrder.Action == OrderAction::EXECUTE)
                 {
                     executeOrder(curOrder);
@@ -678,7 +677,6 @@ namespace naoto::matching_engine
                             executeOrder(curOrder);
                         }
                         else if (curOrder.Action == OrderAction::CANCEL)
-                            [[likely]]
                         {
                             if (curOrder.Side == OrderSide::BUY)
                             {

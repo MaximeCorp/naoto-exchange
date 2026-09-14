@@ -5,7 +5,6 @@
 #include <cstdio>
 #include <exception>
 #include <iostream>
-#include <readerwritercircularbuffer.h>
 #include <spsc_queue.hpp>
 #include <stdexcept>
 
@@ -22,16 +21,16 @@ namespace naoto
         std::array<T, Size> Storage;
         StoragePoolFreeQueue<T, Size> Free;
 
-        alignas(64) size_t LocalHead;
-        alignas(64) size_t LocalTail;
+        alignas(64) SpscQueueConsumer<T *, Size> Consumer;
+        alignas(64) SpscQueueProducer<T *, Size> Producer;
 
         alignas(64) std::array<T *, Size> LocalReuseBuffer;
         size_t LocalReuseSize;
 
     public:
         StoragePool(void)
-            : LocalHead(0)
-            , LocalTail(0)
+            : Consumer(&Free)
+            , Producer(&Free)
             , LocalReuseSize(0)
         {
             if (Size == 0)
@@ -47,7 +46,7 @@ namespace naoto
             {
                 T *ptr = &Storage[i];
 
-                if (!Free.TryPush(ptr, LocalTail))
+                if (!Producer.TryPush(ptr))
                 {
                     throw std::runtime_error(
                         "Failed to populate initial free list.");
@@ -75,7 +74,7 @@ namespace naoto
 
             T *res;
 
-            bool found = Free.TryPop(res, LocalTail);
+            bool found = Consumer.TryPop(res);
 
             return found ? res : nullptr;
         }
@@ -101,12 +100,12 @@ namespace naoto
 
         [[nodiscard]] bool Release(T *element) noexcept
         {
-            return element && Free.TryPush(element, LocalHead);
+            return element && Producer.TryPush(element);
         }
 
         void ReleaseCritical(T *element) noexcept
         {
-            if (!element || !Free.TryPush(element, LocalHead)) [[unlikely]]
+            if (!element || !Producer.TryPush(element)) [[unlikely]]
             {
                 std::fprintf(stderr,
                              "CRITICAL: Mempool corruption. Failed "

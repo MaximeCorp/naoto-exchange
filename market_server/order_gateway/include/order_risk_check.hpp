@@ -40,18 +40,13 @@ namespace naoto::order_gateway
             // Think about how to handle missing assetId
             // Should evict an asset that has attempt = 0
             return assetId >= MaxAssets ? OrderConfirmationStatus::UnknownSymbol
-                                       : OrderConfirmationStatus::MaxPositions;
+                                        : OrderConfirmationStatus::MaxPositions;
         }
 
         int64_t confirmed = curState.GetConfirmedAt(assetIdx);
         int64_t attempt =
             curState.GetAttemptAt(assetIdx) + localAttempt[assetIdx];
 
-        // The maximum needed amount when selling is the amount since it's
-        // exactly what we'll spend
-        // For buy, LIMIT order allows us to calculate exactly how much will
-        // be spent and MARKET orders have a maximum price, giving us an
-        // upper bound which we will use to freeze money
         int64_t amount = order.Side == OrderSide::SELL
             ? order.Amount
             : order.Amount * order.Price;

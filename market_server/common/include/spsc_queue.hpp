@@ -30,10 +30,9 @@ namespace naoto
             return tail - head;
         }
 
-        [[nodiscard]] bool TryPush(const T &item, size_t &localHead) noexcept
+        [[nodiscard]] bool TryPush(const T &item, size_t &localHead,
+                                   size_t &localTail) noexcept
         {
-            const size_t localTail = Tail.load(std::memory_order_relaxed);
-
             if (localTail - localHead >= Size) [[unlikely]]
             {
                 localHead = Head.load(std::memory_order_acquire);
@@ -48,15 +47,15 @@ namespace naoto
 
             Buffer[idx] = item;
 
-            Tail.store(localTail + 1, std::memory_order_release);
+            ++localTail;
+
+            Tail.store(localTail, std::memory_order_release);
 
             return true;
         }
 
-        void Push(const T &item, size_t &localHead) noexcept
+        void Push(const T &item, size_t &localHead, size_t &localTail) noexcept
         {
-            const size_t localTail = Tail.load(std::memory_order_relaxed);
-
             while (localTail - localHead >= Size) [[unlikely]]
             {
                 localHead = Head.load(std::memory_order_acquire);
@@ -66,14 +65,15 @@ namespace naoto
 
             Buffer[idx] = item;
 
-            Tail.store(localTail + 1, std::memory_order_release);
+            ++localTail;
+
+            Tail.store(localTail, std::memory_order_release);
         };
 
         [[nodiscard]] bool TimedPush(const T &item, size_t &localHead,
+                                     size_t &localTail,
                                      const uint64_t timeout_us) noexcept
         {
-            const size_t localTail = Tail.load(std::memory_order_relaxed);
-
             auto timeout = std::chrono::microseconds(timeout_us);
             auto deadline = std::chrono::high_resolution_clock::now() + timeout;
 
@@ -92,15 +92,16 @@ namespace naoto
 
             Buffer[idx] = item;
 
-            Tail.store(localTail + 1, std::memory_order_release);
+            ++localTail;
+
+            Tail.store(localTail, std::memory_order_release);
 
             return true;
         }
 
-        [[nodiscard]] bool TryPop(T &item, size_t &localTail) noexcept
+        [[nodiscard]] bool TryPop(T &item, size_t &localHead,
+                                  size_t &localTail) noexcept
         {
-            size_t localHead = Head.load(std::memory_order_relaxed);
-
             if (localTail == localHead) [[unlikely]]
             {
                 localTail = Tail.load(std::memory_order_acquire);
@@ -115,15 +116,15 @@ namespace naoto
 
             item = Buffer[idx];
 
-            Head.store(localHead + 1, std::memory_order_release);
+            ++localHead;
+
+            Head.store(localHead, std::memory_order_release);
 
             return true;
         }
 
-        void Pop(T &item, size_t &localTail) noexcept
+        void Pop(T &item, size_t &localHead, size_t &localTail) noexcept
         {
-            size_t localHead = Head.load(std::memory_order_relaxed);
-
             while (localTail == localHead) [[unlikely]]
             {
                 localTail = Tail.load(std::memory_order_acquire);
@@ -133,14 +134,15 @@ namespace naoto
 
             item = Buffer[idx];
 
-            Head.store(localHead + 1, std::memory_order_release);
+            ++localHead;
+
+            Head.store(localHead, std::memory_order_release);
         }
 
-        [[nodiscard]] bool TimedPop(T &item, size_t &localTail,
+        [[nodiscard]] bool TimedPop(T &item, size_t &localHead,
+                                    size_t &localTail,
                                     const uint64_t timeout_us) noexcept
         {
-            size_t localHead = Head.load(std::memory_order_relaxed);
-
             auto timeout = std::chrono::microseconds(timeout_us);
             auto deadline = std::chrono::high_resolution_clock::now() + timeout;
 
@@ -159,7 +161,9 @@ namespace naoto
 
             item = Buffer[idx];
 
-            Head.store(localHead + 1, std::memory_order_release);
+            ++localHead;
+
+            Head.store(localHead, std::memory_order_release);
 
             return true;
         }
@@ -171,11 +175,13 @@ namespace naoto
     private:
         SpscQueue<T, Size> *Queue;
         size_t LocalHead;
+        size_t LocalTail;
 
     public:
         explicit SpscQueueProducer(SpscQueue<T, Size> *queue)
             : Queue(queue)
-            , LocalHead(queue->Head.load(std::memory_order_acquire))
+            , LocalHead(queue->Head.load(std::memory_order_seq_cst))
+            , LocalTail(queue->Tail.load(std::memory_order_seq_cst))
         {}
 
         [[nodiscard]] size_t GetSize(void) const noexcept
@@ -185,18 +191,18 @@ namespace naoto
 
         [[nodiscard]] bool TryPush(const T &item) noexcept
         {
-            return Queue->TryPush(item, LocalHead);
+            return Queue->TryPush(item, LocalHead, LocalTail);
         }
 
         void Push(const T &item) noexcept
         {
-            Queue->Push(item, LocalHead);
+            Queue->Push(item, LocalHead, LocalTail);
         }
 
         [[nodiscard]] bool TimedPush(const T &item,
                                      const uint64_t timeout_us) noexcept
         {
-            return Queue->TimedPush(item, LocalHead, timeout_us);
+            return Queue->TimedPush(item, LocalHead, LocalTail, timeout_us);
         }
     };
 
@@ -205,12 +211,14 @@ namespace naoto
     {
     private:
         SpscQueue<T, Size> *Queue;
+        size_t LocalHead;
         size_t LocalTail;
 
     public:
         explicit SpscQueueConsumer(SpscQueue<T, Size> *queue)
             : Queue(queue)
-            , LocalTail(queue->Tail.load(std::memory_order_acquire))
+            , LocalHead(queue->Head.load(std::memory_order_seq_cst))
+            , LocalTail(queue->Tail.load(std::memory_order_seq_cst))
         {}
 
         [[nodiscard]] size_t GetSize(void) const noexcept
@@ -220,17 +228,17 @@ namespace naoto
 
         [[nodiscard]] bool TryPop(T &item) noexcept
         {
-            return Queue->TryPop(item, LocalTail);
+            return Queue->TryPop(item, LocalHead, LocalTail);
         }
 
         void Pop(T &item) noexcept
         {
-            Queue->Pop(item, LocalTail);
+            Queue->Pop(item, LocalHead, LocalTail);
         }
 
         [[nodiscard]] bool TimedPop(T &item, const uint64_t timeout_us) noexcept
         {
-            return Queue->TimedPop(item, LocalTail, timeout_us);
+            return Queue->TimedPop(item, LocalHead, LocalTail, timeout_us);
         }
     };
 } // namespace naoto

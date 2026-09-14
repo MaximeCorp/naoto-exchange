@@ -15,53 +15,30 @@ int main(int argc, char **argv)
         0x85, 0x86, 0xdd, 0xaa, 0x92, 0xee, 0x7d, 0x94, 0xd1, 0x38
     };
 
-    ClientState client1;
-    client1.ClientId = 0;
-    client1.Key = testKey;
-
-    for (size_t i = 0; i < 16; ++i)
-    {
-        client1.AssetId[i] = i;
-        client1.Confirmed[i] = 1000000;
-        client1.Attempt[i] = 1000;
-    }
-
-    client1.Authorized = 0;
-    client1.Connected = -1;
-
-    ClientState client2;
-    client2.ClientId = 1;
-    client2.Key = testKey;
-
-    for (size_t i = 0; i < 16; ++i)
-    {
-        client2.AssetId[i] = i;
-        client2.Confirmed[i] = 999999;
-        client2.Attempt[i] = 900;
-    }
-
-    client2.Authorized = 0;
-    client2.Connected = -1;
-
-    ClientState client3;
-    client3.ClientId = 2;
-    client3.Key = testKey;
-
-    for (size_t i = 0; i < 16; ++i)
-    {
-        client3.AssetId[i] = i;
-        client3.Confirmed[i] = 200000000;
-        client3.Attempt[i] = 500;
-    }
-
-    client3.Authorized = 0;
-    client3.Connected = -1;
+    constexpr std::uint32_t NbClients = 12;
 
     std::vector<ClientState> clients;
+    clients.reserve(NbClients);
 
-    clients.push_back(client1);
-    clients.push_back(client2);
-    clients.push_back(client3);
+    for (std::uint32_t id = 0; id < NbClients; ++id)
+    {
+        ClientState client{};
+
+        client.ClientId = id;
+        client.Key = testKey;
+
+        for (size_t i = 0; i < 16; ++i)
+        {
+            client.AssetId[i] = i;
+            client.Confirmed[i] = 10000000000000;
+            client.Attempt[i] = 0;
+        }
+
+        client.Authorized = 0;
+        client.Connected = -1;
+
+        clients.push_back(client);
+    }
 
     AccountService test(argc, argv, 8082, 16, 16, 0, 256, 1024,
                         RTE_IPV4(239, 1, 1, 1), 30001, clients);

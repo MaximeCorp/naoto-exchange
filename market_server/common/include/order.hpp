@@ -42,10 +42,6 @@ namespace naoto
         OrderAction Action;
         std::array<uint8_t, 7> Padding;
 
-        // Debug/diagnostic logging only, never called on the hot path -
-        // defined out of line in order.cpp so this header (included by
-        // every hot-path translation unit) doesn't have to drag in
-        // <iostream>/<string> just to see this declaration.
         void log() const noexcept;
     };
 #pragma pack(pop)
