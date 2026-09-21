@@ -126,8 +126,6 @@ aa92e9c3316ddc46dc882b45fe9f07b58230e83f3e3290ffbb5e2d6fa80ebd4f
 `realistic_stress_test.cpp` drives the system under a realistic order mix and
 is the quickest way to see it working under load.
 
-[Build target and invocation.]
-
 ### 5. Core layout
 
 Core assignment is machine-specific and there is no set of numbers that is
@@ -170,9 +168,6 @@ Build with `-DNAOTO_PERF=ON`. Four timestamps are taken per message:
 
 Each is reported at min / P50 / mean / P95 / P99 / max, and shown live in the
 dashboard alongside the order book.
-
-[How to reproduce the headline numbers: which binary generated the load, at
-what rate, for how long, and which cores were pinned or isolated.]
 
 ---
 
