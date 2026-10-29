@@ -1,199 +1,229 @@
-# Trading Dashboard (Dear ImGui)
+# Trading Dashboard
 
-Read-only-except-for-trading monitoring dashboard for the matching engine
-system: etcd resource view, live order books, live trade tape, on-demand
-client balance lookup, and two independently-authenticated trading
-panels for trading as two clients simultaneously.
+Dear ImGui monitoring and manual-trading UI for Naoto Exchange. It shows:
 
-## Layout
+- services discovered in etcd,
+- live order books, rebuilt from the book-update multicast,
+- the execution-report feed and price history,
+- client balances, queried from the account service,
+- two independently authenticated trading panels, so you can trade as two
+  clients against each other,
+- latency statistics from `NAOTO_PERF` timestamps
+  (see [docs/LATENCY.md](../docs/LATENCY.md)).
+
+The dashboard is a client of the exchange like any other. It uses kernel
+sockets only and needs no DPDK.
+
+## Build and run
+
+The dashboard is built as part of the root CMake project:
+
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Release        # from the repo root
+cmake --build build -j --target trading_dashboard
+MCAST_IFACE=veth1 ./build/market_client/trading_dashboard
+```
+
+Requires GLFW3 and OpenGL development packages, plus the etcd-cpp-apiv3,
+gRPC, protobuf and cpprest libraries the rest of the project uses. ImGui,
+ImPlot and nlohmann/json are fetched with `FetchContent` at configure time;
+set `-DLOCAL_DEPS_DIR=<dir>` to use local clones instead.
+
+**Build it from the same build tree, with the same `NAOTO_PERF` setting, as
+the services.** `NAOTO_PERF` changes the wire size of `Order`,
+`OrderStateReport` and `OrderBookUpdate`. A mismatch does not fail loudly: the
+feeds decode into nonsense.
+
+## Before you start: etcd key for balance queries
+
+Balance refresh and the client lookup panel only send a query once an entry
+exists under `/client-details-provider/` in etcd. The account service
+registers itself as `/account-service/0` instead, so out of the box those
+buttons do nothing. Until the two are aligned, add the key by hand:
+
+```bash
+etcdctl put /client-details-provider/0 '{"addr":"127.0.0.1:8082","status":"active"}'
+```
+
+Trading itself does not depend on this.
+
+## Source layout
 
 ```
 include/
-  wire_formats.hpp          exact packed structs, matches the given binaries
-  mpsc_queue.hpp             mutex-based queue for network-thread -> render-thread handoff
-  multicast_receiver.hpp     kernel UDP multicast socket (no DPDK needed here)
-  trading_session.hpp        one TCP connection = one authenticated client session
-  client_details_poller.hpp  one-shot balance query (used for polling + lookup panel)
-  etcd_watcher.hpp           /matching-engines/ prefix watch, raw k/v for now
-  app_state.hpp              render-thread-owned aggregate state (order books, feed, balances)
+  wire_formats.hpp          packed copies of the server's wire structs, with size static_asserts
+  mpsc_queue.hpp            mutex-based queue, network threads -> render thread
+  multicast_receiver.hpp    kernel UDP multicast socket
+  trading_session.hpp       one TCP connection = one authenticated client session
+  client_details_poller.hpp one-shot balance query to the account service
+  etcd_watcher.hpp          watches /matching-engines/, /socket-gateways/, /client-details-provider/
+  app_state.hpp             render-thread-owned state: books, feeds, balances, price history
+  log.hpp                   DASHBOARD_LOG macro
 src/
-  main.cpp                   ImGui app, wires everything together, owns the render loop
-CMakeLists.txt
+  main.cpp                  ImGui app, wires everything together, owns the render loop
 ```
+
+`wire_formats.hpp` is a copy, not an include, of the server structs. When a
+server message changes, update it too ([docs/PROTOCOL.md § 6](../docs/PROTOCOL.md#6-changing-a-message)).
 
 ## Threading model
 
-One thread per data source, all feeding the render thread through
+One thread per data source, each feeding the render thread through an
 `MpscQueue<T>`:
 
-- Render/main thread: owns every ImGui call and all of `AppState`. Nothing
-  else is allowed to touch either.
-- etcd watcher: `etcd::Watcher` callback runs on cpprestsdk's `pplx`
-  thread pool (not a thread we control) -> pushes `EtcdEvent`s.
-- Two `MulticastReceiver` instances (order state reports, book updates),
-  each with their own background thread -> push parsed structs.
-- Each `TradingSession` has its own background reader thread for
-  `OrderConfirmation`s, and its own TCP socket for sending `Order`s (send
-  side isn't threaded separately since orders are placed one at a time
-  from user input on the render thread — the `send()` call itself is
-  quick/non-blocking in practice, but if you want it fully off-thread
-  too, that's a small follow-up: add an outbound `MpscQueue<Order>`
-  drained by a dedicated writer thread).
-- `ClientDetailsPoller::query()` is a blocking one-shot; every call site
-  wraps it in a detached `std::thread` and pushes the result back into a
-  queue.
-
-Every queue is drained once per frame, at the top of the render loop,
-before any ImGui calls.
-
-## Two separate protocols — don't conflate them
-
-There are two independent TCP connection types in this system:
-
-1. **Trading connection**: dashboard → socket-gateway (address from etcd
-   `/socket-gateways/<id>`). Handshake is `Gateways::ClientRequest{'A',
-   ClientId, Key}` (37 bytes), then `Order` structs, receiving
-   `OrderConfirmation`s back. Handled by `trading_session.hpp`.
-2. **CDP connection**: dashboard → CDP directly (address from etcd
-   `/client-details-provider/<id>`), impersonating the client's assigned
-   gateway. Handshake is `GatewayConnection{GatewayId}` (2 bytes, always
-   first), then `GatewayRequest{'A', ClientId, Key, ClientFd, GatewayId}`
-   (43 bytes), receiving `ClientRequestResponse<MaxPositions>` back.
-   Handled by `client_details_poller.hpp`. This is how the dashboard gets
-   balances without going through the REST API a normal client would use
-   — confirmed as the intended approach.
-
-These are separate sockets to separate services; a `TradingSession` never
-talks to CDP and a `ClientDetailsPoller` query never talks to a
-socket-gateway.
-
-## etcd schema (confirmed, real sample)
-
 ```
-/matching-engines/1            {"addr":"127.0.0.1:8080","asset_id":1,"status":"active"}
-/client-details-provider/0     {"addr":"127.0.0.1:8082","status":"active"}
-/socket-gateways/0              {"ip":"localhost:8000","status":"active"}
+  etcd watcher (pplx pool) ───────┐
+  MulticastReceiver: reports ─────┤
+  MulticastReceiver: book ────────┼──▶ MpscQueues ──▶ render thread ──▶ AppState, ImGui
+  TradingSession A reader ────────┤                   (drains every queue
+  TradingSession B reader ────────┤                    once per frame, before
+  balance queries (detached) ─────┘                    any ImGui call)
 ```
 
-`etcd_watcher.hpp` watches all three prefixes and parses each into
-`MatchingEngineInfo` / `AddrStatusInfo`, held in `AppState`. The trading
-panels and the client-lookup panel both offer a "pick a discovered
-gateway/CDP" flow instead of requiring the host/port to be typed in by
-hand — see `draw_trading_panel` / `draw_client_lookup_panel` in
-`main.cpp`. Note `socket-gateways` uses the key `"ip"` where the other
-two use `"addr"` — that's the real field name, not a typo carried over
-from copy-paste.
+- **Render thread** owns every ImGui call and all of `AppState`. No other
+  thread touches either.
+- **etcd watcher** callbacks run on cpprestsdk's `pplx` thread pool, which
+  the dashboard does not control.
+- **Multicast receivers**, one per feed, each on its own thread.
+- **Trading sessions** each have a reader thread for `OrderConfirmation`s.
+  Orders are sent directly from the render thread; `send()` on a connected
+  `TCP_NODELAY` socket returns quickly. Moving sends to a writer thread would
+  mean adding an outbound `MpscQueue<Order>`.
+- **Balance queries** (`ClientDetailsPoller::query`) are blocking one-shots.
+  Each call site runs one on a detached `std::thread` and pushes the result
+  into a queue.
 
-The numeric suffix on a `/socket-gateways/<id>` key is assumed to be that
-gateway's `GatewayId` (only one gateway running in the test setup, so
-this is a plausible-but-unconfirmed convention rather than something
-stated outright — re-verify once there's more than one).
+## Two connection types
 
-## The 100ms wait before sending orders
+The dashboard opens two kinds of TCP connection, to two different services.
+They are never mixed.
 
-`trading_session.hpp`'s `connect()` sleeps 100ms after sending the
-initial `ClientRequest`, before flipping to `SessionState::Connected` (in
-turn actually gating `send_order()`). This matches the gateway's
-request-send thread polling two queues with a 75ms blocking timeout each
-— there's no ack to wait on, so this is a deliberate "wait long enough
-that the auth message is very likely to have been dequeued and applied"
-buffer rather than a guarantee. If order placement right after connect
-ever comes back `UserNotConnected`, that's the first thing to suspect —
-worth widening the sleep or, better, getting an actual ack added
-upstream.
+| | Trading connection | Balance query connection |
+|---|---|---|
+| Code | `trading_session.hpp` | `client_details_poller.hpp` |
+| Connects to | `order_gateway`, address from `/socket-gateways/<id>` | `account_service`, address from `/client-details-provider/<id>` (see above) |
+| Lifetime | Long-lived, one per trading panel | Short-lived, one per query |
+| Sends | `ClientAuthRequest` (37 B), then `Order`s | `GatewayHandshake` (2 B), then one `RoutedAuthRequest` (43 B) |
+| Receives | `OrderConfirmation` (9 B) per order | One `ClientAccountSnapshot` (305 B) |
 
-## Same-host multicast note, corrected
+The balance query works by **impersonating a gateway**. It sends the handshake
+and request a real gateway would send, with gateway ID 10. The account
+service lets gateway 10 through regardless of which gateway the client is
+assigned to (a temporary bypass marked `TODO` in
+`account_service/src/client_request_processor.cpp`). Using 10 rather than the
+real gateway's ID 0 matters: the account service keeps one connection per
+gateway ID, so a dashboard claiming to be gateway 0 would take over the real
+gateway's slot and its login replies would come to the dashboard instead.
 
-Earlier I described the loopback caveat as if it were a DPDK issue — it
-isn't. DPDK bypasses the kernel on the *sending* side, but **this
-dashboard's receiver is a plain kernel socket regardless of how the
-sender transmits**, so the usual same-host caveats still apply to it.
-Two separate things to get right:
+`ClientFd` in the request is sent as 0, since the dashboard has no real
+client fd. The account service only echoes it back.
 
-1. **Interface selection.** `multicast_receiver.hpp` now takes an
-   optional `local_interface_name` (e.g. `"veth1"`) instead of always
-   joining on `INADDR_ANY`. In a DPDK `net_af` veth-pair test setup
-   (sender on `veth0`, traffic landing on `veth1`), letting the kernel
-   guess the interface may mean the receiver never sees the traffic at
-   all — set `config::kMcastLocalInterface` to the interface the traffic
-   actually lands on.
-2. **`rp_filter`.** Even joined on the right interface, Linux reverse-path
-   filtering can still drop a multicast packet whose source looks "wrong"
-   for that interface:
-   ```
+Message layouts are in [docs/PROTOCOL.md](../docs/PROTOCOL.md).
+
+## etcd discovery
+
+What the services actually register:
+
+```
+/matching-engines/1      {"addr":"127.0.0.1:8080","asset_id":1,"status":"active"}
+/socket-gateways/0       {"ip":"localhost:8081","status":"active"}
+/account-service/0       {"addr":"127.0.0.1:8082","status":"active"}
+```
+
+`socket-gateways` uses the key `"ip"` where the others use `"addr"`. That is
+the real field name.
+
+The trading panels and the lookup panel offer a "pick a discovered endpoint"
+list, so host and port do not have to be typed in. If nothing has been
+discovered, the trading panel falls back to `config::kTradingGatewayHost` /
+`kTradingGatewayPort` in `main.cpp`, which is **127.0.0.1:8000**. The gateway
+listens on 8081, so either pick the discovered entry or change the port.
+
+`parse_host_port()` maps `localhost` to `127.0.0.1` instead of resolving it.
+Fine for a single host, needs `getaddrinfo` for anything else.
+
+The numeric suffix of `/socket-gateways/<id>` is the gateway's `MACHINE_ID`.
+
+## Login timing
+
+After sending `ClientAuthRequest`, `TradingSession::connect()` sleeps 100 ms
+before marking the session `Connected` and allowing orders. The gateway sends
+no login acknowledgement, so this is a guess at how long the round trip to
+the account service takes, not a guarantee. On a local setup the round trip
+is far shorter than 100 ms.
+
+If the first orders after connecting come back `UserNotConnected`, the login
+has not landed yet, or has failed. The real fix is a login ack from the
+gateway.
+
+## Receiving multicast on the same host
+
+The engine sends with DPDK, but the dashboard receives on an ordinary kernel
+socket, so the usual kernel multicast rules apply to it:
+
+1. **Interface.** Join the groups on the interface the traffic arrives on.
+   In the veth test setup that is `veth1`. Set it with `MCAST_IFACE=veth1`
+   at runtime, or `config::kMcastLocalInterface` at compile time. Left empty,
+   the kernel picks an interface, which is often the wrong one.
+2. **Reverse-path filtering.** Linux can drop a multicast packet whose
+   source address looks wrong for the receiving interface. The setup script
+   disables it; to do it by hand:
+
+   ```bash
    sudo sysctl -w net.ipv4.conf.all.rp_filter=0
-   sudo sysctl -w net.ipv4.conf.veth1.rp_filter=0   (or whichever
-                                                      interface is used)
+   sudo sysctl -w net.ipv4.conf.veth1.rp_filter=0
    ```
 
-## Balance "real-time-ness"
+For a test with no veth pair, `MCAST_IFACE=lo` works if the sender also sets
+`IP_MULTICAST_IF` to 127.0.0.1.
 
-The `ClientRequest`/response protocol is query-on-demand, not a
-subscription — there is no server push for balance changes. This
-dashboard fakes real-time-ness two ways, combined:
+Feed groups are fixed in the engine's `main.cpp`: reports on
+`239.1.1.1:30001`, book updates on `239.1.1.2:30002`. All engines publish on
+the same two groups, so one receiver pair sees every asset; updates are told
+apart by `AssetId`.
 
-1. **Optimistic local update**: every `OrderStateReport` that arrives on
-   the multicast feed for a client we're tracking (either trading panel,
-   or a looked-up client) is applied immediately to that client's local
-   balance (`AppState::apply_trade_to_balance`).
-2. **Periodic reconciliation**: every ~1s, connected trading panels get a
-   fresh `ClientRequest{'A', ...}` poll on a short-lived connection
-   (separate from the trading session's long-lived one, so a balance
-   refresh can never block order placement), which overwrites the local
-   state with ground truth.
+## Balances
 
-This means between polls the UI can be briefly wrong if a packet is
-dropped/reordered, but self-corrects within ~1s. If CDP/the gateway ever
-gets a genuine balance-change push/subscription, swap step 2 for that and
-drop the polling loop.
+Balance queries are request/response; there is no push. The dashboard keeps
+balances current in two ways:
 
-## Known assumptions to confirm (flagged inline in code too)
+1. **Optimistic update.** Every `OrderStateReport` for a tracked client (a
+   trading panel's client, or a looked-up one) is applied to the local
+   balance as it arrives (`AppState::apply_trade_to_balance`).
+2. **Reconciliation on demand.** "Refresh Balance" on a trading panel, or
+   "Query" on the lookup panel, asks the account service on a short-lived
+   connection, separate from the trading session so a slow query can never
+   block an order. The answer overwrites the local state.
 
-1. **`MaxPositions` value for `ClientRequestResponse`** — the struct
-   layout itself is confirmed correct, but `MaxPositions` is a
-   compile-time template parameter that directly determines the
-   response's wire size. Currently hardcoded to 16
-   (`CDP_MAX_POSITIONS` in `client_details_poller.hpp`) — confirm
-   against the deployed CDP config.
-2. **Which `GatewayId` is authorized for a given client** — with a
-   single test gateway (`/socket-gateways/0`) this is trivially 0 for
-   everyone, so it's untested against a real multi-gateway assignment
-   rule. The dashboard currently lets you set/override this per trading
-   panel and per lookup query rather than assuming — revisit once
-   there's more than one gateway to actually distinguish clients by.
-3. **`ClientFd` sent in `GatewayRequest`** — the dashboard impersonates a
-   gateway it isn't, so there's no real client file descriptor to
-   report; currently sends `0`. Revisit if CDP uses this for anything
-   beyond logging/correlation on the genuine gateway's side.
-4. **Multicast group/port for order-state and book-update feeds** —
-   still not in etcd and not otherwise given; `config::kOrderStateMcastGroup/Port`
-   and `kOrderBookMcastGroup/Port` remain placeholders. If these turn out
-   to be per-matching-engine (discovered via etcd like everything else)
-   rather than fixed, the dashboard needs one `MulticastReceiver` pair
-   per engine instead of one global pair.
-5. **`Order.Timestamp` units** — unspecified upstream; sent as
-   milliseconds since epoch, purely informational, not relied on for any
-   logic here.
-6. **"localhost" in etcd `ip`/`addr` fields** — `parse_host_port()` in
-   `main.cpp` hardcodes `localhost` → `127.0.0.1` rather than doing real
-   DNS resolution (`getaddrinfo`). Fine for this test setup; would need
-   upgrading if a real deployment ever puts non-localhost hostnames in
-   etcd.
+There is no periodic poll. If a report is lost, the displayed balance stays
+wrong until the next manual refresh.
 
-## Build
+## Price history
 
-Requires: a C++20 compiler, GLFW3 + OpenGL dev packages, and
-`etcd-cpp-apiv3` + its dependencies (`grpc++`, `grpc`, `protobuf`,
-`cpprest`) already installed/discoverable, matching the rest of this
-project's build setup.
+Built entirely from the two multicast feeds, with no historical-data
+service:
 
-```
-mkdir build && cd build
-cmake ..
-cmake --build . -j
-./trading_dashboard
-```
+- **Trades** come from `FILL` / `PARTIAL_FILL` reports. Each match produces
+  one report per side and neither carries a price, so only the buyer's leg is
+  used (`BoughtAssetId != 0`, `SoldAssetId == 0`), with
+  `price = −SoldDelta / BoughtDelta`. `TradeId` is always 0, so it cannot be
+  used to pair legs.
+- **Best bid and ask** are sampled whenever a book update moves the top of
+  book.
+- **Time** is the dashboard's own wall-clock receive time, stamped on the
+  network thread. Wire timestamps are raw TSC cycles and exist only with
+  `NAOTO_PERF`, so they cannot be used as a clock axis.
 
-ImGui and GLFW's CMake integration are fetched via `FetchContent` from
-GitHub at configure time; everything else is expected to already be on
-the build machine per this project's existing conventions.
+Candles are rebuilt from the raw trade list every frame, so changing the
+timeframe re-buckets the whole session. The page footer shows raw counters
+(book updates, order reports, decoded trades), which tell a dead feed apart
+from a quiet market.
+
+## Open questions
+
+1. **Which gateway a client is authorised on.** All demo clients are
+   assigned to gateway 0. The panels let you override the gateway ID per
+   query rather than assuming; revisit once there is more than one gateway.
+2. **Market data for late joiners.** There is no book snapshot, so a
+   dashboard started after the engine only sees levels that change after it
+   joins. The retransmitter will address this.

@@ -19,6 +19,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <fstream>
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
@@ -1346,194 +1347,713 @@ static void draw_order_book_panel(const AppState &app_state,
     }
 }
 
-// Approximate TradingView-style price/volume view, built ONLY from
-// order book updates -- see AssetPriceHistory's own comment in
-// app_state.hpp for exactly what "volume" means here and its real
-// limitations. This is a deliberate stand-in, not authoritative.
+// ---------------------------------------------------------------------
+// Price History
+// ---------------------------------------------------------------------
+
+// Accent-filled when selected, neutral otherwise -- same look as the
+// Table/Depth toggle on the Order Books page.
+static bool segmented_button(const char *label, bool selected,
+                             float width = 0.0f)
+{
+    ImGui::PushStyleColor(ImGuiCol_Button,
+                          selected ? theme::kAccent : theme::kBgElevated);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                          selected ? theme::kAccentHover
+                                   : theme::rgba(242, 243, 246));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                          selected ? theme::kAccentActive
+                                   : theme::rgba(236, 237, 246));
+    ImGui::PushStyleColor(ImGuiCol_Text,
+                          selected ? theme::rgba(255, 255, 255)
+                                   : theme::kTextDim);
+    bool clicked = ImGui::Button(label, ImVec2(width, 0));
+    ImGui::PopStyleColor(4);
+    return clicked;
+}
+
+// "14:03:27" / "14:03:27.512", local time.
+static std::string format_clock_time(double epoch_s, bool with_ms)
+{
+    time_t secs = static_cast<time_t>(epoch_s);
+    struct tm tm_local;
+    localtime_r(&secs, &tm_local);
+    char buf[32];
+    if (with_ms)
+    {
+        int ms = static_cast<int>((epoch_s - std::floor(epoch_s)) * 1000.0);
+        std::snprintf(buf, sizeof(buf), "%02d:%02d:%02d.%03d",
+                      tm_local.tm_hour, tm_local.tm_min, tm_local.tm_sec, ms);
+    }
+    else
+    {
+        std::snprintf(buf, sizeof(buf), "%02d:%02d:%02d", tm_local.tm_hour,
+                      tm_local.tm_min, tm_local.tm_sec);
+    }
+    return buf;
+}
+
+// One label-over-value cell of the stats strip.
+static void stat_cell(const char *label, const char *value, ImVec4 color,
+                      ImFont *value_font)
+{
+    ImGui::BeginGroup();
+    ImGui::TextColored(theme::kTextFaint, "%s", label);
+    ImGui::PushFont(value_font);
+    ImGui::TextColored(color, "%s", value);
+    ImGui::PopFont();
+    ImGui::EndGroup();
+}
+
+// Horizontal dashed line across the current plot area at plot-space y.
+static void draw_dashed_hline(double y, ImU32 color)
+{
+    ImVec2 pos = ImPlot::GetPlotPos();
+    ImVec2 size = ImPlot::GetPlotSize();
+    float py = ImPlot::PlotToPixels(0.0, y).y;
+    if (py < pos.y || py > pos.y + size.y)
+        return;
+    ImDrawList *dl = ImPlot::GetPlotDrawList();
+    for (float x = pos.x; x < pos.x + size.x; x += 9.0f)
+        dl->AddLine(ImVec2(x, py), ImVec2(std::min(x + 5.0f, pos.x + size.x), py),
+                    color, 1.0f);
+}
+
+static void draw_vline(double x, ImU32 color)
+{
+    ImVec2 pos = ImPlot::GetPlotPos();
+    ImVec2 size = ImPlot::GetPlotSize();
+    float px = ImPlot::PlotToPixels(x, 0.0).x;
+    if (px < pos.x || px > pos.x + size.x)
+        return;
+    ImPlot::GetPlotDrawList()->AddLine(ImVec2(px, pos.y),
+                                       ImVec2(px, pos.y + size.y), color, 1.0f);
+}
+
+// Last quote at or before `t`, or nullptr.
+static const QuoteSample *quote_at(const std::deque<QuoteSample> &quotes,
+                                   double t)
+{
+    auto it = std::upper_bound(
+        quotes.begin(), quotes.end(), t,
+        [](double v, const QuoteSample &q) { return v < q.time; });
+    return it == quotes.begin() ? nullptr : &*std::prev(it);
+}
+
+// Shown instead of the chart until any market data has arrived, with the
+// raw counters so a dead feed is distinguishable from a quiet market.
+static void draw_price_history_waiting(const AppState &app_state,
+                                       const AppFonts &fonts)
+{
+    ImGui::BeginChild("ph_waiting", ImVec2(0, 0),
+                      ImGuiChildFlags_Border | ImGuiChildFlags_AutoResizeY);
+    ImGui::PushFont(fonts.header);
+    ImGui::TextUnformatted("Waiting for market data");
+    ImGui::PopFont();
+    ImGui::Dummy(ImVec2(0, 2));
+    ImGui::TextColored(theme::kTextDim,
+                       "Trades come from fills on the order-state feed; best "
+                       "bid/ask from the order-book feed.");
+    ImGui::TextColored(theme::kTextDim,
+                       "If both counters stay at 0, check MCAST_IFACE and the "
+                       "multicast group/port (see README).");
+    ImGui::Dummy(ImVec2(0, 4));
+    ImGui::PushFont(fonts.mono);
+    ImGui::TextColored(theme::kTextFaint,
+                       "book updates %llu  |  order reports %llu  |  trades %llu",
+                       (unsigned long long)app_state.book_updates_received,
+                       (unsigned long long)app_state.order_reports_received,
+                       (unsigned long long)app_state.trades_decoded);
+    ImGui::PopFont();
+    ImGui::EndChild();
+}
+
+// Candlestick (or line) chart of real trades, with a linked volume pane,
+// best bid/ask overlay, and a time & sales tape on the right. Candles are
+// rebuilt from the raw trade list every frame, so changing timeframe
+// re-buckets the whole session rather than starting over.
 static void draw_price_history_panel(AppState &app_state, const AppFonts &fonts)
 {
     struct Timeframe
     {
         const char *label;
-        uint64_t bucket_ms;
+        double seconds;
     };
     static const Timeframe kTimeframes[] = {
-        { "1s", 1000 },
-        { "5s", 5000 },
-        { "15s", 15000 },
-        { "1m", 60000 },
+        { "1s", 1 }, { "5s", 5 }, { "15s", 15 }, { "1m", 60 }, { "5m", 300 },
     };
+    constexpr int kVisibleCandles = 90; // x-range while following live
 
-    ImGui::Text("Timeframe");
-    ImGui::SameLine();
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10, 6));
-    for (auto &tf : kTimeframes)
-    {
-        bool selected = app_state.price_history_bucket_ms == tf.bucket_ms;
-        ImGui::PushStyleColor(ImGuiCol_Button,
-                              selected ? theme::kAccent : theme::kBgElevated);
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-                              selected ? theme::kAccentHover
-                                       : theme::rgba(242, 243, 246));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive,
-                              selected ? theme::kAccentActive
-                                       : theme::rgba(236, 237, 246));
-        ImGui::PushStyleColor(ImGuiCol_Text,
-                              selected ? theme::rgba(255, 255, 255)
-                                       : theme::kTextDim);
-        if (ImGui::Button(tf.label, ImVec2(50, 0)))
-        {
-            app_state.price_history_bucket_ms = tf.bucket_ms;
-            // Clear immediately, for every asset -- without this, the
-            // OLD bucket size's candles stay fully displayed (just
-            // silently mislabeled) until fresh data happens to arrive
-            // and lazily triggers AssetPriceHistory's own clear-on-
-            // bucket-change logic. An empty "no candles yet" state is
-            // a much more honest interim result than stale data.
-            for (auto &[asset_id, h] : app_state.price_history)
-            {
-                (void)asset_id;
-                h.candles.clear();
-                h.active_bucket_ms = tf.bucket_ms;
-            }
-        }
-        ImGui::PopStyleColor(4);
-        ImGui::SameLine(0, 4);
-    }
-    ImGui::PopStyleVar();
-    ImGui::NewLine();
-    ImGui::Dummy(ImVec2(0, 8));
+    static int tf_idx = 1;
+    static bool show_candles = true;
+    static bool show_quotes = false; // forced on while an asset has no trades
+    static bool follow_live = true;
+    static uint16_t selected_asset = 0;
+    static double hover_x_prev = NAN;
 
-    if (app_state.price_history.empty())
+    if (app_state.market_history.empty())
     {
-        ImGui::TextDisabled("No price history yet -- built from order book "
-                            "updates as they arrive");
+        draw_price_history_waiting(app_state, fonts);
         return;
     }
+    if (app_state.market_history.find(selected_asset)
+        == app_state.market_history.end())
+        selected_asset = app_state.market_history.begin()->first;
 
-    static uint16_t selected_asset = 0;
-    if (app_state.price_history.find(selected_asset)
-        == app_state.price_history.end())
-        selected_asset = app_state.price_history.begin()->first;
-
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(12, 7));
-    for (auto &[asset_id, hist_entry] : app_state.price_history)
+    // ---- Toolbar ------------------------------------------------------
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10, 6));
+    for (auto &[asset_id, h] : app_state.market_history)
     {
-        (void)hist_entry;
+        (void)h;
+        char label[32];
+        std::snprintf(label, sizeof(label), "Asset %u", asset_id);
         bool selected = asset_id == selected_asset;
         ImGui::PushStyleColor(ImGuiCol_Button,
                               selected ? theme::kAccentSoft : theme::kBgPanel);
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
                               selected ? theme::kAccentSoft
                                        : theme::rgba(242, 243, 246));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive,
-                              selected ? theme::kAccentSoft
-                                       : theme::rgba(236, 237, 246));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme::kAccentSoft);
         ImGui::PushStyleColor(ImGuiCol_Text,
                               selected ? theme::kAccent : theme::kTextDim);
-        char label[32];
-        std::snprintf(label, sizeof(label), "Asset %u", asset_id);
         if (ImGui::Button(label))
             selected_asset = asset_id;
         ImGui::PopStyleColor(4);
         ImGui::SameLine(0, 4);
     }
-    ImGui::PopStyleVar();
-    ImGui::NewLine();
-    ImGui::Dummy(ImVec2(0, 8));
-
-    AssetPriceHistory &hist = app_state.price_history[selected_asset];
-    if (hist.candles.empty())
+    ImGui::SameLine(0, 24);
+    for (int i = 0; i < IM_ARRAYSIZE(kTimeframes); ++i)
     {
-        ImGui::TextDisabled("No candles yet for this asset");
-        return;
+        if (segmented_button(kTimeframes[i].label, tf_idx == i, 42))
+            tf_idx = i;
+        ImGui::SameLine(0, 2);
     }
+    ImGui::SameLine(0, 20);
+    if (segmented_button("Candles", show_candles, 76))
+        show_candles = true;
+    ImGui::SameLine(0, 2);
+    if (segmented_button("Line", !show_candles, 56))
+        show_candles = false;
+    ImGui::SameLine(0, 20);
+    if (segmented_button("Bid/Ask", show_quotes, 76))
+        show_quotes = !show_quotes;
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Overlay best bid/ask as step lines. Always shown "
+                          "for an asset with no trades yet.");
+    ImGui::SameLine(0, 20);
+    if (segmented_button(follow_live ? "Live" : "Go live", follow_live, 76))
+        follow_live = true;
+    if (ImGui::IsItemHovered() && !follow_live)
+        ImGui::SetTooltip("Panning/zooming the chart detaches it from live "
+                          "data; click to follow the latest candles again.");
+    ImGui::PopStyleVar();
+    ImGui::Dummy(ImVec2(0, 4));
 
-    size_t n = hist.candles.size();
-    std::vector<double> xs(n), opens(n), highs(n), lows(n), closes(n),
-        volumes(n);
-    double y_min = hist.candles[0].low, y_max = hist.candles[0].high;
-    // X-axis is seconds RELATIVE to the first visible candle, not raw
-    // epoch time -- epoch-seconds-since-1970 is too large a number for
-    // default axis-label formatting to show second-level differences
-    // between adjacent buckets (confirmed visually: every label
-    // rendered as the same "1.78845e+09", indistinguishable).
-    uint64_t t0_ms = hist.candles.front().bucket_start_ms;
+    const AssetMarketHistory &hist = app_state.market_history[selected_asset];
+    const bool draw_quotes = show_quotes || hist.trades.empty();
+    const double bucket = kTimeframes[tf_idx].seconds;
+    const double now = wall_clock_seconds();
+
+    // ---- Stats strip --------------------------------------------------
+    {
+        char buf[64];
+        ImGui::BeginChild("ph_stats", ImVec2(0, 76), true,
+                          ImGuiWindowFlags_NoScrollbar);
+        if (!hist.trades.empty())
+        {
+            int64_t last = hist.trades.back().price;
+            int64_t first = hist.trades.front().price;
+            int64_t prev = last;
+            for (auto it = hist.trades.rbegin(); it != hist.trades.rend(); ++it)
+                if (it->price != last)
+                {
+                    prev = it->price;
+                    break;
+                }
+            int64_t hi = first, lo = first;
+            uint64_t volume = 0;
+            for (const TradePrint &t : hist.trades)
+            {
+                hi = std::max(hi, t.price);
+                lo = std::min(lo, t.price);
+                volume += t.qty;
+            }
+            ImVec4 tick_col = last > prev ? theme::kPositive
+                : last < prev               ? theme::kNegative
+                                            : theme::kText;
+            std::snprintf(buf, sizeof(buf), "%lld", (long long)last);
+            stat_cell("Last", buf, tick_col, fonts.header);
+            ImGui::SameLine(0, 36);
+            int64_t change = last - first;
+            double pct = first != 0 ? 100.0 * static_cast<double>(change)
+                    / static_cast<double>(first)
+                                    : 0.0;
+            std::snprintf(buf, sizeof(buf), "%+lld (%+.2f%%)",
+                          (long long)change, pct);
+            stat_cell("Session change", buf,
+                      change > 0       ? theme::kPositive
+                          : change < 0 ? theme::kNegative
+                                       : theme::kTextDim,
+                      fonts.mono);
+            ImGui::SameLine(0, 36);
+            std::snprintf(buf, sizeof(buf), "%lld", (long long)hi);
+            stat_cell("High", buf, theme::kText, fonts.mono);
+            ImGui::SameLine(0, 36);
+            std::snprintf(buf, sizeof(buf), "%lld", (long long)lo);
+            stat_cell("Low", buf, theme::kText, fonts.mono);
+            ImGui::SameLine(0, 36);
+            std::snprintf(buf, sizeof(buf), "%llu", (unsigned long long)volume);
+            stat_cell("Volume", buf, theme::kText, fonts.mono);
+            ImGui::SameLine(0, 36);
+            std::snprintf(buf, sizeof(buf), "%zu", hist.trades.size());
+            stat_cell("Trades", buf, theme::kText, fonts.mono);
+        }
+        else
+        {
+            stat_cell("Last", "--", theme::kTextFaint, fonts.header);
+            ImGui::SameLine(0, 36);
+            stat_cell("Trades", "none yet", theme::kTextFaint, fonts.mono);
+        }
+
+        auto book_it = app_state.order_books.find(selected_asset);
+        int64_t bid = 0, ask = 0;
+        if (book_it != app_state.order_books.end())
+        {
+            if (!book_it->second.bids.empty())
+                bid = book_it->second.bids.begin()->first;
+            if (!book_it->second.asks.empty())
+                ask = book_it->second.asks.begin()->first;
+        }
+        ImGui::SameLine(0, 36);
+        if (bid)
+            std::snprintf(buf, sizeof(buf), "%lld", (long long)bid);
+        stat_cell("Best bid", bid ? buf : "--",
+                  bid ? theme::kPositive : theme::kTextFaint, fonts.mono);
+        ImGui::SameLine(0, 36);
+        if (ask)
+            std::snprintf(buf, sizeof(buf), "%lld", (long long)ask);
+        stat_cell("Best ask", ask ? buf : "--",
+                  ask ? theme::kNegative : theme::kTextFaint, fonts.mono);
+        ImGui::SameLine(0, 36);
+        if (bid && ask)
+            std::snprintf(buf, sizeof(buf), "%lld", (long long)(ask - bid));
+        stat_cell("Spread", bid && ask ? buf : "--",
+                  bid && ask ? theme::kText : theme::kTextFaint, fonts.mono);
+        ImGui::EndChild();
+    }
+    ImGui::Dummy(ImVec2(0, 4));
+
+    // ---- Series ---------------------------------------------------------
+    std::vector<Candle> candles = hist.build_candles(bucket);
+    const size_t n = candles.size();
+    std::vector<double> xs(n), highs(n), lows(n), closes(n);
+    std::vector<double> up_x, up_v, down_x, down_v;
     for (size_t i = 0; i < n; ++i)
     {
-        const PriceVolumeCandle &c = hist.candles[i];
-        xs[i] = static_cast<double>(c.bucket_start_ms - t0_ms) / 1000.0;
-        opens[i] = c.open;
+        const Candle &c = candles[i];
+        xs[i] = c.start + bucket * 0.5; // centered in its interval
         highs[i] = c.high;
         lows[i] = c.low;
         closes[i] = c.close;
-        volumes[i] = c.volume;
-        y_min = std::min(y_min, c.low);
-        y_max = std::max(y_max, c.high);
-    }
-    double bucket_s = static_cast<double>(hist.active_bucket_ms) / 1000.0;
-    double x_min = xs.front() - bucket_s * 0.5;
-    double x_max = xs.back() + bucket_s * 0.5;
-    double y_pad = (y_max - y_min) * 0.08;
-    if (y_pad <= 0.0)
-        y_pad = std::max(1.0, y_max * 0.01);
-
-    ImGui::PushFont(fonts.mono);
-    ImGui::TextColored(theme::kTextFaint, "%zu candles", n);
-    ImGui::PopFont();
-
-    if (ImPlot::BeginPlot("##price_chart", ImVec2(-1, 320),
-                          ImPlotFlags_NoLegend))
-    {
-        ImPlot::SetupAxis(ImAxis_X1, "Time (s, relative)");
-        ImPlot::SetupAxis(ImAxis_Y1, "Price");
-        ImPlot::SetupAxisLimits(ImAxis_X1, x_min, x_max, ImPlotCond_Always);
-        ImPlot::SetupAxisLimits(ImAxis_Y1, y_min - y_pad, y_max + y_pad,
-                                ImPlotCond_Always);
-
-        ImDrawList *draw_list = ImPlot::GetPlotDrawList();
-        double half_width = bucket_s * 0.35;
-        for (size_t i = 0; i < n; ++i)
+        if (c.close >= c.open)
         {
-            bool bullish = closes[i] >= opens[i];
-            ImU32 color = ImGui::GetColorU32(bullish ? theme::kPositive
-                                                     : theme::kNegative);
-            ImVec2 p_low = ImPlot::PlotToPixels(xs[i], lows[i]);
-            ImVec2 p_high = ImPlot::PlotToPixels(xs[i], highs[i]);
-            draw_list->AddLine(p_high, p_low, color, 1.5f);
-            ImVec2 p_open = ImPlot::PlotToPixels(xs[i] - half_width, opens[i]);
-            ImVec2 p_close =
-                ImPlot::PlotToPixels(xs[i] + half_width, closes[i]);
-            draw_list->AddRectFilled(p_open, p_close, color);
+            up_x.push_back(xs[i]);
+            up_v.push_back(c.volume);
         }
-        ImPlot::EndPlot();
+        else
+        {
+            down_x.push_back(xs[i]);
+            down_v.push_back(c.volume);
+        }
     }
-
-    double max_vol = *std::max_element(volumes.begin(), volumes.end());
-    if (max_vol <= 0.0)
-        max_vol = 1.0;
-    if (ImPlot::BeginPlot("##volume_chart", ImVec2(-1, 140),
-                          ImPlotFlags_NoLegend))
+    // Line mode carries the last close forward to "now", so a quiet
+    // market still shows where the price sits.
+    std::vector<double> line_x = xs, line_y = closes;
+    if (n > 0)
     {
-        ImPlot::SetupAxis(ImAxis_X1, "Time (s, relative)");
-        ImPlot::SetupAxis(ImAxis_Y1, "Volume (approx.)");
-        ImPlot::SetupAxisLimits(ImAxis_X1, x_min, x_max, ImPlotCond_Always);
-        ImPlot::SetupAxisLimits(ImAxis_Y1, 0.0, max_vol * 1.1,
-                                ImPlotCond_Always);
-        ImPlotSpec vol_spec;
-        vol_spec.FillColor = theme::kAccent;
-        ImPlot::PlotBars("Volume", xs.data(), volumes.data(),
-                         static_cast<int>(n), bucket_s * 0.7, vol_spec);
-        ImPlot::EndPlot();
+        line_x.push_back(std::max(now, xs.back()));
+        line_y.push_back(closes.back());
     }
 
-    ImGui::Dummy(ImVec2(0, 6));
-    ImGui::TextColored(
-        theme::kTextFaint,
-        "Volume is approximate: derived only from order book depth decreases, "
-        "which can't distinguish a real fill from a cancellation. Treat this "
-        "as "
-        "a rough stand-in until a dedicated historical-data service exists.");
+    // Best bid/ask as step lines. Only the visible stretch (plus the
+    // sample in force at its left edge) is submitted -- the full quote
+    // history can be ~200k points. An empty side becomes NaN, i.e. a gap.
+    static double view_min = now - bucket * kVisibleCandles;
+    static double view_max = now;
+    std::vector<double> q_x, q_bid, q_ask;
+    if (draw_quotes && !hist.quotes.empty())
+    {
+        auto first_it = std::upper_bound(
+            hist.quotes.begin(), hist.quotes.end(), view_min,
+            [](double v, const QuoteSample &q) { return v < q.time; });
+        if (first_it != hist.quotes.begin())
+            --first_it;
+        for (auto it = first_it; it != hist.quotes.end(); ++it)
+        {
+            if (it->time > view_max)
+                break;
+            q_x.push_back(it->time);
+            q_bid.push_back(it->bid ? static_cast<double>(it->bid) : NAN);
+            q_ask.push_back(it->ask ? static_cast<double>(it->ask) : NAN);
+        }
+        if (!q_x.empty())
+        {
+            q_x.push_back(std::max(now, q_x.back()));
+            q_bid.push_back(q_bid.back());
+            q_ask.push_back(q_ask.back());
+        }
+    }
+
+    // ---- Chart + tape -----------------------------------------------------
+    const float footer_h = ImGui::GetFrameHeightWithSpacing()
+        + ImGui::GetStyle().WindowPadding.y;
+    const float body_h =
+        std::max(260.0f, ImGui::GetContentRegionAvail().y - footer_h);
+    const float tape_w = 300.0f;
+
+    if (ImGui::BeginTable("ph_layout", 2, ImGuiTableFlags_None,
+                          ImVec2(0, body_h)))
+    {
+        ImGui::TableSetupColumn("chart", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("tape", ImGuiTableColumnFlags_WidthFixed,
+                                tape_w);
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+
+        // Explicit heights: a non-scrolling table ignores outer_size.y,
+        // so GetContentRegionAvail() inside a cell runs to the window
+        // bottom and would push the footer off-screen.
+        float chart_h = body_h;
+        if (hist.trades.empty())
+        {
+            ImGui::TextColored(theme::kTextDim,
+                               "No trades yet for asset %u -- showing best "
+                               "bid/ask only",
+                               selected_asset);
+            chart_h -= ImGui::GetTextLineHeightWithSpacing();
+        }
+
+        double hover_x = NAN;
+        const ImU32 crosshair_col =
+            ImGui::GetColorU32(theme::rgba(92, 98, 112, 140));
+        float row_ratios[2] = { 3.0f, 1.0f };
+        ImPlot::PushStyleVar(ImPlotStyleVar_FitPadding, ImVec2(0.0f, 0.12f));
+        if (ImPlot::BeginSubplots("##ph_subplots", 2, 1,
+                                  ImVec2(-1, chart_h),
+                                  ImPlotSubplotFlags_LinkAllX
+                                      | ImPlotSubplotFlags_NoResize
+                                      | ImPlotSubplotFlags_NoMenus,
+                                  row_ratios))
+        {
+            // While following, the window spans the last kVisibleCandles
+            // buckets -- or less, if the session hasn't been running that
+            // long, so a fresh session isn't squeezed against the right edge.
+            double first_time = now;
+            if (!hist.trades.empty())
+                first_time = std::min(first_time, hist.trades.front().time);
+            if (!hist.quotes.empty())
+                first_time = std::min(first_time, hist.quotes.front().time);
+            const double live_max = now + bucket * 2;
+            const double live_min = std::min(
+                live_max - bucket * 20,
+                std::max(live_max - bucket * kVisibleCandles,
+                         first_time - bucket * 2));
+            auto setup_x = [&](bool tick_labels) {
+                ImPlot::SetupAxis(ImAxis_X1, nullptr,
+                                  tick_labels ? ImPlotAxisFlags_None
+                                              : ImPlotAxisFlags_NoTickLabels);
+                ImPlot::SetupAxisScale(ImAxis_X1, ImPlotScale_Time);
+                if (follow_live)
+                    ImPlot::SetupAxisLimits(ImAxis_X1, live_min, live_max,
+                                            ImPlotCond_Always);
+                else
+                    ImPlot::SetupAxisLimits(ImAxis_X1,
+                                            now - bucket * kVisibleCandles,
+                                            now, ImPlotCond_Once);
+            };
+            // Any drag/zoom on either pane hands control to the user.
+            auto detach_on_interaction = [&]() {
+                if (!ImPlot::IsPlotHovered())
+                    return;
+                hover_x = ImPlot::GetPlotMousePos().x;
+                if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)
+                    || ImGui::GetIO().MouseWheel != 0.0f)
+                    follow_live = false;
+            };
+            const double hx_prev = hover_x_prev;
+
+            // ---- Price pane ----
+            if (ImPlot::BeginPlot("##price", ImVec2(),
+                                  ImPlotFlags_NoLegend | ImPlotFlags_NoMenus
+                                      | ImPlotFlags_NoMouseText))
+            {
+                setup_x(false);
+                ImPlot::SetupAxis(ImAxis_Y1, nullptr,
+                                  ImPlotAxisFlags_AutoFit
+                                      | ImPlotAxisFlags_RangeFit
+                                      | ImPlotAxisFlags_Opposite);
+                ImPlot::SetupAxisFormat(ImAxis_Y1, "%.0f");
+                ImPlot::SetupFinish();
+                detach_on_interaction();
+                ImPlotRect lim = ImPlot::GetPlotLimits();
+                view_min = lim.X.Min;
+                view_max = lim.X.Max;
+
+                if (!q_x.empty())
+                {
+                    ImPlotSpec bid_spec;
+                    bid_spec.LineColor = theme::rgba(22, 163, 74, 170);
+                    bid_spec.Flags = ImPlotLineFlags_SkipNaN;
+                    ImPlot::PlotStairs("Best bid", q_x.data(), q_bid.data(),
+                                       static_cast<int>(q_x.size()), bid_spec);
+                    ImPlotSpec ask_spec;
+                    ask_spec.LineColor = theme::rgba(225, 75, 66, 170);
+                    ask_spec.Flags = ImPlotLineFlags_SkipNaN;
+                    ImPlot::PlotStairs("Best ask", q_x.data(), q_ask.data(),
+                                       static_cast<int>(q_x.size()), ask_spec);
+                }
+
+                if (n > 0 && show_candles)
+                {
+                    // Invisible high/low series purely so RangeFit sizes
+                    // the y-axis to the visible candles -- the bodies and
+                    // wicks below are custom-drawn, which ImPlot can't fit.
+                    ImPlotSpec fit_spec;
+                    fit_spec.LineColor = ImVec4(0, 0, 0, 0);
+                    ImPlot::PlotLine("##fit_hi", xs.data(), highs.data(),
+                                     static_cast<int>(n), fit_spec);
+                    ImPlot::PlotLine("##fit_lo", xs.data(), lows.data(),
+                                     static_cast<int>(n), fit_spec);
+
+                    ImDrawList *dl = ImPlot::GetPlotDrawList();
+                    ImPlot::PushPlotClipRect();
+                    // Measured near the visible range: PlotToPixels() of an
+                    // x far outside it (e.g. 0 on an epoch-seconds axis)
+                    // overflows float precision.
+                    float slot_px =
+                        ImPlot::PlotToPixels(lim.X.Min + bucket, 0.0).x
+                        - ImPlot::PlotToPixels(lim.X.Min, 0.0).x;
+                    float half_body = std::max(1.0f, slot_px * 0.36f);
+                    for (size_t i = 0; i < n; ++i)
+                    {
+                        if (xs[i] < lim.X.Min - bucket
+                            || xs[i] > lim.X.Max + bucket)
+                            continue;
+                        const Candle &c = candles[i];
+                        bool up = c.close >= c.open;
+                        ImU32 col = ImGui::GetColorU32(up ? theme::kPositive
+                                                          : theme::kNegative);
+                        ImVec2 hi = ImPlot::PlotToPixels(xs[i], c.high);
+                        ImVec2 lo = ImPlot::PlotToPixels(xs[i], c.low);
+                        dl->AddLine(hi, lo, col, 1.0f);
+                        float y_open = ImPlot::PlotToPixels(xs[i], c.open).y;
+                        float y_close = ImPlot::PlotToPixels(xs[i], c.close).y;
+                        float top = std::min(y_open, y_close);
+                        float bot = std::max(y_open, y_close);
+                        if (bot - top < 1.5f) // doji: still visible
+                        {
+                            top -= 0.75f;
+                            bot += 0.75f;
+                        }
+                        dl->AddRectFilled(ImVec2(hi.x - half_body, top),
+                                          ImVec2(hi.x + half_body, bot), col);
+                    }
+                    ImPlot::PopPlotClipRect();
+                }
+                else if (n > 0)
+                {
+                    ImPlotSpec fill_spec;
+                    fill_spec.FillColor = theme::kAccent;
+                    fill_spec.FillAlpha = 0.10f;
+                    // Shades down to -inf: must not take part in the y fit.
+                    fill_spec.Flags = ImPlotItemFlags_NoFit;
+                    ImPlot::PlotShaded("##close_fill", line_x.data(),
+                                       line_y.data(),
+                                       static_cast<int>(line_x.size()),
+                                       -INFINITY, fill_spec);
+                    ImPlotSpec line_spec;
+                    line_spec.LineColor = theme::kAccent;
+                    line_spec.LineWeight = 2.0f;
+                    ImPlot::PlotLine("Close", line_x.data(), line_y.data(),
+                                     static_cast<int>(line_x.size()),
+                                     line_spec);
+                }
+
+                if (!hist.trades.empty())
+                {
+                    double last = static_cast<double>(hist.trades.back().price);
+                    bool up = n == 0 || candles.back().close >= candles.back().open;
+                    ImVec4 col = up ? theme::kPositive : theme::kNegative;
+                    draw_dashed_hline(last, ImGui::GetColorU32(col));
+                    ImPlot::TagY(last, col, "%.0f", last);
+                }
+
+                double hx = !std::isnan(hover_x) ? hover_x : hx_prev;
+                if (!std::isnan(hx))
+                    draw_vline(hx, crosshair_col);
+                if (!std::isnan(hover_x))
+                {
+                    double my = ImPlot::GetPlotMousePos().y;
+                    draw_dashed_hline(my, crosshair_col);
+                    ImPlot::TagY(my, theme::kTextDim, "%.0f", my);
+                }
+                ImPlot::EndPlot();
+            }
+
+            // ---- Volume pane ----
+            if (ImPlot::BeginPlot("##volume", ImVec2(),
+                                  ImPlotFlags_NoLegend | ImPlotFlags_NoMenus
+                                      | ImPlotFlags_NoMouseText))
+            {
+                setup_x(true);
+                ImPlot::SetupAxis(ImAxis_Y1, nullptr,
+                                  ImPlotAxisFlags_AutoFit
+                                      | ImPlotAxisFlags_RangeFit
+                                      | ImPlotAxisFlags_Opposite);
+                ImPlot::SetupAxisFormat(ImAxis_Y1, "%.0f");
+                ImPlot::SetupAxisLimitsConstraints(ImAxis_Y1, 0.0, INFINITY);
+                ImPlot::SetupFinish();
+                detach_on_interaction();
+
+                ImPlotSpec up_spec;
+                up_spec.FillColor = theme::kPositive;
+                up_spec.LineColor = theme::kPositive;
+                up_spec.FillAlpha = 0.55f;
+                if (!up_x.empty())
+                    ImPlot::PlotBars("Up volume", up_x.data(), up_v.data(),
+                                     static_cast<int>(up_x.size()),
+                                     bucket * 0.72, up_spec);
+                ImPlotSpec down_spec;
+                down_spec.FillColor = theme::kNegative;
+                down_spec.LineColor = theme::kNegative;
+                down_spec.FillAlpha = 0.55f;
+                if (!down_x.empty())
+                    ImPlot::PlotBars("Down volume", down_x.data(),
+                                     down_v.data(),
+                                     static_cast<int>(down_x.size()),
+                                     bucket * 0.72, down_spec);
+
+                double hx = !std::isnan(hover_x) ? hover_x : hx_prev;
+                if (!std::isnan(hx))
+                    draw_vline(hx, crosshair_col);
+                ImPlot::EndPlot();
+            }
+            ImPlot::EndSubplots();
+        }
+        ImPlot::PopStyleVar();
+        hover_x_prev = hover_x;
+
+        // Tooltip for whichever interval is under the cursor.
+        if (!std::isnan(hover_x))
+        {
+            auto it = std::upper_bound(
+                candles.begin(), candles.end(), hover_x,
+                [](double v, const Candle &c) { return v < c.start; });
+            const Candle *c = nullptr;
+            if (it != candles.begin()
+                && hover_x < std::prev(it)->start + bucket)
+                c = &*std::prev(it);
+            const QuoteSample *q = quote_at(hist.quotes, hover_x);
+
+            ImGui::BeginTooltip();
+            ImGui::PushFont(fonts.mono);
+            double t0 = std::floor(hover_x / bucket) * bucket;
+            ImGui::TextColored(theme::kTextDim, "%s",
+                               format_clock_time(t0, false).c_str());
+            if (c)
+            {
+                ImVec4 col =
+                    c->close >= c->open ? theme::kPositive : theme::kNegative;
+                ImGui::TextColored(col, "O %.0f  H %.0f  L %.0f  C %.0f",
+                                   c->open, c->high, c->low, c->close);
+                ImGui::Text("Vol %.0f  (%u trade%s)", c->volume, c->trades,
+                            c->trades == 1 ? "" : "s");
+            }
+            else
+            {
+                ImGui::TextColored(theme::kTextFaint, "no trades");
+            }
+            if (q && (q->bid || q->ask))
+            {
+                ImGui::TextColored(theme::kPositive, "Bid %s",
+                                   q->bid ? std::to_string(q->bid).c_str()
+                                          : "--");
+                ImGui::SameLine();
+                ImGui::TextColored(theme::kNegative, "Ask %s",
+                                   q->ask ? std::to_string(q->ask).c_str()
+                                          : "--");
+            }
+            ImGui::PopFont();
+            ImGui::EndTooltip();
+        }
+
+        // ---- Time & sales tape ----
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted("Trades");
+        ImGui::BeginChild(
+            "ph_tape",
+            ImVec2(0, body_h - ImGui::GetTextLineHeightWithSpacing()), true);
+        if (hist.trades.empty())
+        {
+            ImGui::TextDisabled("No trades yet");
+        }
+        else if (ImGui::BeginTable("ph_tape_table", 3,
+                                   ImGuiTableFlags_ScrollY
+                                       | ImGuiTableFlags_RowBg
+                                       | ImGuiTableFlags_SizingStretchProp))
+        {
+            ImGui::TableSetupScrollFreeze(0, 1);
+            ImGui::TableSetupColumn("Time", ImGuiTableColumnFlags_None, 1.4f);
+            ImGui::TableSetupColumn("Price", ImGuiTableColumnFlags_None, 1.0f);
+            ImGui::TableSetupColumn("Qty", ImGuiTableColumnFlags_None, 0.8f);
+            ImGui::TableHeadersRow();
+            ImGui::PushFont(fonts.mono);
+            const size_t total = hist.trades.size();
+            const int rows = static_cast<int>(std::min<size_t>(total, 2000));
+            ImGuiListClipper clipper;
+            clipper.Begin(rows);
+            while (clipper.Step())
+            {
+                for (int row = clipper.DisplayStart; row < clipper.DisplayEnd;
+                     ++row)
+                {
+                    size_t idx = total - 1 - static_cast<size_t>(row);
+                    const TradePrint &t = hist.trades[idx];
+                    // Tick rule: colored by direction vs the previous print.
+                    ImVec4 col = theme::kText;
+                    if (idx > 0)
+                    {
+                        int64_t prev = hist.trades[idx - 1].price;
+                        col = t.price > prev ? theme::kPositive
+                            : t.price < prev ? theme::kNegative
+                                             : theme::kTextDim;
+                    }
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    ImGui::TextColored(theme::kTextFaint, "%s",
+                                       format_clock_time(t.time, true).c_str());
+                    ImGui::TableNextColumn();
+                    ImGui::TextColored(col, "%lld", (long long)t.price);
+                    ImGui::TableNextColumn();
+                    ImGui::TextColored(theme::kTextDim, "%u", t.qty);
+                }
+            }
+            ImGui::PopFont();
+            ImGui::EndTable();
+        }
+        ImGui::EndChild();
+        ImGui::EndTable();
+    }
+
+    // ---- Footer: raw feed counters -------------------------------------
+    ImGui::PushFont(fonts.mono);
+    ImGui::TextColored(theme::kTextFaint,
+                       "feeds: %llu book updates  |  %llu order reports  |  "
+                       "%llu trades decoded  |  times are local receive time",
+                       (unsigned long long)app_state.book_updates_received,
+                       (unsigned long long)app_state.order_reports_received,
+                       (unsigned long long)app_state.trades_decoded);
+    ImGui::PopFont();
 }
 
 // Formats a nanosecond duration using whichever unit reads most
@@ -2614,6 +3134,9 @@ int main()
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImPlot::CreateContext(); // requires an ImGui context to already exist
+    // Time axes (Price History) in the viewer's timezone, 24h clock.
+    ImPlot::GetStyle().UseLocalTime = true;
+    ImPlot::GetStyle().Use24HourClock = true;
     ImGui::StyleColorsDark();
     theme::apply();
     ImGui_ImplGlfw_InitForOpenGL(window, true);
@@ -2630,7 +3153,7 @@ int main()
         etcd_watcher.start_watch();
     }).detach();
 
-    MpscQueue<naoto::OrderStateReport> trade_events;
+    MpscQueue<Stamped<naoto::OrderStateReport>> trade_events;
     std::string mcast_iface = resolve_mcast_interface();
     auto [order_state_group, order_state_port] = resolve_mcast_endpoint(
         "MCAST_ORDER_STATE_ADDR", config::kOrderStateMcastGroup,
@@ -2666,17 +3189,18 @@ int main()
                 return;
             }
             size_t count = len / kReportSize;
+            double recv_time = wall_clock_seconds();
             for (size_t i = 0; i < count; ++i)
             {
-                naoto::OrderStateReport r;
-                std::memcpy(&r, data + i * kReportSize, kReportSize);
-                trade_events.push(r);
+                Stamped<naoto::OrderStateReport> s{ recv_time, {} };
+                std::memcpy(&s.msg, data + i * kReportSize, kReportSize);
+                trade_events.push(s);
             }
         },
         mcast_iface);
     order_state_receiver.start();
 
-    MpscQueue<naoto::OrderBookUpdate> book_events;
+    MpscQueue<Stamped<naoto::OrderBookUpdate>> book_events;
     MulticastReceiver order_book_receiver(
         order_book_group, order_book_port,
         [&book_events](const uint8_t *data, size_t len) {
@@ -2694,11 +3218,12 @@ int main()
                 return;
             }
             size_t count = len / kUpdateSize;
+            double recv_time = wall_clock_seconds();
             for (size_t i = 0; i < count; ++i)
             {
-                naoto::OrderBookUpdate u;
-                std::memcpy(&u, data + i * kUpdateSize, kUpdateSize);
-                book_events.push(u);
+                Stamped<naoto::OrderBookUpdate> s{ recv_time, {} };
+                std::memcpy(&s.msg, data + i * kUpdateSize, kUpdateSize);
+                book_events.push(s);
             }
         },
         mcast_iface);
@@ -2727,8 +3252,9 @@ int main()
         for (auto &ev : etcd_events.drain_all())
             app_state.apply_etcd_event(ev);
 
-        for (auto &r : trade_events.drain_all())
+        for (auto &stamped : trade_events.drain_all())
         {
+            const naoto::OrderStateReport &r = stamped.msg;
 #ifdef NAOTO_PERF
             uint64_t ingested_ts = r.IngestedTimestamp;
             uint64_t routed_ts = r.RoutedTimestamp;
@@ -2749,14 +3275,15 @@ int main()
             };
             app_state.push_trade(entry);
             app_state.apply_trade_to_balance(r); // optimistic local update
+            app_state.record_order_report(r, stamped.recv_time);
         }
 
-        for (auto &u : book_events.drain_all())
+        for (auto &stamped : book_events.drain_all())
         {
-            if (u.AssetId == 0)
+            if (stamped.msg.AssetId == 0)
                 continue; // asset 0 is settlement currency, not shown in book
                           // view
-            app_state.record_book_update(u);
+            app_state.record_book_update(stamped.msg, stamped.recv_time);
         }
 
         panel_a.drain_confirmations();

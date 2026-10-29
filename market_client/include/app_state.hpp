@@ -13,6 +13,8 @@
 //
 
 #include <algorithm>
+#include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <deque>
 #include <functional>
@@ -34,9 +36,7 @@ struct OrderBook
     std::map<int64_t, uint32_t> asks; // best ask first
 
     // Returns the signed depth delta (new - old, old=0 if the level
-    // didn't previously exist) -- used upstream to derive an
-    // approximate trading-volume proxy from raw depth changes, since
-    // there's no dedicated historical-data feed yet.
+    // didn't previously exist).
     int64_t apply(const naoto::OrderBookUpdate &u)
     {
         // bids/asks have different map types (distinct comparators), so
@@ -67,75 +67,141 @@ struct OrderBook
     }
 };
 
-// ---- Approximate price/volume history, derived ONLY from order book
-// updates (no dedicated historical-data service yet -- this is a
-// deliberately rough stand-in per your own framing, not authoritative).
+// ---- Wall-clock receive stamping ------------------------------------------
+// Price history is plotted against the time THIS dashboard received each
+// message, not against any timestamp carried on the wire. The wire
+// timestamps (NAOTO_PERF only) are raw RDTSC cycles from the sender's
+// machine -- no epoch, unknown frequency -- so they can't be placed on a
+// clock axis. The previous history code fed those cycle counts straight
+// into a "milliseconds" bucketing function, which put every update in its
+// own sub-microsecond "candle" (open == close, zero-height body) on an
+// axis millions of "seconds" wide: the flat chart. And without NAOTO_PERF
+// (the default build) it recorded nothing at all.
 //
-// PRICE: every OrderBookUpdate carries a Price, so each update is
-// treated as a price observation at its Timestamp.
-//
-// VOLUME: approximated from depth DECREASES only -- when a price
-// level's resting depth shrinks, that's treated as a proxy for trading
-// activity at that price. This is NOT the same as real trade volume:
-// a depth decrease could equally be a cancellation, not a fill, and
-// this has no way to tell those apart from the order book feed alone.
-// Depth INCREASES (new resting supply appearing) are never counted as
-// volume. Once a real historical-data service exists with actual trade
-// records, this whole approximation should be replaced, not extended.
-struct PriceVolumeCandle
+// Stamped on the network thread, at recv() time, so a frame's worth of
+// batched messages still keep their real spacing.
+inline double wall_clock_seconds()
 {
-    uint64_t bucket_start_ms = 0;
-    double open = 0, high = 0, low = 0, close = 0;
-    double volume = 0;
+    using namespace std::chrono;
+    return duration<double>(system_clock::now().time_since_epoch()).count();
+}
+
+template <typename T>
+struct Stamped
+{
+    double recv_time; // seconds since the Unix epoch, see wall_clock_seconds()
+    T msg;
 };
 
-struct AssetPriceHistory
+// ---- Price history: real trades + top of book ------------------------------
+// One executed trade, decoded from the order-state feed. The matching
+// engine (market_server/matching_engine/include/bid_ask.hpp, FillBuyOrder/
+// FillSellOrder) emits TWO reports per match, one per counterparty, and
+// neither carries a price field directly -- but the cash leg does:
+//
+//   buyer : Bought=<asset>, BoughtDelta=+qty,  Sold=0, SoldDelta=-qty*price
+//   seller: Bought=0, BoughtDelta=+qty*price, Sold=<asset>, SoldDelta=-qty
+//
+// TradeId is always 0 on the wire, so it can't be used to pair the two
+// legs. Instead only the BUYER leg is taken (exactly one per match,
+// whichever side was the aggressor), and price = cash / qty, which is
+// exact since the engine computes the cash leg as qty * level price.
+struct TradePrint
 {
-    std::deque<PriceVolumeCandle> candles; // oldest first
-    uint64_t active_bucket_ms = 0;
-    static constexpr size_t kMaxCandles = 500; // capped, avoid unbounded growth
-                                               // over a long session
+    double time; // receive time, epoch seconds
+    int64_t price;
+    uint32_t qty;
+};
 
-    void record(uint64_t timestamp_ms, int64_t price,
-                double volume_contribution, uint64_t bucket_size_ms)
+// Best bid/ask after a book update changed either of them. 0 = that side
+// of the book is empty.
+struct QuoteSample
+{
+    double time;
+    int64_t bid;
+    int64_t ask;
+};
+
+struct Candle
+{
+    double start; // bucket start, epoch seconds
+    double open = 0, high = 0, low = 0, close = 0;
+    double volume = 0; // traded quantity, real fills only
+    uint32_t trades = 0;
+};
+
+// Returns true (and fills asset/price/qty) if `r` is the buyer leg of a
+// fill -- see TradePrint for why only that leg counts.
+inline bool decode_trade(const naoto::OrderStateReport &r, uint16_t &asset,
+                         int64_t &price, uint32_t &qty)
+{
+    if (r.State != naoto::OrderState::FILL
+        && r.State != naoto::OrderState::PARTIAL_FILL)
+        return false;
+    if (r.BoughtAssetId == 0 || r.SoldAssetId != 0 || r.BoughtDelta <= 0
+        || r.SoldDelta >= 0)
+        return false;
+    asset = r.BoughtAssetId;
+    qty = static_cast<uint32_t>(r.BoughtDelta);
+    price = -r.SoldDelta / r.BoughtDelta;
+    return true;
+}
+
+struct AssetMarketHistory
+{
+    // Raw data is kept and candles are rebuilt from it on demand, so
+    // switching timeframe re-buckets the whole session instead of
+    // throwing history away. Capped to bound memory on long sessions.
+    std::deque<TradePrint> trades; // oldest first
+    std::deque<QuoteSample> quotes; // oldest first
+    static constexpr size_t kMaxTrades = 200000;
+    static constexpr size_t kMaxQuotes = 200000;
+
+    void add_trade(double time, int64_t price, uint32_t qty)
     {
-        if (bucket_size_ms == 0)
-            bucket_size_ms = 1000;
-        if (bucket_size_ms != active_bucket_ms)
-        {
-            // Timeframe changed (e.g. UI timeframe picker) -- start fresh
-            // rather than mixing differently-sized candles, which would
-            // otherwise render as visually inconsistent bar widths.
-            candles.clear();
-            active_bucket_ms = bucket_size_ms;
-        }
-        uint64_t bucket_start =
-            (timestamp_ms / bucket_size_ms) * bucket_size_ms;
-        double p = static_cast<double>(price);
+        trades.push_back({ time, price, qty });
+        if (trades.size() > kMaxTrades)
+            trades.pop_front();
+    }
 
-        if (candles.empty() || candles.back().bucket_start_ms != bucket_start)
-        {
-            // Out-of-order/late data (bucket older than what we've already
-            // recorded) is simply dropped rather than rewriting history --
-            // keeps this append-only and simple, acceptable for a rough
-            // stand-in view.
-            if (!candles.empty()
-                && bucket_start < candles.back().bucket_start_ms)
-                return;
-            PriceVolumeCandle c;
-            c.bucket_start_ms = bucket_start;
-            c.open = c.high = c.low = c.close = p;
-            c.volume = 0;
-            candles.push_back(c);
-            while (candles.size() > kMaxCandles)
-                candles.pop_front();
-        }
+    // Only records when the top of book actually moved -- most depth
+    // updates are behind the touch and don't change what gets plotted.
+    void add_quote(double time, int64_t bid, int64_t ask)
+    {
+        if (!quotes.empty() && quotes.back().bid == bid
+            && quotes.back().ask == ask)
+            return;
+        quotes.push_back({ time, bid, ask });
+        if (quotes.size() > kMaxQuotes)
+            quotes.pop_front();
+    }
 
-        PriceVolumeCandle &c = candles.back();
-        c.high = std::max(c.high, p);
-        c.low = std::min(c.low, p);
-        c.close = p;
-        c.volume += volume_contribution;
+    // Buckets with no trades are skipped (left as gaps) rather than
+    // carried forward, so an idle market reads as idle.
+    std::vector<Candle> build_candles(double bucket_s) const
+    {
+        std::vector<Candle> out;
+        if (bucket_s <= 0.0)
+            return out;
+        for (const TradePrint &t : trades)
+        {
+            double start = std::floor(t.time / bucket_s) * bucket_s;
+            double p = static_cast<double>(t.price);
+            if (out.empty() || out.back().start != start)
+            {
+                Candle c;
+                c.start = start;
+                c.open = c.high = c.low = c.close = p;
+                out.push_back(c);
+            }
+            Candle &c = out.back();
+            c.high = std::max(c.high, p);
+            c.low = std::min(c.low, p);
+            c.close = p;
+            c.volume += t.qty;
+            c.trades += 1;
+        }
+        return out;
     }
 };
 
@@ -193,13 +259,15 @@ struct AppState
     // asset_id -> order book (asset 0 intentionally never inserted here)
     std::map<uint16_t, OrderBook> order_books;
 
-    // asset_id -> rough price/volume history derived from order book
-    // updates -- see AssetPriceHistory's own comment for the important
-    // caveats on what "volume" means here.
-    std::map<uint16_t, AssetPriceHistory> price_history;
-    uint64_t price_history_bucket_ms = 1000; // 1s candles by default;
-                                             // exposed so the UI can
-                                             // offer a timeframe picker
+    // asset_id -> trade prints + top-of-book samples for the Price History
+    // page. See AssetMarketHistory / TradePrint for where each comes from.
+    std::map<uint16_t, AssetMarketHistory> market_history;
+
+    // Raw message counters, shown on the Price History page so "is any
+    // data arriving at all?" can be answered without a debugger.
+    uint64_t book_updates_received = 0;
+    uint64_t order_reports_received = 0;
+    uint64_t trades_decoded = 0;
 
     // Most recent N trades, newest last. Capped well above what a
     // typical dashboard session needs, purely to bound memory over a
@@ -290,28 +358,31 @@ public:
                                  + (trade_feed.size() - kMaxTradeFeed));
     }
 
-    // Single entry point for an incoming OrderBookUpdate -- updates the
-    // live book unconditionally (this part needs no timestamp and works
-    // regardless of NAOTO_PERF), AND records the price/volume history
-    // observation from the same event when timestamps are actually
-    // available, so the two can never drift out of sync with each other
-    // when they are. Without NAOTO_PERF, price_history simply never
-    // gets populated -- the Price History page's existing "no data yet"
-    // state handles that correctly with no special-casing needed there.
-    void record_book_update(const naoto::OrderBookUpdate &u)
+    // Single entry point for an incoming OrderBookUpdate: applies it to
+    // the live book, then samples the resulting best bid/ask for the
+    // Price History page.
+    void record_book_update(const naoto::OrderBookUpdate &u, double recv_time)
     {
-        int64_t delta = order_books[u.AssetId].apply(u);
-#ifdef NAOTO_PERF
-        // Only depth DECREASES count toward the volume proxy -- see
-        // AssetPriceHistory's comment for why increases don't.
-        double volume_contribution =
-            delta < 0 ? static_cast<double>(-delta) : 0.0;
-        price_history[u.AssetId].record(u.UpdateTimestamp, u.Price,
-                                        volume_contribution,
-                                        price_history_bucket_ms);
-#else
-        (void)delta;
-#endif
+        ++book_updates_received;
+        OrderBook &book = order_books[u.AssetId];
+        book.apply(u);
+        int64_t bid = book.bids.empty() ? 0 : book.bids.begin()->first;
+        int64_t ask = book.asks.empty() ? 0 : book.asks.begin()->first;
+        market_history[u.AssetId].add_quote(recv_time, bid, ask);
+    }
+
+    // Records the trade (if any) carried by an order-state report. Called
+    // for every report; decode_trade() filters to one print per match.
+    void record_order_report(const naoto::OrderStateReport &r, double recv_time)
+    {
+        ++order_reports_received;
+        uint16_t asset;
+        int64_t price;
+        uint32_t qty;
+        if (!decode_trade(r, asset, price, qty))
+            return;
+        ++trades_decoded;
+        market_history[asset].add_trade(recv_time, price, qty);
     }
 
     // Applies a report's effect to any client we're currently tracking a

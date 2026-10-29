@@ -119,6 +119,7 @@ add_subdirectory(market_server/common)
 add_subdirectory(market_server/matching_engine)
 add_subdirectory(market_server/order_gateway)
 add_subdirectory(market_server/account_service)
+add_subdirectory(market_server/retransmitter)
 add_subdirectory(market_client)
 
 if(NAOTO_BUILD_TESTS)

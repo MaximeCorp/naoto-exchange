@@ -225,10 +225,10 @@ namespace Gateways
 // CMakeLists.txt's NAOTO_TIMESTAMPS, which mirrors the real project's
 // own option and defaults OFF, same as it does there). This dashboard
 // handles both states: with it, naoto::OrderStateReport/OrderBookUpdate
-// carry the extra timestamp fields the Price History and Trade Feed
-// latency features need; without it, those features simply have no
-// data to show (see AppState::record_book_update and
-// draw_trade_feed_panel in main.cpp for exactly where each is guarded).
+// carry the extra timestamp fields the Trade Feed / Latency Stats
+// features need; without it, those features simply have no data to show
+// (see draw_trade_feed_panel in main.cpp). Price History does not depend
+// on it -- it uses the dashboard's own receive time.
 // The one thing that DOES matter: whichever way this is set, it must
 // match whatever the real gateway/matching-engine build sets, or the
 // struct SIZE itself mismatches at runtime -- watch this dashboard's own
